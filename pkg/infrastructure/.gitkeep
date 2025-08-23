@@ -1,0 +1,1 @@
+# Infrastructure layer - will contain Event Store, Event Dispatcher, repository implementations, DTOs, and platform utilities

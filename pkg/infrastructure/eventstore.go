@@ -1,0 +1,219 @@
+package infrastructure
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/example/pericarp/pkg/domain"
+	"github.com/segmentio/ksuid"
+	"gorm.io/gorm"
+)
+
+// EventRecord represents the database schema for storing events
+type EventRecord struct {
+	ID          string    `gorm:"primaryKey"`
+	AggregateID string    `gorm:"index"`
+	EventType   string    `gorm:"index"`
+	Version     int       `gorm:"index"`
+	Data        string    `gorm:"type:text"` // JSON serialized event
+	Metadata    string    `gorm:"type:text"` // JSON serialized metadata
+	Timestamp   time.Time `gorm:"index"`
+	CreatedAt   time.Time
+}
+
+// TableName returns the table name for GORM
+func (EventRecord) TableName() string {
+	return "events"
+}
+
+// eventEnvelope implements the domain.Envelope interface
+type eventEnvelope struct {
+	event     domain.Event
+	metadata  map[string]interface{}
+	eventID   string
+	timestamp time.Time
+}
+
+func (e *eventEnvelope) Event() domain.Event {
+	return e.event
+}
+
+func (e *eventEnvelope) Metadata() map[string]interface{} {
+	return e.metadata
+}
+
+func (e *eventEnvelope) EventID() string {
+	return e.eventID
+}
+
+func (e *eventEnvelope) Timestamp() time.Time {
+	return e.timestamp
+}
+
+// GormEventStore implements the EventStore interface using GORM
+type GormEventStore struct {
+	db *gorm.DB
+}
+
+// NewGormEventStore creates a new GORM-based event store
+func NewGormEventStore(db *gorm.DB) (*GormEventStore, error) {
+	store := &GormEventStore{db: db}
+	
+	// Auto-migrate the events table
+	if err := db.AutoMigrate(&EventRecord{}); err != nil {
+		return nil, fmt.Errorf("failed to migrate events table: %w", err)
+	}
+	
+	return store, nil
+}
+
+// Save persists events and returns envelopes with metadata
+func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]domain.Envelope, error) {
+	if len(events) == 0 {
+		return []domain.Envelope{}, nil
+	}
+
+	var records []EventRecord
+	var envelopes []domain.Envelope
+
+	for _, event := range events {
+		// Serialize event data to JSON
+		eventData, err := json.Marshal(event)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize event %s: %w", event.EventType(), err)
+		}
+
+		// Create metadata
+		metadata := map[string]interface{}{
+			"aggregate_id": event.AggregateID(),
+			"event_type":   event.EventType(),
+			"version":      event.Version(),
+			"occurred_at":  event.OccurredAt(),
+		}
+
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize metadata for event %s: %w", event.EventType(), err)
+		}
+
+		eventID := ksuid.New().String()
+		timestamp := time.Now()
+
+		record := EventRecord{
+			ID:          eventID,
+			AggregateID: event.AggregateID(),
+			EventType:   event.EventType(),
+			Version:     event.Version(),
+			Data:        string(eventData),
+			Metadata:    string(metadataJSON),
+			Timestamp:   timestamp,
+			CreatedAt:   timestamp,
+		}
+
+		records = append(records, record)
+
+		envelope := &eventEnvelope{
+			event:     event,
+			metadata:  metadata,
+			eventID:   eventID,
+			timestamp: timestamp,
+		}
+
+		envelopes = append(envelopes, envelope)
+	}
+
+	// Save all records in a transaction
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&records).Error; err != nil {
+			return fmt.Errorf("failed to save events: %w", err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return envelopes, nil
+}
+
+// Load retrieves all events for an aggregate
+func (s *GormEventStore) Load(ctx context.Context, aggregateID string) ([]domain.Envelope, error) {
+	return s.LoadFromVersion(ctx, aggregateID, 0)
+}
+
+// LoadFromVersion retrieves events for an aggregate starting from a specific version
+func (s *GormEventStore) LoadFromVersion(ctx context.Context, aggregateID string, version int) ([]domain.Envelope, error) {
+	var records []EventRecord
+
+	query := s.db.WithContext(ctx).
+		Where("aggregate_id = ?", aggregateID).
+		Where("version > ?", version).
+		Order("version ASC")
+
+	if err := query.Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("failed to load events for aggregate %s: %w", aggregateID, err)
+	}
+
+	envelopes := make([]domain.Envelope, len(records))
+	for i, record := range records {
+		// Deserialize metadata
+		var metadata map[string]interface{}
+		if err := json.Unmarshal([]byte(record.Metadata), &metadata); err != nil {
+			return nil, fmt.Errorf("failed to deserialize metadata for event %s: %w", record.ID, err)
+		}
+
+		// Create a generic event from the stored data
+		// Note: In a real implementation, you'd need a registry to reconstruct specific event types
+		genericEvent := &GenericEvent{
+			eventType:   record.EventType,
+			aggregateID: record.AggregateID,
+			version:     record.Version,
+			occurredAt:  record.Timestamp,
+			data:        record.Data,
+		}
+
+		envelope := &eventEnvelope{
+			event:     genericEvent,
+			metadata:  metadata,
+			eventID:   record.ID,
+			timestamp: record.Timestamp,
+		}
+
+		envelopes[i] = envelope
+	}
+
+	return envelopes, nil
+}
+
+// GenericEvent is a basic implementation of domain.Event for deserialization
+type GenericEvent struct {
+	eventType   string
+	aggregateID string
+	version     int
+	occurredAt  time.Time
+	data        string
+}
+
+func (e *GenericEvent) EventType() string {
+	return e.eventType
+}
+
+func (e *GenericEvent) AggregateID() string {
+	return e.aggregateID
+}
+
+func (e *GenericEvent) Version() int {
+	return e.version
+}
+
+func (e *GenericEvent) OccurredAt() time.Time {
+	return e.occurredAt
+}
+
+// Data returns the raw JSON data of the event
+func (e *GenericEvent) Data() string {
+	return e.data
+}
