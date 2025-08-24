@@ -1,20 +1,22 @@
 // Package domain contains the internal domain models used for examples and testing
 package domain
 
+//go:generate moq -out mocks/user_repository_mock.go . UserRepository
+
 import (
 	"errors"
-	"time"
 
 	"github.com/example/pericarp/pkg/domain"
 )
 
 // User represents a user aggregate for internal examples and testing
 type User struct {
-	domain.AggregateRoot
-	id       uuid.UUID
-	email    string
-	name     string
-	isActive bool
+	id                uuid.UUID
+	email             string
+	name              string
+	isActive          bool
+	version           int
+	uncommittedEvents []domain.Event
 }
 
 // NewUser creates a new user aggregate
@@ -28,24 +30,75 @@ func NewUser(email, name string) (*User, error) {
 
 	id := uuid.New()
 	user := &User{
-		id:       id,
-		email:    email,
-		name:     name,
-		isActive: true,
+		id:                id,
+		email:             email,
+		name:              name,
+		isActive:          true,
+		version:           1,
+		uncommittedEvents: make([]domain.Event, 0),
 	}
 
-	user.RecordEvent(UserCreatedEvent{
-		UserID: id,
-		Email:  email,
-		Name:   name,
-	})
+	event := NewUserCreatedEvent(id, email, name, id.String(), user.version)
+	user.recordEvent(event)
 
 	return user, nil
 }
 
-// ID returns the user's ID
-func (u *User) ID() uuid.UUID {
+// ID returns the user's ID as a string (implements AggregateRoot)
+func (u *User) ID() string {
+	return u.id.String()
+}
+
+// UserID returns the user's ID as UUID
+func (u *User) UserID() uuid.UUID {
 	return u.id
+}
+
+// Version returns the current version of the aggregate
+func (u *User) Version() int {
+	return u.version
+}
+
+// UncommittedEvents returns the list of events that have been generated but not yet persisted
+func (u *User) UncommittedEvents() []domain.Event {
+	return u.uncommittedEvents
+}
+
+// MarkEventsAsCommitted clears the uncommitted events after they have been successfully persisted
+func (u *User) MarkEventsAsCommitted() {
+	u.uncommittedEvents = make([]domain.Event, 0)
+}
+
+// LoadFromHistory reconstructs the aggregate state from a sequence of events
+func (u *User) LoadFromHistory(events []domain.Event) {
+	for _, event := range events {
+		u.applyEvent(event)
+		u.version = event.Version()
+	}
+}
+
+// recordEvent adds an event to the uncommitted events list
+func (u *User) recordEvent(event domain.Event) {
+	u.uncommittedEvents = append(u.uncommittedEvents, event)
+}
+
+// applyEvent applies an event to the aggregate state
+func (u *User) applyEvent(event domain.Event) {
+	switch e := event.(type) {
+	case UserCreatedEvent:
+		u.id = e.UserID
+		u.email = e.Email
+		u.name = e.Name
+		u.isActive = true
+	case UserEmailUpdatedEvent:
+		u.email = e.NewEmail
+	case UserNameUpdatedEvent:
+		u.name = e.NewName
+	case UserDeactivatedEvent:
+		u.isActive = false
+	case UserActivatedEvent:
+		u.isActive = true
+	}
 }
 
 // Email returns the user's email
@@ -73,13 +126,11 @@ func (u *User) UpdateEmail(newEmail string) error {
 	}
 
 	oldEmail := u.email
-	u.email = newEmail
+	u.version++
 
-	u.RecordEvent(UserEmailUpdatedEvent{
-		UserID:   u.id,
-		OldEmail: oldEmail,
-		NewEmail: newEmail,
-	})
+	event := NewUserEmailUpdatedEvent(u.id, oldEmail, newEmail, u.id.String(), u.version)
+	u.recordEvent(event)
+	u.applyEvent(event)
 
 	return nil
 }
@@ -94,13 +145,11 @@ func (u *User) UpdateName(newName string) error {
 	}
 
 	oldName := u.name
-	u.name = newName
+	u.version++
 
-	u.RecordEvent(UserNameUpdatedEvent{
-		UserID:  u.id,
-		OldName: oldName,
-		NewName: newName,
-	})
+	event := NewUserNameUpdatedEvent(u.id, oldName, newName, u.id.String(), u.version)
+	u.recordEvent(event)
+	u.applyEvent(event)
 
 	return nil
 }
@@ -111,11 +160,11 @@ func (u *User) Deactivate() error {
 		return nil // Already deactivated
 	}
 
-	u.isActive = false
+	u.version++
 
-	u.RecordEvent(UserDeactivatedEvent{
-		UserID: u.id,
-	})
+	event := NewUserDeactivatedEvent(u.id, u.id.String(), u.version)
+	u.recordEvent(event)
+	u.applyEvent(event)
 
 	return nil
 }
@@ -126,11 +175,11 @@ func (u *User) Activate() error {
 		return nil // Already active
 	}
 
-	u.isActive = true
+	u.version++
 
-	u.RecordEvent(UserActivatedEvent{
-		UserID: u.id,
-	})
+	event := NewUserActivatedEvent(u.id, u.id.String(), u.version)
+	u.recordEvent(event)
+	u.applyEvent(event)
 
 	return nil
 }
@@ -141,4 +190,5 @@ type UserRepository interface {
 	FindByID(id uuid.UUID) (*User, error)
 	FindByEmail(email string) (*User, error)
 	Delete(id uuid.UUID) error
+	LoadFromVersion(id uuid.UUID, version int) (*User, error)
 }

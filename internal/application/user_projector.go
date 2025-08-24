@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/example/pericarp/internal/domain"
+	internaldomain "github.com/example/pericarp/internal/domain"
 	"github.com/example/pericarp/pkg/domain"
 )
 
@@ -24,7 +24,7 @@ func NewUserProjector(readModelRepo UserReadModelRepository, logger domain.Logge
 }
 
 // HandleUserCreated processes UserCreatedEvent to create a new user read model
-func (p *UserProjector) HandleUserCreated(ctx context.Context, event domain.UserCreatedEvent) error {
+func (p *UserProjector) HandleUserCreated(ctx context.Context, event internaldomain.UserCreatedEvent) error {
 	p.logger.Info("Processing UserCreatedEvent for user", "user_id", event.UserID)
 
 	// Check if user already exists (idempotency)
@@ -56,7 +56,7 @@ func (p *UserProjector) HandleUserCreated(ctx context.Context, event domain.User
 }
 
 // HandleUserEmailUpdated processes UserEmailUpdatedEvent to update user read model
-func (p *UserProjector) HandleUserEmailUpdated(ctx context.Context, event domain.UserEmailUpdatedEvent) error {
+func (p *UserProjector) HandleUserEmailUpdated(ctx context.Context, event internaldomain.UserEmailUpdatedEvent) error {
 	p.logger.Info("Processing UserEmailUpdatedEvent for user", "user_id", event.UserID)
 
 	// Get existing user read model
@@ -86,7 +86,7 @@ func (p *UserProjector) HandleUserEmailUpdated(ctx context.Context, event domain
 }
 
 // HandleUserNameUpdated processes UserNameUpdatedEvent to update user read model
-func (p *UserProjector) HandleUserNameUpdated(ctx context.Context, event domain.UserNameUpdatedEvent) error {
+func (p *UserProjector) HandleUserNameUpdated(ctx context.Context, event internaldomain.UserNameUpdatedEvent) error {
 	p.logger.Info("Processing UserNameUpdatedEvent for user", "user_id", event.UserID)
 
 	// Get existing user read model
@@ -116,7 +116,7 @@ func (p *UserProjector) HandleUserNameUpdated(ctx context.Context, event domain.
 }
 
 // HandleUserDeactivated processes UserDeactivatedEvent to update user read model
-func (p *UserProjector) HandleUserDeactivated(ctx context.Context, event domain.UserDeactivatedEvent) error {
+func (p *UserProjector) HandleUserDeactivated(ctx context.Context, event internaldomain.UserDeactivatedEvent) error {
 	p.logger.Info("Processing UserDeactivatedEvent for user", "user_id", event.UserID)
 
 	// Get existing user read model
@@ -146,7 +146,7 @@ func (p *UserProjector) HandleUserDeactivated(ctx context.Context, event domain.
 }
 
 // HandleUserActivated processes UserActivatedEvent to update user read model
-func (p *UserProjector) HandleUserActivated(ctx context.Context, event domain.UserActivatedEvent) error {
+func (p *UserProjector) HandleUserActivated(ctx context.Context, event internaldomain.UserActivatedEvent) error {
 	p.logger.Info("Processing UserActivatedEvent for user", "user_id", event.UserID)
 
 	// Get existing user read model
@@ -175,39 +175,37 @@ func (p *UserProjector) HandleUserActivated(ctx context.Context, event domain.Us
 	return nil
 }
 
-// UserProjectorEventHandler implements domain.EventHandler for the user projector
-type UserProjectorEventHandler struct {
-	projector *UserProjector
-}
+// Handle implements domain.EventHandler interface for the user projector
+func (p *UserProjector) Handle(ctx context.Context, envelope domain.Envelope) error {
+	p.logger.Debug("UserProjector handling event", "event_type", envelope.Event().EventType(), "event_id", envelope.EventID())
 
-func (h *UserProjectorEventHandler) Handle(ctx context.Context, envelope domain.Envelope) error {
 	switch event := envelope.Event().(type) {
-	case domain.UserCreatedEvent:
-		return h.projector.HandleUserCreated(ctx, event)
-	case domain.UserEmailUpdatedEvent:
-		return h.projector.HandleUserEmailUpdated(ctx, event)
-	case domain.UserNameUpdatedEvent:
-		return h.projector.HandleUserNameUpdated(ctx, event)
-	case domain.UserDeactivatedEvent:
-		return h.projector.HandleUserDeactivated(ctx, event)
-	case domain.UserActivatedEvent:
-		return h.projector.HandleUserActivated(ctx, event)
+	case internaldomain.UserCreatedEvent:
+		return p.HandleUserCreated(ctx, event)
+	case internaldomain.UserEmailUpdatedEvent:
+		return p.HandleUserEmailUpdated(ctx, event)
+	case internaldomain.UserNameUpdatedEvent:
+		return p.HandleUserNameUpdated(ctx, event)
+	case internaldomain.UserDeactivatedEvent:
+		return p.HandleUserDeactivated(ctx, event)
+	case internaldomain.UserActivatedEvent:
+		return p.HandleUserActivated(ctx, event)
 	default:
+		p.logger.Warn("UserProjector received unsupported event type", "event_type", fmt.Sprintf("%T", event))
 		return fmt.Errorf("unsupported event type: %T", event)
 	}
 }
 
-func (h *UserProjectorEventHandler) EventTypes() []string {
+// EventTypes returns the list of event types this projector can handle
+func (p *UserProjector) EventTypes() []string {
 	return []string{"UserCreated", "UserEmailUpdated", "UserNameUpdated", "UserDeactivated", "UserActivated"}
 }
 
 // RegisterEventHandlers registers this projector's event handlers with the event dispatcher
 func (p *UserProjector) RegisterEventHandlers(dispatcher domain.EventDispatcher) error {
-	handler := &UserProjectorEventHandler{projector: p}
-
-	eventTypes := handler.EventTypes()
+	eventTypes := p.EventTypes()
 	for _, eventType := range eventTypes {
-		if err := dispatcher.Subscribe(eventType, handler); err != nil {
+		if err := dispatcher.Subscribe(eventType, p); err != nil {
 			return fmt.Errorf("failed to register %s handler: %w", eventType, err)
 		}
 	}

@@ -6,6 +6,8 @@ toolchain go1.23.3
 
 require (
 	github.com/ThreeDotsLabs/watermill v1.4.7
+	github.com/cucumber/godog v0.14.1
+	github.com/matryer/moq v0.3.4
 	github.com/segmentio/ksuid v1.0.4
 	github.com/spf13/viper v1.20.1
 	go.uber.org/fx v1.24.0

@@ -1,5 +1,7 @@
 package application
 
+//go:generate moq -out mocks/user_read_model_repository_mock.go . UserReadModelRepository
+
 import (
 	"context"
 	"time"

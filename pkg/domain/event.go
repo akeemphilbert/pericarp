@@ -1,5 +1,12 @@
 package domain
 
+//go:generate moq -out mocks/event_store_mock.go . EventStore
+//go:generate moq -out mocks/event_dispatcher_mock.go . EventDispatcher
+//go:generate moq -out mocks/event_handler_mock.go . EventHandler
+//go:generate moq -out mocks/unit_of_work_mock.go . UnitOfWork
+//go:generate moq -out mocks/event_mock.go . Event
+//go:generate moq -out mocks/envelope_mock.go . Envelope
+
 import (
 	"context"
 	"time"

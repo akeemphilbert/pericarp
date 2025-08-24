@@ -9,58 +9,99 @@ import (
 	"gorm.io/gorm"
 )
 
-// InternalModule provides all internal components for examples and testing
-var InternalModule = fx.Module("internal",
-	// Domain layer
+// InternalModule provides all internal application dependencies
+var InternalModule = fx.Options(
 	fx.Provide(
-	// User repository interface is provided by the concrete implementation
+		// Repositories
+		UserEventSourcingRepositoryProvider,
+		UserReadModelRepositoryProvider,
+		UserRepositoryCompositeProvider,
+
+		// User projector
+		UserProjectorProvider,
+
+		// Command and query handlers
+		CreateUserHandlerProvider,
+		UpdateUserEmailHandlerProvider,
+		GetUserHandlerProvider,
+		ListUsersHandlerProvider,
 	),
-
-	// Application layer
-	fx.Provide(
-		// Command handlers
-		application.NewCreateUserHandler,
-		application.NewUpdateUserEmailHandler,
-		application.NewUpdateUserNameHandler,
-		application.NewDeactivateUserHandler,
-		application.NewActivateUserHandler,
-
-		// Query handlers
-		application.NewGetUserHandler,
-		application.NewGetUserByEmailHandler,
-		application.NewListUsersHandler,
-
-		// Projector
-		application.NewUserProjector,
-
-		// Read model repository interface is provided by the concrete implementation
-	),
-
-	// Infrastructure layer
-	fx.Provide(
-		// GORM repository implementations
-		fx.Annotate(
-			infrastructure.NewUserReadModelGORMRepository,
-			fx.As(new(application.UserReadModelRepository)),
-		),
+	fx.Invoke(
+		// Register event handlers
+		RegisterUserProjectorEventHandlers,
 	),
 )
 
-// UserExampleModule provides a complete example setup for user management
-var UserExampleModule = fx.Module("user-example",
-	InternalModule,
+// UserProjectorProvider creates a UserProjector
+func UserProjectorProvider(
+	readModelRepo application.UserReadModelRepository,
+	logger pkgdomain.Logger,
+) *application.UserProjector {
+	return application.NewUserProjector(readModelRepo, logger)
+}
 
-	// Register event handlers
-	fx.Invoke(func(
-		projector *application.UserProjector,
-		dispatcher pkgdomain.EventDispatcher,
-	) error {
-		return projector.RegisterEventHandlers(dispatcher)
-	}),
+// UserEventSourcingRepositoryProvider creates an event sourcing repository for users
+func UserEventSourcingRepositoryProvider(
+	eventStore pkgdomain.EventStore,
+	logger pkgdomain.Logger,
+) domain.UserRepository {
+	return infrastructure.NewUserEventSourcingRepository(eventStore, logger)
+}
 
-	// Auto-migrate database tables
-	fx.Invoke(func(db *gorm.DB) error {
-		repo := infrastructure.NewUserReadModelGORMRepository(db)
-		return repo.Migrate()
-	}),
-)
+// UserReadModelRepositoryProvider creates a UserReadModelRepository
+func UserReadModelRepositoryProvider(db *gorm.DB) application.UserReadModelRepository {
+	repo := infrastructure.NewUserReadModelGORMRepository(db)
+
+	// Auto-migrate the read model table
+	if err := repo.Migrate(); err != nil {
+		panic(err) // In production, handle this more gracefully
+	}
+
+	return repo
+}
+
+// UserRepositoryCompositeProvider creates a composite user repository
+func UserRepositoryCompositeProvider(
+	eventSourcingRepo domain.UserRepository,
+	readModelRepo application.UserReadModelRepository,
+) domain.UserRepository {
+	return infrastructure.NewUserRepositoryComposite(eventSourcingRepo, readModelRepo)
+}
+
+// CreateUserHandlerProvider creates a CreateUserHandler
+func CreateUserHandlerProvider(
+	userRepo domain.UserRepository,
+	unitOfWork pkgdomain.UnitOfWork,
+) *application.CreateUserHandler {
+	return application.NewCreateUserHandler(userRepo, unitOfWork)
+}
+
+// UpdateUserEmailHandlerProvider creates an UpdateUserEmailHandler
+func UpdateUserEmailHandlerProvider(
+	userRepo domain.UserRepository,
+	unitOfWork pkgdomain.UnitOfWork,
+) *application.UpdateUserEmailHandler {
+	return application.NewUpdateUserEmailHandler(userRepo, unitOfWork)
+}
+
+// GetUserHandlerProvider creates a GetUserHandler
+func GetUserHandlerProvider(
+	readModelRepo application.UserReadModelRepository,
+) *application.GetUserHandler {
+	return application.NewGetUserHandler(readModelRepo)
+}
+
+// ListUsersHandlerProvider creates a ListUsersHandler
+func ListUsersHandlerProvider(
+	readModelRepo application.UserReadModelRepository,
+) *application.ListUsersHandler {
+	return application.NewListUsersHandler(readModelRepo)
+}
+
+// RegisterUserProjectorEventHandlers registers the user projector with the event dispatcher
+func RegisterUserProjectorEventHandlers(
+	projector *application.UserProjector,
+	dispatcher pkgdomain.EventDispatcher,
+) error {
+	return projector.RegisterEventHandlers(dispatcher)
+}

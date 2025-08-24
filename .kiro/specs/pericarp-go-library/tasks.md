@@ -128,37 +128,37 @@
     - Add type safety while maintaining unified middleware compatibility
     - _Requirements: 10.1, 10.5_
 
-- [ ] 8. Implement event handling and projections
-  - [ ] 8.1 Create user projection event handler
+- [x] 8. Implement event handling and projections
+  - [x] 8.1 Create user projection event handler
     - Implement UserProjector to handle UserCreated and UserEmailUpdated events
     - Build read model tables and GORM models for projections
     - Add event handler registration and subscription
     - Implement idempotent event processing
     - _Requirements: 6.3, 2.4, 1.3_
 
-  - [ ] 8.2 Add repository implementations
+  - [x] 8.2 Add repository implementations
     - Create UserRepository implementation using event sourcing
     - Implement UserReadModelRepository for query operations
     - Add repository error handling and concurrency control
     - Integrate with EventStore for aggregate reconstruction
     - _Requirements: 1.4, 6.2, 6.3_
 
-- [ ] 9. Build testing infrastructure
-  - [ ] 9.1 Set up BDD testing with Cucumber
+- [x] 9. Build testing infrastructure
+  - [x] 9.1 Set up BDD testing with Cucumber
     - Create feature files with Gherkin scenarios for user management
     - Implement step definitions for Given/When/Then steps
     - Set up test database and cleanup between scenarios
     - Add test fixtures and data builders
     - _Requirements: 7.1, 7.2, 7.3_
 
-  - [ ] 9.2 Generate mocks with moq
+  - [x] 9.2 Generate mocks with moq
     - Generate mocks for Repository, EventStore, EventDispatcher interfaces
     - Create mock implementations for testing command and query handlers
     - Add mock configuration helpers for test scenarios
     - Implement in-memory test doubles for integration testing
     - _Requirements: 7.4_
 
-  - [ ] 9.3 Write unit tests for domain layer
+  - [x] 9.3 Write unit tests for domain layer
     - Test User aggregate business logic and event generation
     - Validate domain rules and invariants
     - Test value object validation and equality

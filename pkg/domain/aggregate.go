@@ -1,5 +1,8 @@
 package domain
 
+//go:generate moq -out mocks/aggregate_root_mock.go . AggregateRoot
+//go:generate moq -out mocks/repository_mock.go . Repository
+
 import "context"
 
 // AggregateRoot defines the interface for domain aggregates in event sourcing

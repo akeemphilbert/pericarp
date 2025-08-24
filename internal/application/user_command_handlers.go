@@ -3,19 +3,19 @@ package application
 import (
 	"context"
 
-	"github.com/example/pericarp/internal/domain"
+	internaldomain "github.com/example/pericarp/internal/domain"
 	pkgapp "github.com/example/pericarp/pkg/application"
 	pkgdomain "github.com/example/pericarp/pkg/domain"
 )
 
 // CreateUserHandler handles CreateUserCommand
 type CreateUserHandler struct {
-	userRepo   domain.UserRepository
+	userRepo   internaldomain.UserRepository
 	unitOfWork pkgdomain.UnitOfWork
 }
 
 // NewCreateUserHandler creates a new CreateUserHandler
-func NewCreateUserHandler(userRepo domain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *CreateUserHandler {
+func NewCreateUserHandler(userRepo internaldomain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *CreateUserHandler {
 	return &CreateUserHandler{
 		userRepo:   userRepo,
 		unitOfWork: unitOfWork,
@@ -34,7 +34,7 @@ func (h *CreateUserHandler) Handle(ctx context.Context, logger pkgdomain.Logger,
 	}
 
 	// Create new user aggregate
-	user, err := domain.NewUser(cmd.Email, cmd.Name)
+	user, err := internaldomain.NewUser(cmd.Email, cmd.Name)
 	if err != nil {
 		logger.Error("Failed to create user aggregate", "id", cmd.ID, "error", err)
 		return pkgapp.NewApplicationError("USER_CREATION_FAILED", "Failed to create user", err)
@@ -56,18 +56,18 @@ func (h *CreateUserHandler) Handle(ctx context.Context, logger pkgdomain.Logger,
 		return pkgapp.NewApplicationError("UNIT_OF_WORK_COMMIT_FAILED", "Failed to commit transaction", err)
 	}
 
-	logger.Info("User created successfully", "id", user.ID(), "email", cmd.Email, "events_dispatched", len(envelopes))
+	logger.Info("User created successfully", "id", user.UserID(), "email", cmd.Email, "events_dispatched", len(envelopes))
 	return nil
 }
 
 // UpdateUserEmailHandler handles UpdateUserEmailCommand
 type UpdateUserEmailHandler struct {
-	userRepo   domain.UserRepository
+	userRepo   internaldomain.UserRepository
 	unitOfWork pkgdomain.UnitOfWork
 }
 
 // NewUpdateUserEmailHandler creates a new UpdateUserEmailHandler
-func NewUpdateUserEmailHandler(userRepo domain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *UpdateUserEmailHandler {
+func NewUpdateUserEmailHandler(userRepo internaldomain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *UpdateUserEmailHandler {
 	return &UpdateUserEmailHandler{
 		userRepo:   userRepo,
 		unitOfWork: unitOfWork,
@@ -87,8 +87,8 @@ func (h *UpdateUserEmailHandler) Handle(ctx context.Context, logger pkgdomain.Lo
 
 	// Check if new email is already in use by another user
 	existingUser, err := h.userRepo.FindByEmail(cmd.NewEmail)
-	if err == nil && existingUser != nil && existingUser.ID() != cmd.ID {
-		logger.Warn("Email already in use by another user", "email", cmd.NewEmail, "existing_user_id", existingUser.ID())
+	if err == nil && existingUser != nil && existingUser.UserID() != cmd.ID {
+		logger.Warn("Email already in use by another user", "email", cmd.NewEmail, "existing_user_id", existingUser.UserID())
 		return pkgapp.NewApplicationError("EMAIL_ALREADY_EXISTS", "Email is already in use by another user", nil)
 	}
 
@@ -120,12 +120,12 @@ func (h *UpdateUserEmailHandler) Handle(ctx context.Context, logger pkgdomain.Lo
 
 // UpdateUserNameHandler handles UpdateUserNameCommand
 type UpdateUserNameHandler struct {
-	userRepo   domain.UserRepository
+	userRepo   internaldomain.UserRepository
 	unitOfWork pkgdomain.UnitOfWork
 }
 
 // NewUpdateUserNameHandler creates a new UpdateUserNameHandler
-func NewUpdateUserNameHandler(userRepo domain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *UpdateUserNameHandler {
+func NewUpdateUserNameHandler(userRepo internaldomain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *UpdateUserNameHandler {
 	return &UpdateUserNameHandler{
 		userRepo:   userRepo,
 		unitOfWork: unitOfWork,
@@ -171,12 +171,12 @@ func (h *UpdateUserNameHandler) Handle(ctx context.Context, logger pkgdomain.Log
 
 // DeactivateUserHandler handles DeactivateUserCommand
 type DeactivateUserHandler struct {
-	userRepo   domain.UserRepository
+	userRepo   internaldomain.UserRepository
 	unitOfWork pkgdomain.UnitOfWork
 }
 
 // NewDeactivateUserHandler creates a new DeactivateUserHandler
-func NewDeactivateUserHandler(userRepo domain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *DeactivateUserHandler {
+func NewDeactivateUserHandler(userRepo internaldomain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *DeactivateUserHandler {
 	return &DeactivateUserHandler{
 		userRepo:   userRepo,
 		unitOfWork: unitOfWork,
@@ -222,12 +222,12 @@ func (h *DeactivateUserHandler) Handle(ctx context.Context, logger pkgdomain.Log
 
 // ActivateUserHandler handles ActivateUserCommand
 type ActivateUserHandler struct {
-	userRepo   domain.UserRepository
+	userRepo   internaldomain.UserRepository
 	unitOfWork pkgdomain.UnitOfWork
 }
 
 // NewActivateUserHandler creates a new ActivateUserHandler
-func NewActivateUserHandler(userRepo domain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *ActivateUserHandler {
+func NewActivateUserHandler(userRepo internaldomain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *ActivateUserHandler {
 	return &ActivateUserHandler{
 		userRepo:   userRepo,
 		unitOfWork: unitOfWork,
