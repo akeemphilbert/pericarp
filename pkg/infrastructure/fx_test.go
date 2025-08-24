@@ -66,7 +66,7 @@ func TestDatabaseProvider(t *testing.T) {
 	}
 
 	// Test database connection
-	sqlDB, err := db.DB()
+	sqlDB, err := db.DB.DB()
 	if err != nil {
 		t.Fatalf("Failed to get SQL DB: %v", err)
 	}
@@ -118,7 +118,8 @@ func TestEventDispatcherProvider(t *testing.T) {
 		},
 	}
 
-	dispatcher, err := EventDispatcherProvider(config)
+	logger := LoggerProvider(config)
+	dispatcher, err := EventDispatcherProvider(logger)
 	if err != nil {
 		t.Fatalf("EventDispatcherProvider failed: %v", err)
 	}
@@ -179,7 +180,8 @@ func TestUnitOfWorkProvider(t *testing.T) {
 		t.Fatalf("EventStoreProvider failed: %v", err)
 	}
 
-	dispatcher, err := EventDispatcherProvider(config)
+	logger := LoggerProvider(config)
+	dispatcher, err := EventDispatcherProvider(logger)
 	if err != nil {
 		t.Fatalf("EventDispatcherProvider failed: %v", err)
 	}

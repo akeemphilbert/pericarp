@@ -28,22 +28,14 @@ func DatabaseProvider(config *Config) (*Database, error) {
 }
 
 // EventStoreProvider creates a GORM-based event store
-func EventStoreProvider(db *Database) domain.EventStore {
-	store, err := NewGormEventStore(db.DB)
-	if err != nil {
-		panic(err) // In production, handle this more gracefully
-	}
-	return store
+func EventStoreProvider(db *Database) (domain.EventStore, error) {
+	return NewGormEventStore(db.DB)
 }
 
 // EventDispatcherProvider creates a Watermill-based event dispatcher
-func EventDispatcherProvider(logger domain.Logger) domain.EventDispatcher {
-	watermillLogger := &WatermillLoggerAdapter{logger: logger}
-	dispatcher, err := NewWatermillEventDispatcher(watermillLogger)
-	if err != nil {
-		panic(err) // In production, handle this more gracefully
-	}
-	return dispatcher
+func EventDispatcherProvider(logger domain.Logger) (domain.EventDispatcher, error) {
+	watermillLogger := &WatermillLoggerAdapter{Logger: logger}
+	return NewWatermillEventDispatcher(watermillLogger)
 }
 
 // UnitOfWorkProvider creates a unit of work implementation
@@ -52,6 +44,6 @@ func UnitOfWorkProvider(eventStore domain.EventStore, dispatcher domain.EventDis
 }
 
 // LoggerProvider creates a logger implementation
-func LoggerProvider() domain.Logger {
-	return NewLogger("info", "text") // Default to info level and text format
+func LoggerProvider(config *Config) domain.Logger {
+	return NewLogger(config.Logging.Level, config.Logging.Format)
 }

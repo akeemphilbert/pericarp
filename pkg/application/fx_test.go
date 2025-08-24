@@ -24,10 +24,6 @@ func (m *mockCacheProvider) Delete(key string)          {}
 func TestApplicationModule(t *testing.T) {
 	app := fxtest.New(t,
 		ApplicationModule,
-		fx.Provide(
-			func() MetricsCollector { return &mockMetricsCollector{} },
-			func() CacheProvider { return &mockCacheProvider{} },
-		),
 		fx.Invoke(func(
 			commandBus CommandBus,
 			queryBus QueryBus,

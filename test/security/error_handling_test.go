@@ -21,10 +21,10 @@ func TestEnvironmentVariableErrorHandling(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "empty key should not cause panic",
+			name:        "empty key should be handled gracefully",
 			key:         "",
 			value:       "test_value",
-			expectError: false, // os.Setenv allows empty keys
+			expectError: true, // os.Setenv with empty key returns error on most systems
 		},
 	}
 
@@ -32,14 +32,14 @@ func TestEnvironmentVariableErrorHandling(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test that os.Setenv error is properly checked
 			err := os.Setenv(tt.key, tt.value)
-			
+
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
 			}
 			if !tt.expectError && err != nil {
 				t.Errorf("Unexpected error: %v", err)
 			}
-			
+
 			// Cleanup
 			if err == nil && tt.key != "" {
 				if cleanupErr := os.Unsetenv(tt.key); cleanupErr != nil {
@@ -57,7 +57,7 @@ func TestFileOperationErrorHandling(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when removing non-existent file, but got none")
 	}
-	
+
 	// This demonstrates proper error checking - the error is expected and handled
 	t.Logf("Expected error when removing non-existent file: %v", err)
 }

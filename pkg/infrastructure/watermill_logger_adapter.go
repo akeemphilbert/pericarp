@@ -7,7 +7,7 @@ import (
 
 // WatermillLoggerAdapter adapts our domain.Logger to watermill.LoggerAdapter
 type WatermillLoggerAdapter struct {
-	logger domain.Logger
+	Logger domain.Logger
 }
 
 // Error logs an error message
@@ -19,7 +19,7 @@ func (w *WatermillLoggerAdapter) Error(msg string, err error, fields watermill.L
 		args = append(args, key, value)
 	}
 
-	w.logger.Error(msg, args...)
+	w.Logger.Error(msg, args...)
 }
 
 // Info logs an info message
@@ -30,7 +30,7 @@ func (w *WatermillLoggerAdapter) Info(msg string, fields watermill.LogFields) {
 		args = append(args, key, value)
 	}
 
-	w.logger.Info(msg, args...)
+	w.Logger.Info(msg, args...)
 }
 
 // Debug logs a debug message
@@ -41,7 +41,7 @@ func (w *WatermillLoggerAdapter) Debug(msg string, fields watermill.LogFields) {
 		args = append(args, key, value)
 	}
 
-	w.logger.Debug(msg, args...)
+	w.Logger.Debug(msg, args...)
 }
 
 // Trace logs a trace message (mapped to debug since our logger doesn't have trace)
@@ -52,7 +52,7 @@ func (w *WatermillLoggerAdapter) Trace(msg string, fields watermill.LogFields) {
 		args = append(args, key, value)
 	}
 
-	w.logger.Debug(msg, args...)
+	w.Logger.Debug(msg, args...)
 }
 
 // With returns a new logger with additional fields (not implemented for simplicity)

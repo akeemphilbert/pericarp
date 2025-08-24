@@ -63,7 +63,7 @@ func DefaultPostgreSQLConfig(host, user, password, dbname string, port int) Data
 
 // Database wraps GORM DB with additional functionality
 type Database struct {
-	*gorm.DB
+	DB     *gorm.DB
 	config DatabaseConfig
 }
 
@@ -83,7 +83,7 @@ func NewDatabaseWrapper(config DatabaseConfig) (*Database, error) {
 // Migrate runs database migrations for all required tables
 func (d *Database) Migrate() error {
 	// Migrate EventRecord table
-	if err := d.AutoMigrate(&EventRecord{}); err != nil {
+	if err := d.DB.AutoMigrate(&EventRecord{}); err != nil {
 		return fmt.Errorf("failed to migrate events table: %w", err)
 	}
 
@@ -98,7 +98,7 @@ func (d *Database) Migrate() error {
 	}{}
 
 	// Set table name for migration
-	if err := d.Table("user_read_models").AutoMigrate(userReadModel); err != nil {
+	if err := d.DB.Table("user_read_models").AutoMigrate(userReadModel); err != nil {
 		return fmt.Errorf("failed to migrate user_read_models table: %w", err)
 	}
 
