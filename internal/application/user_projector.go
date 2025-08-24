@@ -1,0 +1,217 @@
+package application
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/example/pericarp/internal/domain"
+	"github.com/example/pericarp/pkg/domain"
+)
+
+// UserProjector handles domain events to maintain user read models
+type UserProjector struct {
+	readModelRepo UserReadModelRepository
+	logger        domain.Logger
+}
+
+// NewUserProjector creates a new UserProjector
+func NewUserProjector(readModelRepo UserReadModelRepository, logger domain.Logger) *UserProjector {
+	return &UserProjector{
+		readModelRepo: readModelRepo,
+		logger:        logger,
+	}
+}
+
+// HandleUserCreated processes UserCreatedEvent to create a new user read model
+func (p *UserProjector) HandleUserCreated(ctx context.Context, event domain.UserCreatedEvent) error {
+	p.logger.Info("Processing UserCreatedEvent for user", "user_id", event.UserID)
+
+	// Check if user already exists (idempotency)
+	existingUser, err := p.readModelRepo.GetByID(ctx, event.UserID)
+	if err == nil && existingUser != nil {
+		p.logger.Debug("User read model already exists, skipping", "user_id", event.UserID)
+		return nil
+	}
+
+	// Create new user read model
+	now := time.Now()
+	userReadModel := &UserReadModel{
+		ID:        event.UserID,
+		Email:     event.Email,
+		Name:      event.Name,
+		IsActive:  true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// Save to read model repository
+	if err := p.readModelRepo.Save(ctx, userReadModel); err != nil {
+		p.logger.Error("Failed to save user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to save user read model: %w", err)
+	}
+
+	p.logger.Info("Successfully created user read model", "user_id", event.UserID)
+	return nil
+}
+
+// HandleUserEmailUpdated processes UserEmailUpdatedEvent to update user read model
+func (p *UserProjector) HandleUserEmailUpdated(ctx context.Context, event domain.UserEmailUpdatedEvent) error {
+	p.logger.Info("Processing UserEmailUpdatedEvent for user", "user_id", event.UserID)
+
+	// Get existing user read model
+	userReadModel, err := p.readModelRepo.GetByID(ctx, event.UserID)
+	if err != nil {
+		p.logger.Error("Failed to get user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to get user read model: %w", err)
+	}
+
+	if userReadModel == nil {
+		p.logger.Warn("User read model not found, cannot update email", "user_id", event.UserID)
+		return fmt.Errorf("user read model not found for ID: %s", event.UserID)
+	}
+
+	// Update email and timestamp
+	userReadModel.Email = event.NewEmail
+	userReadModel.UpdatedAt = time.Now()
+
+	// Save updated read model
+	if err := p.readModelRepo.Save(ctx, userReadModel); err != nil {
+		p.logger.Error("Failed to update user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to update user read model: %w", err)
+	}
+
+	p.logger.Info("Successfully updated email for user", "user_id", event.UserID, "old_email", event.OldEmail, "new_email", event.NewEmail)
+	return nil
+}
+
+// HandleUserNameUpdated processes UserNameUpdatedEvent to update user read model
+func (p *UserProjector) HandleUserNameUpdated(ctx context.Context, event domain.UserNameUpdatedEvent) error {
+	p.logger.Info("Processing UserNameUpdatedEvent for user", "user_id", event.UserID)
+
+	// Get existing user read model
+	userReadModel, err := p.readModelRepo.GetByID(ctx, event.UserID)
+	if err != nil {
+		p.logger.Error("Failed to get user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to get user read model: %w", err)
+	}
+
+	if userReadModel == nil {
+		p.logger.Warn("User read model not found, cannot update name", "user_id", event.UserID)
+		return fmt.Errorf("user read model not found for ID: %s", event.UserID)
+	}
+
+	// Update name and timestamp
+	userReadModel.Name = event.NewName
+	userReadModel.UpdatedAt = time.Now()
+
+	// Save updated read model
+	if err := p.readModelRepo.Save(ctx, userReadModel); err != nil {
+		p.logger.Error("Failed to update user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to update user read model: %w", err)
+	}
+
+	p.logger.Info("Successfully updated name for user", "user_id", event.UserID, "old_name", event.OldName, "new_name", event.NewName)
+	return nil
+}
+
+// HandleUserDeactivated processes UserDeactivatedEvent to update user read model
+func (p *UserProjector) HandleUserDeactivated(ctx context.Context, event domain.UserDeactivatedEvent) error {
+	p.logger.Info("Processing UserDeactivatedEvent for user", "user_id", event.UserID)
+
+	// Get existing user read model
+	userReadModel, err := p.readModelRepo.GetByID(ctx, event.UserID)
+	if err != nil {
+		p.logger.Error("Failed to get user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to get user read model: %w", err)
+	}
+
+	if userReadModel == nil {
+		p.logger.Warn("User read model not found, cannot deactivate", "user_id", event.UserID)
+		return fmt.Errorf("user read model not found for ID: %s", event.UserID)
+	}
+
+	// Update active status and timestamp
+	userReadModel.IsActive = false
+	userReadModel.UpdatedAt = time.Now()
+
+	// Save updated read model
+	if err := p.readModelRepo.Save(ctx, userReadModel); err != nil {
+		p.logger.Error("Failed to update user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to update user read model: %w", err)
+	}
+
+	p.logger.Info("Successfully deactivated user", "user_id", event.UserID)
+	return nil
+}
+
+// HandleUserActivated processes UserActivatedEvent to update user read model
+func (p *UserProjector) HandleUserActivated(ctx context.Context, event domain.UserActivatedEvent) error {
+	p.logger.Info("Processing UserActivatedEvent for user", "user_id", event.UserID)
+
+	// Get existing user read model
+	userReadModel, err := p.readModelRepo.GetByID(ctx, event.UserID)
+	if err != nil {
+		p.logger.Error("Failed to get user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to get user read model: %w", err)
+	}
+
+	if userReadModel == nil {
+		p.logger.Warn("User read model not found, cannot activate", "user_id", event.UserID)
+		return fmt.Errorf("user read model not found for ID: %s", event.UserID)
+	}
+
+	// Update active status and timestamp
+	userReadModel.IsActive = true
+	userReadModel.UpdatedAt = time.Now()
+
+	// Save updated read model
+	if err := p.readModelRepo.Save(ctx, userReadModel); err != nil {
+		p.logger.Error("Failed to update user read model", "user_id", event.UserID, "error", err)
+		return fmt.Errorf("failed to update user read model: %w", err)
+	}
+
+	p.logger.Info("Successfully activated user", "user_id", event.UserID)
+	return nil
+}
+
+// UserProjectorEventHandler implements domain.EventHandler for the user projector
+type UserProjectorEventHandler struct {
+	projector *UserProjector
+}
+
+func (h *UserProjectorEventHandler) Handle(ctx context.Context, envelope domain.Envelope) error {
+	switch event := envelope.Event().(type) {
+	case domain.UserCreatedEvent:
+		return h.projector.HandleUserCreated(ctx, event)
+	case domain.UserEmailUpdatedEvent:
+		return h.projector.HandleUserEmailUpdated(ctx, event)
+	case domain.UserNameUpdatedEvent:
+		return h.projector.HandleUserNameUpdated(ctx, event)
+	case domain.UserDeactivatedEvent:
+		return h.projector.HandleUserDeactivated(ctx, event)
+	case domain.UserActivatedEvent:
+		return h.projector.HandleUserActivated(ctx, event)
+	default:
+		return fmt.Errorf("unsupported event type: %T", event)
+	}
+}
+
+func (h *UserProjectorEventHandler) EventTypes() []string {
+	return []string{"UserCreated", "UserEmailUpdated", "UserNameUpdated", "UserDeactivated", "UserActivated"}
+}
+
+// RegisterEventHandlers registers this projector's event handlers with the event dispatcher
+func (p *UserProjector) RegisterEventHandlers(dispatcher domain.EventDispatcher) error {
+	handler := &UserProjectorEventHandler{projector: p}
+
+	eventTypes := handler.EventTypes()
+	for _, eventType := range eventTypes {
+		if err := dispatcher.Subscribe(eventType, handler); err != nil {
+			return fmt.Errorf("failed to register %s handler: %w", eventType, err)
+		}
+	}
+
+	p.logger.Info("Successfully registered UserProjector event handlers", "event_types", eventTypes)
+	return nil
+}

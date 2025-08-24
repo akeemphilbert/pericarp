@@ -11,75 +11,33 @@ var ApplicationModule = fx.Options(
 		CommandBusProvider,
 		QueryBusProvider,
 		ApplicationServiceProvider,
-		// Named middleware providers
-		fx.Annotate(LoggingCommandMiddlewareProvider, fx.ResultTags(`name:"logging_command"`)),
-		fx.Annotate(LoggingQueryMiddlewareProvider, fx.ResultTags(`name:"logging_query"`)),
-		fx.Annotate(ValidationCommandMiddlewareProvider, fx.ResultTags(`name:"validation_command"`)),
-		fx.Annotate(ValidationQueryMiddlewareProvider, fx.ResultTags(`name:"validation_query"`)),
-		fx.Annotate(ErrorHandlingCommandMiddlewareProvider, fx.ResultTags(`name:"error_command"`)),
-		fx.Annotate(ErrorHandlingQueryMiddlewareProvider, fx.ResultTags(`name:"error_query"`)),
-		// Metrics middleware (optional - only if MetricsCollector is available)
-		fx.Annotate(MetricsCommandMiddlewareProvider, fx.ResultTags(`name:"metrics_command"`)),
-		fx.Annotate(MetricsQueryMiddlewareProvider, fx.ResultTags(`name:"metrics_query"`)),
+		HandlerRegistrarProvider,
+
+		// Standard middleware providers (tagged for different use cases)
+		fx.Annotate(ErrorHandlingCommandMiddlewareProvider, fx.ResultTags(`group:"admin_command_middleware" group:"public_command_middleware" group:"internal_command_middleware"`)),
+		fx.Annotate(ErrorHandlingQueryMiddlewareProvider, fx.ResultTags(`group:"admin_query_middleware" group:"public_query_middleware" group:"internal_query_middleware"`)),
+
+		fx.Annotate(LoggingCommandMiddlewareProvider, fx.ResultTags(`group:"admin_command_middleware" group:"public_command_middleware"`)),
+		fx.Annotate(LoggingQueryMiddlewareProvider, fx.ResultTags(`group:"admin_query_middleware" group:"public_query_middleware"`)),
+
+		fx.Annotate(ValidationCommandMiddlewareProvider, fx.ResultTags(`group:"admin_command_middleware" group:"public_command_middleware"`)),
+		fx.Annotate(ValidationQueryMiddlewareProvider, fx.ResultTags(`group:"admin_query_middleware" group:"public_query_middleware"`)),
+
+		fx.Annotate(MetricsCommandMiddlewareProvider, fx.ResultTags(`group:"admin_command_middleware" group:"public_command_middleware"`)),
+		fx.Annotate(MetricsQueryMiddlewareProvider, fx.ResultTags(`group:"admin_query_middleware" group:"public_query_middleware"`)),
+
+		fx.Annotate(CachingQueryMiddlewareProvider, fx.ResultTags(`group:"public_query_middleware"`)),
 	),
 	fx.Invoke(
-		// Configure middleware on buses
-		fx.Annotate(configureCommandBusMiddleware, fx.ParamTags(``,
-			`name:"logging_command"`,
-			`name:"validation_command"`,
-			`name:"error_command"`,
-			`name:"metrics_command"`)),
-		fx.Annotate(configureQueryBusMiddleware, fx.ParamTags(``,
-			`name:"logging_query"`,
-			`name:"validation_query"`,
-			`name:"error_query"`,
-			`name:"metrics_query"`)),
+		// Setup functions for different handler groups
+		fx.Annotate(setupAdminCommandHandlers, fx.ParamTags(``, ``, `group:"admin_command_handlers"`, `group:"admin_command_middleware"`)),
+		fx.Annotate(setupAdminQueryHandlers, fx.ParamTags(``, ``, `group:"admin_query_handlers"`, `group:"admin_query_middleware"`)),
+		fx.Annotate(setupPublicCommandHandlers, fx.ParamTags(``, ``, `group:"public_command_handlers"`, `group:"public_command_middleware"`)),
+		fx.Annotate(setupPublicQueryHandlers, fx.ParamTags(``, ``, `group:"public_query_handlers"`, `group:"public_query_middleware"`)),
+		fx.Annotate(setupInternalCommandHandlers, fx.ParamTags(``, ``, `group:"internal_command_handlers"`, `group:"internal_command_middleware"`)),
+		fx.Annotate(setupInternalQueryHandlers, fx.ParamTags(``, ``, `group:"internal_query_handlers"`, `group:"internal_query_middleware"`)),
 	),
 )
-
-// configureCommandBusMiddleware sets up middleware for command bus
-func configureCommandBusMiddleware(
-	bus CommandBus,
-	loggingMiddleware CommandMiddleware,
-	validationMiddleware CommandMiddleware,
-	errorMiddleware CommandMiddleware,
-	metricsMiddleware CommandMiddleware,
-) {
-	middlewares := []CommandMiddleware{
-		errorMiddleware,      // Error handling should be outermost
-		loggingMiddleware,    // Logging should wrap everything
-		validationMiddleware, // Validation before business logic
-	}
-
-	// Add metrics middleware if available
-	if metricsMiddleware != nil {
-		middlewares = append(middlewares, metricsMiddleware)
-	}
-
-	bus.Use(middlewares...)
-}
-
-// configureQueryBusMiddleware sets up middleware for query bus
-func configureQueryBusMiddleware(
-	bus QueryBus,
-	loggingMiddleware QueryMiddleware,
-	validationMiddleware QueryMiddleware,
-	errorMiddleware QueryMiddleware,
-	metricsMiddleware QueryMiddleware,
-) {
-	middlewares := []QueryMiddleware{
-		errorMiddleware,      // Error handling should be outermost
-		loggingMiddleware,    // Logging should wrap everything
-		validationMiddleware, // Validation before business logic
-	}
-
-	// Add metrics middleware if available
-	if metricsMiddleware != nil {
-		middlewares = append(middlewares, metricsMiddleware)
-	}
-
-	bus.Use(middlewares...)
-}
 
 // CommandBusProvider creates a command bus
 func CommandBusProvider() CommandBus {
@@ -91,47 +49,148 @@ func QueryBusProvider() QueryBus {
 	return NewQueryBus()
 }
 
-// LoggingCommandMiddlewareProvider creates logging middleware for commands
-func LoggingCommandMiddlewareProvider() CommandMiddleware {
-	return LoggingCommandMiddleware()
+// HandlerRegistrarProvider creates a handler registrar
+func HandlerRegistrarProvider() HandlerRegistrar {
+	return &DefaultHandlerRegistrar{}
 }
 
-// LoggingQueryMiddlewareProvider creates logging middleware for queries
-func LoggingQueryMiddlewareProvider() QueryMiddleware {
-	return LoggingQueryMiddleware()
-}
-
-// ValidationCommandMiddlewareProvider creates validation middleware for commands
-func ValidationCommandMiddlewareProvider() CommandMiddleware {
-	return ValidationCommandMiddleware()
-}
-
-// ValidationQueryMiddlewareProvider creates validation middleware for queries
-func ValidationQueryMiddlewareProvider() QueryMiddleware {
-	return ValidationQueryMiddleware()
-}
+// Tagged middleware providers
 
 // ErrorHandlingCommandMiddlewareProvider creates error handling middleware for commands
-func ErrorHandlingCommandMiddlewareProvider() CommandMiddleware {
-	return ErrorHandlingCommandMiddleware()
+func ErrorHandlingCommandMiddlewareProvider() TaggedCommandMiddleware {
+	return TaggedCommandMiddleware{
+		Name:       "error_handling",
+		Middleware: ErrorHandlingMiddleware[Command, struct{}](),
+	}
 }
 
 // ErrorHandlingQueryMiddlewareProvider creates error handling middleware for queries
-func ErrorHandlingQueryMiddlewareProvider() QueryMiddleware {
-	return ErrorHandlingQueryMiddleware()
+func ErrorHandlingQueryMiddlewareProvider() TaggedQueryMiddleware {
+	return TaggedQueryMiddleware{
+		Name:       "error_handling",
+		Middleware: ErrorHandlingMiddleware[Query, any](),
+	}
+}
+
+// LoggingCommandMiddlewareProvider creates logging middleware for commands
+func LoggingCommandMiddlewareProvider() TaggedCommandMiddleware {
+	return TaggedCommandMiddleware{
+		Name:       "logging",
+		Middleware: LoggingMiddleware[Command, struct{}](),
+	}
+}
+
+// LoggingQueryMiddlewareProvider creates logging middleware for queries
+func LoggingQueryMiddlewareProvider() TaggedQueryMiddleware {
+	return TaggedQueryMiddleware{
+		Name:       "logging",
+		Middleware: LoggingMiddleware[Query, any](),
+	}
+}
+
+// ValidationCommandMiddlewareProvider creates validation middleware for commands
+func ValidationCommandMiddlewareProvider() TaggedCommandMiddleware {
+	return TaggedCommandMiddleware{
+		Name:       "validation",
+		Middleware: ValidationMiddleware[Command, struct{}](),
+	}
+}
+
+// ValidationQueryMiddlewareProvider creates validation middleware for queries
+func ValidationQueryMiddlewareProvider() TaggedQueryMiddleware {
+	return TaggedQueryMiddleware{
+		Name:       "validation",
+		Middleware: ValidationMiddleware[Query, any](),
+	}
 }
 
 // MetricsCommandMiddlewareProvider creates metrics middleware for commands
-func MetricsCommandMiddlewareProvider(metrics MetricsCollector) CommandMiddleware {
-	return MetricsCommandMiddleware(metrics)
+func MetricsCommandMiddlewareProvider(metrics MetricsCollector) TaggedCommandMiddleware {
+	return TaggedCommandMiddleware{
+		Name:       "metrics",
+		Middleware: MetricsMiddleware[Command, struct{}](metrics),
+	}
 }
 
 // MetricsQueryMiddlewareProvider creates metrics middleware for queries
-func MetricsQueryMiddlewareProvider(metrics MetricsCollector) QueryMiddleware {
-	return MetricsQueryMiddleware(metrics)
+func MetricsQueryMiddlewareProvider(metrics MetricsCollector) TaggedQueryMiddleware {
+	return TaggedQueryMiddleware{
+		Name:       "metrics",
+		Middleware: MetricsMiddleware[Query, any](metrics),
+	}
 }
 
 // ApplicationServiceProvider creates an application service
 func ApplicationServiceProvider(unitOfWork domain.UnitOfWork, logger domain.Logger) *ApplicationService {
 	return NewApplicationService(unitOfWork, logger)
+}
+
+// CachingQueryMiddlewareProvider creates caching middleware for queries
+func CachingQueryMiddlewareProvider(cache CacheProvider) TaggedQueryMiddleware {
+	return TaggedQueryMiddleware{
+		Name:       "caching",
+		Middleware: CachingMiddleware[Query, any](cache),
+	}
+}
+
+// Setup functions for different handler groups
+
+// setupAdminCommandHandlers registers all admin command handlers with admin middleware
+func setupAdminCommandHandlers(
+	registrar HandlerRegistrar,
+	commandBus CommandBus,
+	handlers []TaggedCommandHandler,
+	middleware []TaggedCommandMiddleware,
+) {
+	registrar.RegisterCommandHandlers(commandBus, handlers, middleware)
+}
+
+// setupAdminQueryHandlers registers all admin query handlers with admin middleware
+func setupAdminQueryHandlers(
+	registrar HandlerRegistrar,
+	queryBus QueryBus,
+	handlers []TaggedQueryHandler,
+	middleware []TaggedQueryMiddleware,
+) {
+	registrar.RegisterQueryHandlers(queryBus, handlers, middleware)
+}
+
+// setupPublicCommandHandlers registers all public command handlers with public middleware
+func setupPublicCommandHandlers(
+	registrar HandlerRegistrar,
+	commandBus CommandBus,
+	handlers []TaggedCommandHandler,
+	middleware []TaggedCommandMiddleware,
+) {
+	registrar.RegisterCommandHandlers(commandBus, handlers, middleware)
+}
+
+// setupPublicQueryHandlers registers all public query handlers with public middleware
+func setupPublicQueryHandlers(
+	registrar HandlerRegistrar,
+	queryBus QueryBus,
+	handlers []TaggedQueryHandler,
+	middleware []TaggedQueryMiddleware,
+) {
+	registrar.RegisterQueryHandlers(queryBus, handlers, middleware)
+}
+
+// setupInternalCommandHandlers registers all internal command handlers with internal middleware
+func setupInternalCommandHandlers(
+	registrar HandlerRegistrar,
+	commandBus CommandBus,
+	handlers []TaggedCommandHandler,
+	middleware []TaggedCommandMiddleware,
+) {
+	registrar.RegisterCommandHandlers(commandBus, handlers, middleware)
+}
+
+// setupInternalQueryHandlers registers all internal query handlers with internal middleware
+func setupInternalQueryHandlers(
+	registrar HandlerRegistrar,
+	queryBus QueryBus,
+	handlers []TaggedQueryHandler,
+	middleware []TaggedQueryMiddleware,
+) {
+	registrar.RegisterQueryHandlers(queryBus, handlers, middleware)
 }

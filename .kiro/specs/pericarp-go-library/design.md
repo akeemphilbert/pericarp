@@ -110,14 +110,32 @@ type UnitOfWork interface {
 ### Application Layer Components
 
 ```go
-// CommandHandler processes commands with logger injection
-type CommandHandler[T Command] interface {
-    Handle(ctx context.Context, logger Logger, cmd T) error
+// Payload wraps request data with metadata
+type Payload[T any] struct {
+    Data     T
+    Metadata map[string]any
+    TraceID  string
+    UserID   string
 }
 
-// QueryHandler processes queries with logger injection
+// Response wraps response data with metadata
+type Response[T any] struct {
+    Data     T
+    Metadata map[string]any
+    Error    error
+}
+
+// Unified handler signature for both commands and queries
+type Handler[Req any, Res any] func(ctx context.Context, log Logger, p Payload[Req]) (Response[Res], error)
+
+// CommandHandler processes commands using unified signature
+type CommandHandler[T Command] interface {
+    Handle(ctx context.Context, log Logger, p Payload[T]) (Response[struct{}], error)
+}
+
+// QueryHandler processes queries using unified signature
 type QueryHandler[T Query, R any] interface {
-    Handle(ctx context.Context, logger Logger, query T) (R, error)
+    Handle(ctx context.Context, log Logger, p Payload[T]) (Response[R], error)
 }
 
 // EventHandler processes events (projectors/sagas)
@@ -136,25 +154,25 @@ type Query interface {
     QueryType() string
 }
 
-// Middleware for AOP-like cross-cutting concerns
-type CommandMiddleware func(next CommandHandlerFunc) CommandHandlerFunc
-type QueryMiddleware func(next QueryHandlerFunc) QueryHandlerFunc
+// Unified middleware that works for both commands and queries
+type Middleware[Req any, Res any] func(next Handler[Req, Res]) Handler[Req, Res]
 
-type CommandHandlerFunc func(ctx context.Context, logger Logger, cmd Command) error
-type QueryHandlerFunc func(ctx context.Context, logger Logger, query Query) (interface{}, error)
+// Using unified Middleware type for both commands and queries
 
-// CommandBus with middleware support and logger injection
+// Handler function types for bus registration
+type CommandHandlerFunc func(ctx context.Context, log Logger, p Payload[Command]) (Response[struct{}], error)
+type QueryHandlerFunc func(ctx context.Context, log Logger, p Payload[Query]) (Response[any], error)
+
+// CommandBus with unified middleware support
 type CommandBus interface {
-    Use(middleware ...CommandMiddleware)
     Handle(ctx context.Context, logger Logger, cmd Command) error
-    Register(cmdType string, handler CommandHandler[Command])
+    Register(cmdType string, handler Handler[Command, struct{}], middleware ...Middleware[Command, struct{}])
 }
 
-// QueryBus with middleware support and logger injection
+// QueryBus with unified middleware support
 type QueryBus interface {
-    Use(middleware ...QueryMiddleware)
-    Handle(ctx context.Context, logger Logger, query Query) (interface{}, error)
-    Register(queryType string, handler QueryHandler[Query, interface{}])
+    Handle(ctx context.Context, logger Logger, query Query) (any, error)
+    Register(queryType string, handler Handler[Query, any], middleware ...Middleware[Query, any])
 }
 ```
 
@@ -344,61 +362,117 @@ sequenceDiagram
 ### Middleware Examples
 
 ```go
-// Logging middleware for commands (logger is now injected via bus)
-func LoggingCommandMiddleware() CommandMiddleware {
-    return func(next CommandHandlerFunc) CommandHandlerFunc {
-        return func(ctx context.Context, logger Logger, cmd Command) error {
+// Unified logging middleware that works for both commands and queries
+func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
+    return func(next Handler[Req, Res]) Handler[Req, Res] {
+        return func(ctx context.Context, log Logger, p Payload[Req]) (Response[Res], error) {
             start := time.Now()
-            logger.Info("Executing command", "type", cmd.CommandType())
             
-            err := next(ctx, logger, cmd)
+            // Extract request type for logging
+            var requestType string
+            if cmd, ok := any(p.Data).(Command); ok {
+                requestType = cmd.CommandType()
+            } else if query, ok := any(p.Data).(Query); ok {
+                requestType = query.QueryType()
+            } else {
+                requestType = fmt.Sprintf("%T", p.Data)
+            }
+            
+            log.Info("Processing request", 
+                "type", requestType, 
+                "traceId", p.TraceID,
+                "userId", p.UserID)
+            
+            response, err := next(ctx, log, p)
             
             duration := time.Since(start)
             if err != nil {
-                logger.Error("Command failed", "type", cmd.CommandType(), "duration", duration, "error", err)
+                log.Error("Request failed", 
+                    "type", requestType, 
+                    "duration", duration, 
+                    "error", err,
+                    "traceId", p.TraceID)
             } else {
-                logger.Info("Command completed", "type", cmd.CommandType(), "duration", duration)
+                log.Info("Request completed", 
+                    "type", requestType, 
+                    "duration", duration,
+                    "traceId", p.TraceID)
             }
             
-            return err
+            return response, err
         }
     }
 }
 
-// Validation middleware for commands
-func ValidationCommandMiddleware() CommandMiddleware {
-    return func(next CommandHandlerFunc) CommandHandlerFunc {
-        return func(ctx context.Context, logger Logger, cmd Command) error {
-            if validator, ok := cmd.(Validator); ok {
+// Unified validation middleware
+func ValidationMiddleware[Req any, Res any]() Middleware[Req, Res] {
+    return func(next Handler[Req, Res]) Handler[Req, Res] {
+        return func(ctx context.Context, log Logger, p Payload[Req]) (Response[Res], error) {
+            if validator, ok := any(p.Data).(Validator); ok {
                 if err := validator.Validate(); err != nil {
-                    logger.Warn("Command validation failed", "type", cmd.CommandType(), "error", err)
-                    return ValidationError{Message: err.Error()}
+                    log.Warn("Request validation failed", 
+                        "error", err,
+                        "traceId", p.TraceID)
+                    
+                    var zero Res
+                    return Response[Res]{
+                        Data:  zero,
+                        Error: ValidationError{Message: err.Error()},
+                        Metadata: map[string]any{
+                            "validation_failed": true,
+                        },
+                    }, err
                 }
             }
-            return next(ctx, logger, cmd)
+            return next(ctx, log, p)
         }
     }
 }
 
-// Metrics middleware for queries
-func MetricsQueryMiddleware(metrics MetricsCollector) QueryMiddleware {
-    return func(next QueryHandlerFunc) QueryHandlerFunc {
-        return func(ctx context.Context, logger Logger, query Query) (interface{}, error) {
+// Unified metrics middleware
+func MetricsMiddleware[Req any, Res any](metrics MetricsCollector) Middleware[Req, Res] {
+    return func(next Handler[Req, Res]) Handler[Req, Res] {
+        return func(ctx context.Context, log Logger, p Payload[Req]) (Response[Res], error) {
             start := time.Now()
-            result, err := next(ctx, logger, query)
-            duration := time.Since(start)
             
-            metrics.RecordQueryDuration(query.QueryType(), duration)
-            if err != nil {
-                metrics.IncrementQueryErrors(query.QueryType())
-                logger.Error("Query failed", "type", query.QueryType(), "duration", duration, "error", err)
+            var requestType string
+            if cmd, ok := any(p.Data).(Command); ok {
+                requestType = cmd.CommandType()
+            } else if query, ok := any(p.Data).(Query); ok {
+                requestType = query.QueryType()
             } else {
-                logger.Debug("Query completed", "type", query.QueryType(), "duration", duration)
+                requestType = fmt.Sprintf("%T", p.Data)
             }
             
-            return result, err
+            response, err := next(ctx, log, p)
+            duration := time.Since(start)
+            
+            metrics.RecordRequestDuration(requestType, duration)
+            if err != nil {
+                metrics.IncrementRequestErrors(requestType)
+            }
+            
+            return response, err
         }
     }
+}
+
+// Usage examples showing unified middleware application
+func ConfigureCommandBus(bus CommandBus, metrics MetricsCollector) {
+    // Same middleware can be used for all command types
+    loggingMW := LoggingMiddleware[CreateUserCommand, struct{}]()
+    validationMW := ValidationMiddleware[CreateUserCommand, struct{}]()
+    metricsMW := MetricsMiddleware[CreateUserCommand, struct{}](metrics)
+    
+    bus.Register("CreateUser", createUserHandler, loggingMW, validationMW, metricsMW)
+}
+
+func ConfigureQueryBus(bus QueryBus, metrics MetricsCollector) {
+    // Same middleware implementations work for queries too
+    loggingMW := LoggingMiddleware[GetUserQuery, UserView]()
+    metricsMW := MetricsMiddleware[GetUserQuery, UserView](metrics)
+    
+    bus.Register("GetUser", getUserHandler, loggingMW, metricsMW)
 }
 ```
 
@@ -493,24 +567,84 @@ The demo will showcase:
 - `UserCreated`: Fired when user is created
 - `UserEmailUpdated`: Fired when email is updated
 
-### Demo Middleware Configuration
+### Demo Unified Handler Configuration
 ```go
-// Configure command bus with middleware (logger injected via Handle method)
-commandBus.Use(
-    LoggingCommandMiddleware(),
-    ValidationCommandMiddleware(),
-    MetricsCommandMiddleware(metrics),
-)
+// Example command handler using unified signature
+type CreateUserHandler struct {
+    userRepo UserRepository
+}
 
-// Configure query bus with middleware (logger injected via Handle method)
-queryBus.Use(
-    LoggingQueryMiddleware(),
-    CachingQueryMiddleware(cache),
-    MetricsQueryMiddleware(metrics),
-)
+func (h *CreateUserHandler) Handle(ctx context.Context, log Logger, p Payload[CreateUserCommand]) (Response[struct{}], error) {
+    log.Info("Creating user", "email", p.Data.Email, "traceId", p.TraceID)
+    
+    user, err := NewUser(p.Data.Email, p.Data.Name)
+    if err != nil {
+        return Response[struct{}]{Error: err}, err
+    }
+    
+    if err := h.userRepo.Save(ctx, user); err != nil {
+        return Response[struct{}]{Error: err}, err
+    }
+    
+    return Response[struct{}]{
+        Data: struct{}{},
+        Metadata: map[string]any{
+            "userId": user.ID(),
+            "version": user.Version(),
+        },
+    }, nil
+}
 
-// Usage example
+// Example query handler using unified signature
+type GetUserHandler struct {
+    readRepo UserReadRepository
+}
+
+func (h *GetUserHandler) Handle(ctx context.Context, log Logger, p Payload[GetUserQuery]) (Response[UserView], error) {
+    log.Debug("Getting user", "userId", p.Data.UserID, "traceId", p.TraceID)
+    
+    user, err := h.readRepo.GetByID(ctx, p.Data.UserID)
+    if err != nil {
+        return Response[UserView]{Error: err}, err
+    }
+    
+    return Response[UserView]{
+        Data: UserView{
+            ID:    user.ID,
+            Email: user.Email,
+            Name:  user.Name,
+        },
+        Metadata: map[string]any{
+            "cached": false,
+            "version": user.Version,
+        },
+    }, nil
+}
+
+// Configure buses with unified middleware
+func ConfigureBuses(commandBus CommandBus, queryBus QueryBus, metrics MetricsCollector) {
+    // Same middleware works for both commands and queries
+    loggingMW := LoggingMiddleware[any, any]()
+    validationMW := ValidationMiddleware[any, any]()
+    metricsMW := MetricsMiddleware[any, any](metrics)
+    
+    // Register command handlers
+    commandBus.Register("CreateUser", createUserHandler, loggingMW, validationMW, metricsMW)
+    commandBus.Register("UpdateUserEmail", updateUserHandler, loggingMW, validationMW, metricsMW)
+    
+    // Register query handlers with same middleware
+    queryBus.Register("GetUser", getUserHandler, loggingMW, metricsMW)
+    queryBus.Register("ListUsers", listUsersHandler, loggingMW, metricsMW)
+}
+
+// Usage example with Payload wrapper
 logger := NewLogger()
-cmd := CreateUserCommand{Email: "user@example.com"}
-err := commandBus.Handle(ctx, logger, cmd)
+payload := Payload[CreateUserCommand]{
+    Data: CreateUserCommand{Email: "user@example.com", Name: "John Doe"},
+    Metadata: map[string]any{"source": "api"},
+    TraceID: "trace-123",
+    UserID: "admin-456",
+}
+
+err := commandBus.Handle(ctx, logger, payload.Data)
 ```

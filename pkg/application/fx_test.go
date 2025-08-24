@@ -11,18 +11,23 @@ import (
 // mockMetricsCollector is a simple mock implementation for testing
 type mockMetricsCollector struct{}
 
-func (m *mockMetricsCollector) RecordCommandDuration(commandType string, duration time.Duration) {}
-func (m *mockMetricsCollector) RecordQueryDuration(queryType string, duration time.Duration)     {}
-func (m *mockMetricsCollector) IncrementCommandErrors(commandType string)                        {}
-func (m *mockMetricsCollector) IncrementQueryErrors(queryType string)                            {}
+func (m *mockMetricsCollector) RecordRequestDuration(requestType string, duration time.Duration) {}
+func (m *mockMetricsCollector) IncrementRequestErrors(requestType string)                        {}
+
+// mockCacheProvider is a simple mock implementation for testing
+type mockCacheProvider struct{}
+
+func (m *mockCacheProvider) Get(key string) (any, bool) { return nil, false }
+func (m *mockCacheProvider) Set(key string, value any)  {}
+func (m *mockCacheProvider) Delete(key string)          {}
 
 func TestApplicationModule(t *testing.T) {
 	app := fxtest.New(t,
 		ApplicationModule,
-		// Provide mock dependencies needed by the application module
-		fx.Provide(func() MetricsCollector {
-			return &mockMetricsCollector{}
-		}),
+		fx.Provide(
+			func() MetricsCollector { return &mockMetricsCollector{} },
+			func() CacheProvider { return &mockCacheProvider{} },
+		),
 		fx.Invoke(func(
 			commandBus CommandBus,
 			queryBus QueryBus,
@@ -57,18 +62,18 @@ func TestQueryBusProvider(t *testing.T) {
 func TestMiddlewareProviders(t *testing.T) {
 	// Test logging middleware providers
 	loggingCmdMiddleware := LoggingCommandMiddlewareProvider()
-	if loggingCmdMiddleware == nil {
+	if loggingCmdMiddleware.Middleware == nil {
 		t.Error("LoggingCommandMiddleware should not be nil")
 	}
 
 	loggingQueryMiddleware := LoggingQueryMiddlewareProvider()
-	if loggingQueryMiddleware == nil {
+	if loggingQueryMiddleware.Middleware == nil {
 		t.Error("LoggingQueryMiddleware should not be nil")
 	}
 
 	// Test validation middleware provider
 	validationMiddleware := ValidationCommandMiddlewareProvider()
-	if validationMiddleware == nil {
+	if validationMiddleware.Middleware == nil {
 		t.Error("ValidationCommandMiddleware should not be nil")
 	}
 }

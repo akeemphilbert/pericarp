@@ -31,15 +31,15 @@
   - [x] 3.2 Implement command and query buses with middleware support and logger injection
     - Create CommandBus and QueryBus interfaces with middleware registration and logger parameter
     - Implement middleware chain execution similar to Echo framework
-    - Add CommandMiddleware and QueryMiddleware function types with logger parameter
+    - Use unified Middleware type for both commands and queries
     - Update bus Handle methods to accept context, logger, and command/query parameters
     - Create base application service with UnitOfWork integration
     - Add application-level error handling and validation
     - _Requirements: 2.1, 2.2, 1.3_
 
   - [x] 3.3 Build core middleware implementations with logger integration
-    - Implement LoggingCommandMiddleware and LoggingQueryMiddleware using injected logger
-    - Create ValidationCommandMiddleware for command validation with logging
+    - Implement unified LoggingMiddleware using injected logger
+    - Create unified ValidationMiddleware for command validation with logging
     - Add MetricsMiddleware for performance monitoring with debug logging
     - Implement error handling middleware for consistent error responses
     - Update all middleware to use logger parameter from handler function signature
@@ -106,75 +106,97 @@
     - Configure query bus with logging, caching, and metrics middleware
     - _Requirements: 6.2, 2.1, 1.3_
 
-- [ ] 7. Implement event handling and projections
-  - [ ] 7.1 Create user projection event handler
+- [x] 7. Implement unified handler architecture
+  - [x] 7.1 Create unified handler signature and wrapper types
+    - Define `Payload[T any]` struct with Data, Metadata, TraceID, and UserID fields
+    - Create `Response[T any]` struct with Data, Metadata, and Error fields
+    - Implement unified `Handler[Req any, Res any]` function type signature
+    - Update CommandHandler and QueryHandler interfaces to use unified signature
+    - _Requirements: 10.1, 10.2, 10.3, 10.4_
+
+  - [x] 7.2 Refactor middleware to use unified signature
+    - Converted existing CommandMiddleware and QueryMiddleware to unified Middleware[Req, Res] type
+    - Update LoggingMiddleware to work with both commands and queries using unified signature
+    - Refactor ValidationMiddleware to use Payload wrapper and Response wrapper
+    - Update MetricsMiddleware to handle both command and query metrics uniformly
+    - _Requirements: 10.5, 10.6, 10.7_
+
+  - [x] 7.3 Update command and query buses for unified handlers
+    - Modify CommandBus.Register to accept unified middleware types
+    - Update QueryBus.Register to accept unified middleware types
+    - Ensure bus Handle methods properly wrap/unwrap Payload and Response types
+    - Add type safety while maintaining unified middleware compatibility
+    - _Requirements: 10.1, 10.5_
+
+- [ ] 8. Implement event handling and projections
+  - [ ] 8.1 Create user projection event handler
     - Implement UserProjector to handle UserCreated and UserEmailUpdated events
     - Build read model tables and GORM models for projections
     - Add event handler registration and subscription
     - Implement idempotent event processing
     - _Requirements: 6.3, 2.4, 1.3_
 
-  - [ ] 7.2 Add repository implementations
+  - [ ] 8.2 Add repository implementations
     - Create UserRepository implementation using event sourcing
     - Implement UserReadModelRepository for query operations
     - Add repository error handling and concurrency control
     - Integrate with EventStore for aggregate reconstruction
     - _Requirements: 1.4, 6.2, 6.3_
 
-- [ ] 8. Build testing infrastructure
-  - [ ] 8.1 Set up BDD testing with Cucumber
+- [ ] 9. Build testing infrastructure
+  - [ ] 9.1 Set up BDD testing with Cucumber
     - Create feature files with Gherkin scenarios for user management
     - Implement step definitions for Given/When/Then steps
     - Set up test database and cleanup between scenarios
     - Add test fixtures and data builders
     - _Requirements: 7.1, 7.2, 7.3_
 
-  - [ ] 8.2 Generate mocks with moq
+  - [ ] 9.2 Generate mocks with moq
     - Generate mocks for Repository, EventStore, EventDispatcher interfaces
     - Create mock implementations for testing command and query handlers
     - Add mock configuration helpers for test scenarios
     - Implement in-memory test doubles for integration testing
     - _Requirements: 7.4_
 
-  - [ ] 8.3 Write unit tests for domain layer
+  - [ ] 9.3 Write unit tests for domain layer
     - Test User aggregate business logic and event generation
     - Validate domain rules and invariants
     - Test value object validation and equality
     - Ensure pure domain logic with no external dependencies
     - _Requirements: 8.1, 7.5_
 
-- [ ] 9. Complete demo application
-  - [ ] 9.1 Build demo CLI application
+- [ ] 10. Complete demo application
+  - [ ] 10.1 Build demo CLI application
     - Create main.go with Viper configuration loading
     - Implement CLI commands for user creation and querying
     - Add database initialization and migration
     - Configure logging and error handling
     - _Requirements: 6.1, 4.1, 5.1, 5.2_
 
-  - [ ] 9.2 Add database configuration support
+  - [ ] 10.2 Add database configuration support
     - Implement SQLite configuration for development
     - Add PostgreSQL configuration for production
     - Create database migration scripts
     - Add connection pooling and health checks
     - _Requirements: 5.1, 5.2, 5.3_
 
-- [ ] 10. Write comprehensive tests and documentation
-  - [ ] 10.1 Complete BDD scenario coverage
+- [ ] 11. Write comprehensive tests and documentation
+  - [ ] 11.1 Complete BDD scenario coverage
     - Write Gherkin scenarios for all user management features
     - Test both SQLite and PostgreSQL configurations
     - Add error handling and edge case scenarios
     - Validate event sourcing and CQRS behavior
     - _Requirements: 6.4, 7.1, 7.2, 7.3_
 
-  - [ ] 10.2 Add integration tests
+  - [ ] 11.2 Add integration tests
     - Test EventStore with real database connections
     - Validate EventDispatcher with Watermill channels
     - Test end-to-end command and query flows
     - Add performance and concurrency tests
     - _Requirements: 6.4, 8.4_
 
-- [ ] 11. Finalize library and demo
-  - [ ] 11.1 Add library documentation using Diátaxis framework
+- [ ] 12. Finalize library and demo
+  - [ ] 12.1 Add library documentation using Diátaxis framework
     - Create tutorial documentation for getting started with the library
     - Write how-to guides for common implementation patterns
     - Add reference documentation with complete API documentation and godoc comments
@@ -182,7 +204,7 @@
     - Structure documentation following Diátaxis principles (tutorial, how-to, reference, explanation)
     - _Requirements: 9.3, 9.4_
 
-  - [ ] 11.2 Optimize performance and clean up code
+  - [ ] 12.2 Optimize performance and clean up code
     - Review and optimize JSON serialization performance
     - Ensure no reflection in hot paths
     - Add proper error handling and logging throughout

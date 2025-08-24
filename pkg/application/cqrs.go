@@ -6,6 +6,21 @@ import (
 	"github.com/example/pericarp/pkg/domain"
 )
 
+// Payload wraps request data with metadata for unified handler signature
+type Payload[T any] struct {
+	Data     T
+	Metadata map[string]any
+	TraceID  string
+	UserID   string
+}
+
+// Response wraps response data with metadata for unified handler signature
+type Response[T any] struct {
+	Data     T
+	Metadata map[string]any
+	Error    error
+}
+
 // Command marker interface
 type Command interface {
 	CommandType() string
@@ -16,17 +31,8 @@ type Query interface {
 	QueryType() string
 }
 
-// CommandHandler processes commands with logger injection
-// Context and logger are the first two parameters as required
-type CommandHandler[T Command] interface {
-	Handle(ctx context.Context, logger domain.Logger, cmd T) error
-}
-
-// QueryHandler processes queries with logger injection
-// Context and logger are the first two parameters as required
-type QueryHandler[T Query, R any] interface {
-	Handle(ctx context.Context, logger domain.Logger, query T) (R, error)
-}
+// Handler is the unified handler signature for both commands and queries
+type Handler[Req any, Res any] func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error)
 
 // EventHandler processes events (projectors/sagas)
 // This interface is defined here for application layer event handling
@@ -38,23 +44,21 @@ type EventHandler interface {
 	EventTypes() []string
 }
 
-// Middleware function types with logger parameter
-type CommandHandlerFunc func(ctx context.Context, logger domain.Logger, cmd Command) error
-type QueryHandlerFunc func(ctx context.Context, logger domain.Logger, query Query) (interface{}, error)
+// Unified middleware that works for both commands and queries
+type Middleware[Req any, Res any] func(next Handler[Req, Res]) Handler[Req, Res]
 
-type CommandMiddleware func(next CommandHandlerFunc) CommandHandlerFunc
-type QueryMiddleware func(next QueryHandlerFunc) QueryHandlerFunc
+// Handler function types for bus registration
+type CommandHandlerFunc Handler[Command, struct{}]
+type QueryHandlerFunc Handler[Query, any]
 
-// CommandBus with middleware support and logger injection
+// CommandBus with unified middleware support
 type CommandBus interface {
-	Use(middleware ...CommandMiddleware)
 	Handle(ctx context.Context, logger domain.Logger, cmd Command) error
-	Register(cmdType string, handler CommandHandler[Command])
+	Register(cmdType string, handler Handler[Command, struct{}], middleware ...Middleware[Command, struct{}])
 }
 
-// QueryBus with middleware support and logger injection
+// QueryBus with unified middleware support
 type QueryBus interface {
-	Use(middleware ...QueryMiddleware)
-	Handle(ctx context.Context, logger domain.Logger, query Query) (interface{}, error)
-	Register(queryType string, handler QueryHandler[Query, interface{}])
+	Handle(ctx context.Context, logger domain.Logger, query Query) (any, error)
+	Register(queryType string, handler Handler[Query, any], middleware ...Middleware[Query, any])
 }

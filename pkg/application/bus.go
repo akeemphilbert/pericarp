@@ -6,90 +6,108 @@ import (
 	"github.com/example/pericarp/pkg/domain"
 )
 
-// commandBus implements CommandBus with middleware support
+// commandBus implements CommandBus with unified handler support
 type commandBus struct {
-	handlers    map[string]CommandHandler[Command]
-	middlewares []CommandMiddleware
+	handlers map[string]CommandHandlerFunc
 }
 
 // NewCommandBus creates a new command bus instance
 func NewCommandBus() CommandBus {
 	return &commandBus{
-		handlers:    make(map[string]CommandHandler[Command]),
-		middlewares: make([]CommandMiddleware, 0),
+		handlers: make(map[string]CommandHandlerFunc),
 	}
 }
 
-// Use registers middleware to be applied to all command handlers
-func (b *commandBus) Use(middleware ...CommandMiddleware) {
-	b.middlewares = append(b.middlewares, middleware...)
-}
-
-// Handle processes a command through the middleware chain and handler
+// Handle processes a command through the registered handler with its middleware chain
 func (b *commandBus) Handle(ctx context.Context, logger domain.Logger, cmd Command) error {
-	handler, exists := b.handlers[cmd.CommandType()]
+	handlerFunc, exists := b.handlers[cmd.CommandType()]
 	if !exists {
 		return NewHandlerNotFoundError(cmd.CommandType(), "command")
 	}
 
-	// Build middleware chain
-	handlerFunc := func(ctx context.Context, logger domain.Logger, cmd Command) error {
-		return handler.Handle(ctx, logger, cmd)
+	// Wrap command in Payload
+	payload := Payload[Command]{
+		Data:     cmd,
+		Metadata: make(map[string]any),
+		TraceID:  "", // Could be extracted from context
+		UserID:   "", // Could be extracted from context
 	}
 
-	// Apply middleware in reverse order (like Echo framework)
-	for i := len(b.middlewares) - 1; i >= 0; i-- {
-		handlerFunc = b.middlewares[i](handlerFunc)
+	response, err := handlerFunc(ctx, logger, payload)
+	if err != nil {
+		return err
 	}
 
-	return handlerFunc(ctx, logger, cmd)
+	// Check if response contains an error
+	if response.Error != nil {
+		return response.Error
+	}
+
+	return nil
 }
 
-// Register associates a command type with its handler
-func (b *commandBus) Register(cmdType string, handler CommandHandler[Command]) {
-	b.handlers[cmdType] = handler
+// Register associates a command type with its handler and applies middleware in the order provided
+func (b *commandBus) Register(cmdType string, handler Handler[Command, struct{}], middleware ...Middleware[Command, struct{}]) {
+	// Start with the base handler function
+	handlerFunc := handler
+
+	// Apply middleware in reverse order (like Echo framework) so they execute in the order provided
+	for i := len(middleware) - 1; i >= 0; i-- {
+		handlerFunc = middleware[i](handlerFunc)
+	}
+
+	b.handlers[cmdType] = CommandHandlerFunc(handlerFunc)
 }
 
-// queryBus implements QueryBus with middleware support
+// queryBus implements QueryBus with unified handler support
 type queryBus struct {
-	handlers    map[string]QueryHandler[Query, interface{}]
-	middlewares []QueryMiddleware
+	handlers map[string]QueryHandlerFunc
 }
 
 // NewQueryBus creates a new query bus instance
 func NewQueryBus() QueryBus {
 	return &queryBus{
-		handlers:    make(map[string]QueryHandler[Query, interface{}]),
-		middlewares: make([]QueryMiddleware, 0),
+		handlers: make(map[string]QueryHandlerFunc),
 	}
 }
 
-// Use registers middleware to be applied to all query handlers
-func (q *queryBus) Use(middleware ...QueryMiddleware) {
-	q.middlewares = append(q.middlewares, middleware...)
-}
-
-// Handle processes a query through the middleware chain and handler
-func (q *queryBus) Handle(ctx context.Context, logger domain.Logger, query Query) (interface{}, error) {
-	handler, exists := q.handlers[query.QueryType()]
+// Handle processes a query through the registered handler with its middleware chain
+func (q *queryBus) Handle(ctx context.Context, logger domain.Logger, query Query) (any, error) {
+	handlerFunc, exists := q.handlers[query.QueryType()]
 	if !exists {
 		return nil, NewHandlerNotFoundError(query.QueryType(), "query")
 	}
 
-	// Build middleware chain
-	handlerFunc := func(ctx context.Context, logger domain.Logger, query Query) (interface{}, error) {
-		return handler.Handle(ctx, logger, query)
+	// Wrap query in Payload
+	payload := Payload[Query]{
+		Data:     query,
+		Metadata: make(map[string]any),
+		TraceID:  "", // Could be extracted from context
+		UserID:   "", // Could be extracted from context
 	}
 
-	// Apply middleware in reverse order (like Echo framework)
-	for i := len(q.middlewares) - 1; i >= 0; i-- {
-		handlerFunc = q.middlewares[i](handlerFunc)
+	response, err := handlerFunc(ctx, logger, payload)
+	if err != nil {
+		return nil, err
 	}
 
-	return handlerFunc(ctx, logger, query)
+	// Check if response contains an error
+	if response.Error != nil {
+		return nil, response.Error
+	}
+
+	return response.Data, nil
 }
 
-// Register associates a query type with its handler
-func (q *queryBus) Register(queryType string, handler QueryHandler[Query, interface{}]) {
-	q.handlers[queryType] = handler
+// Register associates a query type with its handler and applies middleware in the order provided
+func (q *queryBus) Register(queryType string, handler Handler[Query, any], middleware ...Middleware[Query, any]) {
+	// Start with the base handler function
+	handlerFunc := handler
+
+	// Apply middleware in reverse order (like Echo framework) so they execute in the order provided
+	for i := len(middleware) - 1; i >= 0; i-- {
+		handlerFunc = middleware[i](handlerFunc)
+	}
+
+	q.handlers[queryType] = QueryHandlerFunc(handlerFunc)
 }

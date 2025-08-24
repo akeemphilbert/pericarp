@@ -13,222 +13,225 @@ type Validator interface {
 	Validate() error
 }
 
-// MetricsCollector interface for collecting metrics
+// MetricsCollector interface for collecting metrics with unified approach
 type MetricsCollector interface {
-	RecordCommandDuration(commandType string, duration time.Duration)
-	RecordQueryDuration(queryType string, duration time.Duration)
-	IncrementCommandErrors(commandType string)
-	IncrementQueryErrors(queryType string)
+	RecordRequestDuration(requestType string, duration time.Duration)
+	IncrementRequestErrors(requestType string)
 }
 
-// LoggingCommandMiddleware creates middleware that logs command execution
-func LoggingCommandMiddleware() CommandMiddleware {
-	return func(next CommandHandlerFunc) CommandHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, cmd Command) error {
+// LoggingMiddleware creates unified middleware that logs both command and query execution
+func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
+	return func(next Handler[Req, Res]) Handler[Req, Res] {
+		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
 			start := time.Now()
-			logger.Info("Executing command", "type", cmd.CommandType())
 
-			err := next(ctx, logger, cmd)
+			// Extract request type for logging
+			var requestType string
+			if cmd, ok := any(p.Data).(Command); ok {
+				requestType = cmd.CommandType()
+			} else if query, ok := any(p.Data).(Query); ok {
+				requestType = query.QueryType()
+			} else {
+				requestType = fmt.Sprintf("%T", p.Data)
+			}
+
+			log.Info("Processing request",
+				"type", requestType,
+				"traceId", p.TraceID,
+				"userId", p.UserID)
+
+			response, err := next(ctx, log, p)
 
 			duration := time.Since(start)
 			if err != nil {
-				logger.Error("Command failed", "type", cmd.CommandType(), "duration", duration, "error", err)
+				log.Error("Request failed",
+					"type", requestType,
+					"duration", duration,
+					"error", err,
+					"traceId", p.TraceID)
 			} else {
-				logger.Info("Command completed", "type", cmd.CommandType(), "duration", duration)
+				log.Info("Request completed",
+					"type", requestType,
+					"duration", duration,
+					"traceId", p.TraceID)
 			}
 
-			return err
+			return response, err
 		}
 	}
 }
 
-// LoggingQueryMiddleware creates middleware that logs query execution
-func LoggingQueryMiddleware() QueryMiddleware {
-	return func(next QueryHandlerFunc) QueryHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, query Query) (interface{}, error) {
-			start := time.Now()
-			logger.Info("Executing query", "type", query.QueryType())
-
-			result, err := next(ctx, logger, query)
-
-			duration := time.Since(start)
-			if err != nil {
-				logger.Error("Query failed", "type", query.QueryType(), "duration", duration, "error", err)
-			} else {
-				logger.Info("Query completed", "type", query.QueryType(), "duration", duration)
-			}
-
-			return result, err
-		}
-	}
-}
-
-// ValidationCommandMiddleware creates middleware that validates commands
-func ValidationCommandMiddleware() CommandMiddleware {
-	return func(next CommandHandlerFunc) CommandHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, cmd Command) error {
-			if validator, ok := cmd.(Validator); ok {
+// ValidationMiddleware creates unified middleware that validates both commands and queries
+func ValidationMiddleware[Req any, Res any]() Middleware[Req, Res] {
+	return func(next Handler[Req, Res]) Handler[Req, Res] {
+		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+			if validator, ok := any(p.Data).(Validator); ok {
 				if err := validator.Validate(); err != nil {
-					logger.Warn("Command validation failed", "type", cmd.CommandType(), "error", err)
-					return NewValidationError("", err.Error())
+					var requestType string
+					if cmd, ok := any(p.Data).(Command); ok {
+						requestType = cmd.CommandType()
+					} else if query, ok := any(p.Data).(Query); ok {
+						requestType = query.QueryType()
+					} else {
+						requestType = fmt.Sprintf("%T", p.Data)
+					}
+
+					log.Warn("Request validation failed",
+						"type", requestType,
+						"error", err,
+						"traceId", p.TraceID)
+
+					var zero Res
+					return Response[Res]{
+						Data:  zero,
+						Error: NewValidationError("", err.Error()),
+						Metadata: map[string]any{
+							"validation_failed": true,
+						},
+					}, NewValidationError("", err.Error())
 				}
-				logger.Debug("Command validation passed", "type", cmd.CommandType())
 			}
-			return next(ctx, logger, cmd)
+			return next(ctx, log, p)
 		}
 	}
 }
 
-// ValidationQueryMiddleware creates middleware that validates queries
-func ValidationQueryMiddleware() QueryMiddleware {
-	return func(next QueryHandlerFunc) QueryHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, query Query) (interface{}, error) {
-			if validator, ok := query.(Validator); ok {
-				if err := validator.Validate(); err != nil {
-					logger.Warn("Query validation failed", "type", query.QueryType(), "error", err)
-					return nil, NewValidationError("", err.Error())
-				}
-				logger.Debug("Query validation passed", "type", query.QueryType())
-			}
-			return next(ctx, logger, query)
-		}
-	}
-}
-
-// MetricsCommandMiddleware creates middleware that collects command metrics
-func MetricsCommandMiddleware(metrics MetricsCollector) CommandMiddleware {
-	return func(next CommandHandlerFunc) CommandHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, cmd Command) error {
+// MetricsMiddleware creates unified middleware that collects metrics for both commands and queries
+func MetricsMiddleware[Req any, Res any](metrics MetricsCollector) Middleware[Req, Res] {
+	return func(next Handler[Req, Res]) Handler[Req, Res] {
+		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
 			start := time.Now()
-			err := next(ctx, logger, cmd)
+
+			var requestType string
+			if cmd, ok := any(p.Data).(Command); ok {
+				requestType = cmd.CommandType()
+			} else if query, ok := any(p.Data).(Query); ok {
+				requestType = query.QueryType()
+			} else {
+				requestType = fmt.Sprintf("%T", p.Data)
+			}
+
+			response, err := next(ctx, log, p)
 			duration := time.Since(start)
 
-			metrics.RecordCommandDuration(cmd.CommandType(), duration)
+			metrics.RecordRequestDuration(requestType, duration)
 			if err != nil {
-				metrics.IncrementCommandErrors(cmd.CommandType())
-				logger.Error("Command failed with metrics recorded", "type", cmd.CommandType(), "duration", duration, "error", err)
+				metrics.IncrementRequestErrors(requestType)
+				log.Error("Request failed with metrics recorded",
+					"type", requestType,
+					"duration", duration,
+					"error", err,
+					"traceId", p.TraceID)
 			} else {
-				logger.Debug("Command completed with metrics recorded", "type", cmd.CommandType(), "duration", duration)
+				log.Debug("Request completed with metrics recorded",
+					"type", requestType,
+					"duration", duration,
+					"traceId", p.TraceID)
 			}
 
-			return err
+			return response, err
 		}
 	}
 }
 
-// MetricsQueryMiddleware creates middleware that collects query metrics
-func MetricsQueryMiddleware(metrics MetricsCollector) QueryMiddleware {
-	return func(next QueryHandlerFunc) QueryHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, query Query) (interface{}, error) {
-			start := time.Now()
-			result, err := next(ctx, logger, query)
-			duration := time.Since(start)
-
-			metrics.RecordQueryDuration(query.QueryType(), duration)
-			if err != nil {
-				metrics.IncrementQueryErrors(query.QueryType())
-				logger.Error("Query failed with metrics recorded", "type", query.QueryType(), "duration", duration, "error", err)
+// ErrorHandlingMiddleware creates unified middleware that provides consistent error handling
+func ErrorHandlingMiddleware[Req any, Res any]() Middleware[Req, Res] {
+	return func(next Handler[Req, Res]) Handler[Req, Res] {
+		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+			var requestType string
+			if cmd, ok := any(p.Data).(Command); ok {
+				requestType = cmd.CommandType()
+			} else if query, ok := any(p.Data).(Query); ok {
+				requestType = query.QueryType()
 			} else {
-				logger.Debug("Query completed with metrics recorded", "type", query.QueryType(), "duration", duration)
+				requestType = fmt.Sprintf("%T", p.Data)
 			}
 
-			return result, err
-		}
-	}
-}
-
-// ErrorHandlingCommandMiddleware creates middleware that provides consistent error handling
-func ErrorHandlingCommandMiddleware() CommandMiddleware {
-	return func(next CommandHandlerFunc) CommandHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, cmd Command) error {
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Fatal("Command handler panicked", "type", cmd.CommandType(), "panic", r)
+					log.Fatal("Handler panicked",
+						"type", requestType,
+						"panic", r,
+						"traceId", p.TraceID)
 				}
 			}()
 
-			err := next(ctx, logger, cmd)
+			response, err := next(ctx, log, p)
 			if err != nil {
 				// Wrap non-application errors
 				if _, ok := err.(ApplicationError); !ok {
 					if _, ok := err.(ValidationError); !ok {
 						if _, ok := err.(ConcurrencyError); !ok {
-							logger.Error("Wrapping unexpected error", "type", cmd.CommandType(), "error", err)
-							return NewApplicationError("COMMAND_ERROR", "Command execution failed", err)
+							log.Error("Wrapping unexpected error",
+								"type", requestType,
+								"error", err,
+								"traceId", p.TraceID)
+
+							wrappedErr := NewApplicationError("REQUEST_ERROR", "Request execution failed", err)
+							response.Error = wrappedErr
+							return response, wrappedErr
 						}
 					}
 				}
 			}
 
-			return err
-		}
-	}
-}
-
-// ErrorHandlingQueryMiddleware creates middleware that provides consistent error handling
-func ErrorHandlingQueryMiddleware() QueryMiddleware {
-	return func(next QueryHandlerFunc) QueryHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, query Query) (interface{}, error) {
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Fatal("Query handler panicked", "type", query.QueryType(), "panic", r)
-				}
-			}()
-
-			result, err := next(ctx, logger, query)
-			if err != nil {
-				// Wrap non-application errors
-				if _, ok := err.(ApplicationError); !ok {
-					if _, ok := err.(ValidationError); !ok {
-						logger.Error("Wrapping unexpected error", "type", query.QueryType(), "error", err)
-						return nil, NewApplicationError("QUERY_ERROR", "Query execution failed", err)
-					}
-				}
-			}
-
-			return result, err
+			return response, err
 		}
 	}
 }
 
 // CacheProvider interface for caching query results
 type CacheProvider interface {
-	Get(key string) (interface{}, bool)
-	Set(key string, value interface{})
+	Get(key string) (any, bool)
+	Set(key string, value any)
 	Delete(key string)
 }
 
-// CachingQueryMiddleware creates middleware that caches query results
-func CachingQueryMiddleware(cache CacheProvider) QueryMiddleware {
-	return func(next QueryHandlerFunc) QueryHandlerFunc {
-		return func(ctx context.Context, logger domain.Logger, query Query) (interface{}, error) {
+// CachingMiddleware creates unified middleware that caches query results (typically used for queries only)
+func CachingMiddleware[Req any, Res any](cache CacheProvider) Middleware[Req, Res] {
+	return func(next Handler[Req, Res]) Handler[Req, Res] {
+		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+			// Only cache queries, not commands
+			if _, ok := any(p.Data).(Query); !ok {
+				return next(ctx, log, p)
+			}
+
 			// Create cache key based on query type and content
-			cacheKey := generateCacheKey(query)
+			cacheKey := generateCacheKey(p.Data)
 
 			// Try to get from cache first
 			if cached, found := cache.Get(cacheKey); found {
-				logger.Debug("Query result found in cache", "type", query.QueryType(), "cache_key", cacheKey)
-				return cached, nil
+				if cachedResponse, ok := cached.(Response[Res]); ok {
+					log.Debug("Query result found in cache",
+						"cache_key", cacheKey,
+						"traceId", p.TraceID)
+					return cachedResponse, nil
+				}
 			}
 
 			// Execute query
-			result, err := next(ctx, logger, query)
+			response, err := next(ctx, log, p)
 			if err != nil {
-				return result, err
+				return response, err
 			}
 
 			// Cache the result
-			cache.Set(cacheKey, result)
-			logger.Debug("Query result cached", "type", query.QueryType(), "cache_key", cacheKey)
+			cache.Set(cacheKey, response)
+			log.Debug("Query result cached",
+				"cache_key", cacheKey,
+				"traceId", p.TraceID)
 
-			return result, nil
+			return response, nil
 		}
 	}
 }
 
-// generateCacheKey creates a cache key for a query
-func generateCacheKey(query Query) string {
+// generateCacheKey creates a cache key for a request
+func generateCacheKey(data any) string {
 	// Simple implementation - in production you might want to use JSON marshaling
 	// or a more sophisticated key generation strategy
-	return query.QueryType() + "_" + fmt.Sprintf("%+v", query)
+	if query, ok := data.(Query); ok {
+		return query.QueryType() + "_" + fmt.Sprintf("%+v", data)
+	}
+	return fmt.Sprintf("%T_%+v", data, data)
 }

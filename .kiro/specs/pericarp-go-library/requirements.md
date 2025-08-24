@@ -109,3 +109,17 @@ Pericarp is a Go library that implements common software architectural concepts 
 3. WHEN naming packages THEN it SHALL use clear, descriptive names that reflect their purpose
 4. WHEN organizing files THEN it SHALL group related functionality logically within packages
 5. WHEN writing BDD scenarios THEN they SHALL be organized in feature files with clear business language
+
+### Requirement 10
+
+**User Story:** As a developer, I want unified handler signatures for commands and queries, so that I can use the same middleware for both command and query processing.
+
+#### Acceptance Criteria
+
+1. WHEN defining handlers THEN both command and query handlers SHALL use the same signature type `Handler[Req any, Res any]`
+2. WHEN implementing handlers THEN they SHALL accept `func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error)`
+3. WHEN using Payload wrapper THEN it SHALL contain the request data and metadata
+4. WHEN using Response wrapper THEN it SHALL contain the response data and metadata
+5. WHEN applying middleware THEN the same middleware SHALL work for both commands and queries
+6. WHEN processing commands THEN the Response type SHALL be `Response[struct{}]` for void responses
+7. WHEN processing queries THEN the Response type SHALL contain the actual query result data
