@@ -63,20 +63,17 @@ import (
     "github.com/your-org/pericarp/pkg/domain"
 )
 
-// Greeting represents a simple greeting aggregate
+// Greeting represents a simple greeting aggregate using the built-in Entity
 type Greeting struct {
-    id      string
+    domain.Entity  // Embeds ID, version, sequenceNo, and event management
     message string
-    version int
-    events  []domain.Event
 }
 
 // NewGreeting creates a new greeting
 func NewGreeting(id, message string) *Greeting {
     greeting := &Greeting{
-        id:      id,
+        Entity:  domain.NewEntity(id),
         message: message,
-        version: 1,
     }
     
     // Generate domain event
@@ -86,33 +83,24 @@ func NewGreeting(id, message string) *Greeting {
         CreatedAt:  time.Now(),
     }
     
-    greeting.events = append(greeting.events, event)
+    greeting.AddEvent(event)  // Automatically handles version and sequence
     return greeting
 }
 
 // Domain methods
-func (g *Greeting) ID() string { return g.id }
-func (g *Greeting) Version() int { return g.version }
 func (g *Greeting) Message() string { return g.message }
 
-// Event sourcing methods
-func (g *Greeting) UncommittedEvents() []domain.Event {
-    return g.events
-}
-
-func (g *Greeting) MarkEventsAsCommitted() {
-    g.events = nil
-}
-
+// LoadFromHistory reconstructs the greeting from events
 func (g *Greeting) LoadFromHistory(events []domain.Event) {
     for _, event := range events {
         switch e := event.(type) {
         case GreetingCreatedEvent:
-            g.id = e.GreetingID
             g.message = e.Message
-            g.version++
         }
     }
+    
+    // Call base implementation to update version and sequence
+    g.Entity.LoadFromHistory(events)
 }
 
 // GreetingCreatedEvent represents a greeting creation event

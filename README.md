@@ -34,10 +34,54 @@ func main() {
 - **Clean Architecture**: Strict separation between domain, application, and infrastructure layers
 - **CQRS Pattern**: Separate command and query handling with unified middleware support
 - **Event Sourcing**: Persist-then-dispatch pattern with event store and dispatcher
+- **Ready-to-Use Entity**: Concrete aggregate root implementation with built-in event management
+- **StandardEvent**: Generic event implementation that eliminates the need for specific event types
 - **Database Flexibility**: Support for SQLite (development) and PostgreSQL (production)
 - **Dependency Injection**: Built-in Fx modules for easy configuration
 - **Comprehensive Testing**: BDD scenarios, unit tests, and integration tests
 - **Performance Optimized**: No reflection in hot paths, efficient JSON serialization
+- **Thread-Safe**: Concurrent access protection for all core components
+
+## StandardEvent - Flexible Event Creation
+
+The `StandardEvent` provides a single, flexible way to create domain events without needing to define specific event types for each use case.
+
+```go
+import "github.com/example/pericarp/pkg/domain"
+
+// User creation event
+event := domain.NewEvent("user-123", "User", "Created", map[string]interface{}{
+    "email": "john@example.com",
+    "name":  "John Doe",
+    "role":  "admin",
+})
+
+// Order status change
+event := domain.NewEvent("order-456", "Order", "StatusChanged", map[string]interface{}{
+    "old_status": "pending",
+    "new_status": "shipped",
+    "tracking":   "TRACK123",
+})
+
+// Custom business event
+event := domain.NewEvent("payment-999", "Payment", "ProcessingCompleted", map[string]interface{}{
+    "amount":         99.99,
+    "currency":       "USD",
+    "transaction_id": "txn_abc123",
+})
+
+// Add metadata for cross-cutting concerns
+event.SetMetadata("correlation_id", "req-abc123")
+event.SetMetadata("user_id", "user-123")
+```
+
+### Benefits
+
+- **Single Factory**: Just use `domain.NewEvent()` for all event types
+- **Flexible Data**: Store any JSON-serializable data in the event
+- **Consistent Format**: All events follow the same `EntityType.ActionType` naming
+- **Metadata Support**: Add correlation IDs, user context, and other cross-cutting data
+- **JSON Serialization**: Built-in marshaling/unmarshaling support
 
 ## Documentation
 
@@ -91,12 +135,28 @@ go get github.com/your-org/pericarp
 ### Define Your Domain
 
 ```go
+// Using the built-in Entity struct for event sourcing
 type User struct {
-    id       string
+    domain.Entity  // Embeds ID, version, sequenceNo, and events management
     email    string
     name     string
-    version  int
-    events   []domain.Event
+}
+
+func NewUser(id, email, name string) (*User, error) {
+    user := &User{
+        Entity: domain.NewEntity(id),
+        email:  email,
+        name:   name,
+    }
+    
+    event := UserCreatedEvent{
+        UserID: id,
+        Email:  email,
+        Name:   name,
+    }
+    
+    user.AddEvent(event)  // Automatically manages version and sequence
+    return user, nil
 }
 
 func (u *User) UpdateEmail(newEmail string) error {
@@ -105,14 +165,13 @@ func (u *User) UpdateEmail(newEmail string) error {
     }
     
     event := UserEmailUpdatedEvent{
-        UserID:   u.id,
+        UserID:   u.ID(),
         OldEmail: u.email,
         NewEmail: newEmail,
     }
     
     u.email = newEmail
-    u.version++
-    u.events = append(u.events, event)
+    u.AddEvent(event)  // Handles version increment and event storage
     
     return nil
 }

@@ -1,6 +1,6 @@
 # How to Implement Custom Aggregates
 
-This guide shows you how to create custom domain aggregates that encapsulate business logic and generate domain events.
+This guide shows you how to create custom domain aggregates using the standard Entity struct and StandardEvent API.
 
 ## Problem
 
@@ -12,7 +12,7 @@ You need to create a domain aggregate that:
 
 ## Solution
 
-Follow these steps to implement a custom aggregate:
+Follow these steps to implement a custom aggregate using the standard Entity struct:
 
 ### Step 1: Define the Aggregate Structure
 
@@ -23,18 +23,16 @@ import (
     "errors"
     "time"
     "github.com/google/uuid"
-    "github.com/your-org/pericarp/pkg/domain"
+    "github.com/example/pericarp/pkg/domain"
 )
 
 // Order represents an e-commerce order aggregate
 type Order struct {
-    id          string
-    customerID  string
-    items       []OrderItem
-    status      OrderStatus
-    totalAmount Money
-    version     int
-    events      []domain.Event
+    domain.Entity  // Embed the standard Entity struct
+    customerID     string
+    items          []OrderItem
+    status         OrderStatus
+    totalAmount    Money
 }
 
 type OrderItem struct {
@@ -86,7 +84,7 @@ func NewOrder(customerID string, items []OrderItem) (*Order, error) {
     
     orderID := uuid.New().String()
     order := &Order{
-        id:         orderID,
+        Entity:     domain.NewEntity(orderID), // Use standard Entity
         customerID: customerID,
         items:      items,
         status:     OrderStatusPending,
@@ -94,19 +92,18 @@ func NewOrder(customerID string, items []OrderItem) (*Order, error) {
             Amount:   totalAmount,
             Currency: items[0].Price.Currency, // Assume same currency
         },
-        version: 1,
     }
     
-    // Generate domain event
-    event := OrderCreatedEvent{
-        OrderID:     orderID,
-        CustomerID:  customerID,
-        Items:       items,
-        TotalAmount: order.totalAmount,
-        CreatedAt:   time.Now(),
-    }
+    // Generate domain event using StandardEvent
+    event := domain.NewEvent(orderID, "Order", "Created", map[string]interface{}{
+        "customer_id":  customerID,
+        "items":        items,
+        "total_amount": order.totalAmount,
+        "status":       string(OrderStatusPending),
+        "created_at":   time.Now(),
+    })
     
-    order.addEvent(event)
+    order.AddEvent(event) // Use Entity's AddEvent method
     return order, nil
 }
 ```
@@ -121,14 +118,14 @@ func (o *Order) ConfirmOrder() error {
     }
     
     o.status = OrderStatusConfirmed
-    o.version++
     
-    event := OrderConfirmedEvent{
-        OrderID:     o.id,
-        ConfirmedAt: time.Now(),
-    }
+    // Generate StandardEvent
+    event := domain.NewEvent(o.ID(), "Order", "Confirmed", map[string]interface{}{
+        "confirmed_at": time.Now(),
+        "status":       string(OrderStatusConfirmed),
+    })
     
-    o.addEvent(event)
+    o.AddEvent(event) // Use Entity's AddEvent method
     return nil
 }
 
@@ -145,18 +142,18 @@ func (o *Order) AddItem(item OrderItem) error {
     // Check if item already exists
     for i, existingItem := range o.items {
         if existingItem.ProductID == item.ProductID {
+            oldQuantity := o.items[i].Quantity
             o.items[i].Quantity += item.Quantity
             o.recalculateTotal()
-            o.version++
             
-            event := OrderItemUpdatedEvent{
-                OrderID:   o.id,
-                ProductID: item.ProductID,
-                Quantity:  o.items[i].Quantity,
-                UpdatedAt: time.Now(),
-            }
+            event := domain.NewEvent(o.ID(), "Order", "ItemUpdated", map[string]interface{}{
+                "product_id":    item.ProductID,
+                "old_quantity":  oldQuantity,
+                "new_quantity":  o.items[i].Quantity,
+                "updated_at":    time.Now(),
+            })
             
-            o.addEvent(event)
+            o.AddEvent(event)
             return nil
         }
     }
@@ -164,15 +161,15 @@ func (o *Order) AddItem(item OrderItem) error {
     // Add new item
     o.items = append(o.items, item)
     o.recalculateTotal()
-    o.version++
     
-    event := OrderItemAddedEvent{
-        OrderID:   o.id,
-        Item:      item,
-        AddedAt:   time.Now(),
-    }
+    event := domain.NewEvent(o.ID(), "Order", "ItemAdded", map[string]interface{}{
+        "product_id": item.ProductID,
+        "quantity":   item.Quantity,
+        "price":      item.Price,
+        "added_at":   time.Now(),
+    })
     
-    o.addEvent(event)
+    o.AddEvent(event)
     return nil
 }
 
@@ -186,16 +183,17 @@ func (o *Order) CancelOrder(reason string) error {
         return errors.New("order is already cancelled")
     }
     
+    oldStatus := o.status
     o.status = OrderStatusCancelled
-    o.version++
     
-    event := OrderCancelledEvent{
-        OrderID:     o.id,
-        Reason:      reason,
-        CancelledAt: time.Now(),
-    }
+    event := domain.NewEvent(o.ID(), "Order", "Cancelled", map[string]interface{}{
+        "reason":       reason,
+        "old_status":   string(oldStatus),
+        "new_status":   string(OrderStatusCancelled),
+        "cancelled_at": time.Now(),
+    })
     
-    o.addEvent(event)
+    o.AddEvent(event)
     return nil
 }
 
@@ -207,144 +205,98 @@ func (o *Order) recalculateTotal() {
     }
     o.totalAmount.Amount = total
 }
-
-func (o *Order) addEvent(event domain.Event) {
-    o.events = append(o.events, event)
-}
 ```
 
-### Step 4: Implement Aggregate Root Interface
+### Step 4: Implement Event Sourcing Support
+
+Since we're using the standard Entity struct, we only need to implement the event application logic:
 
 ```go
-// ID returns the aggregate ID
-func (o *Order) ID() string {
-    return o.id
-}
-
-// Version returns the aggregate version
-func (o *Order) Version() int {
-    return o.version
-}
-
-// UncommittedEvents returns events that haven't been persisted
-func (o *Order) UncommittedEvents() []domain.Event {
-    return o.events
-}
-
-// MarkEventsAsCommitted clears the uncommitted events
-func (o *Order) MarkEventsAsCommitted() {
-    o.events = nil
-}
-
 // LoadFromHistory reconstructs the aggregate from events
 func (o *Order) LoadFromHistory(events []domain.Event) {
     for _, event := range events {
         o.applyEvent(event)
-        o.version++
     }
-    // Clear events after loading
-    o.events = nil
+    // Call the Entity's LoadFromHistory to handle version and sequence
+    o.Entity.LoadFromHistory(events)
 }
 
 // applyEvent applies a single event to the aggregate
 func (o *Order) applyEvent(event domain.Event) {
-    switch e := event.(type) {
-    case OrderCreatedEvent:
-        o.id = e.OrderID
-        o.customerID = e.CustomerID
-        o.items = e.Items
-        o.totalAmount = e.TotalAmount
-        o.status = OrderStatusPending
+    // Cast to StandardEvent to access data
+    standardEvent, ok := event.(*domain.StandardEvent)
+    if !ok {
+        return // Skip non-standard events
+    }
+    
+    // Check if this is an Order event
+    if standardEvent.EntityType() != "Order" {
+        return
+    }
+    
+    data := standardEvent.Data()
+    
+    switch standardEvent.ActionType() {
+    case "Created":
+        o.customerID = data["customer_id"].(string)
+        o.status = OrderStatus(data["status"].(string))
+        // Note: In a real implementation, you'd need to properly deserialize items and totalAmount
         
-    case OrderConfirmedEvent:
+    case "Confirmed":
         o.status = OrderStatusConfirmed
         
-    case OrderItemAddedEvent:
-        o.items = append(o.items, e.Item)
-        o.recalculateTotal()
+    case "ItemAdded":
+        // In a real implementation, deserialize the item from data
+        productID := data["product_id"].(string)
+        quantity := int(data["quantity"].(float64))
+        // Add item logic here
         
-    case OrderItemUpdatedEvent:
+    case "ItemUpdated":
+        productID := data["product_id"].(string)
+        newQuantity := int(data["new_quantity"].(float64))
         for i, item := range o.items {
-            if item.ProductID == e.ProductID {
-                o.items[i].Quantity = e.Quantity
+            if item.ProductID == productID {
+                o.items[i].Quantity = newQuantity
                 break
             }
         }
         o.recalculateTotal()
         
-    case OrderCancelledEvent:
+    case "Cancelled":
         o.status = OrderStatusCancelled
     }
 }
 ```
 
-### Step 5: Define Domain Events
+### Step 5: No Need for Custom Event Types!
 
-```go
-// OrderCreatedEvent represents order creation
-type OrderCreatedEvent struct {
-    OrderID     string      `json:"order_id"`
-    CustomerID  string      `json:"customer_id"`
-    Items       []OrderItem `json:"items"`
-    TotalAmount Money       `json:"total_amount"`
-    CreatedAt   time.Time   `json:"created_at"`
+With the StandardEvent approach, you don't need to define custom event types. All events are created using `domain.NewEvent()` with flexible data structures. This eliminates boilerplate code and makes your aggregates more maintainable.
+
+The events are automatically structured as:
+- **Event Type**: `EntityType.ActionType` (e.g., "Order.Created", "Order.Confirmed")
+- **Data**: Flexible map containing all relevant information
+- **Metadata**: Additional context like correlation IDs, user information, etc.
+
+Example events generated by our Order aggregate:
+```json
+{
+  "event_type": "Order.Created",
+  "aggregate_id": "order-123",
+  "entity_type": "Order",
+  "event_action": "Created",
+  "data": {
+    "customer_id": "customer-456",
+    "items": [...],
+    "total_amount": {...},
+    "status": "pending",
+    "created_at": "2023-12-01T10:00:00Z"
+  },
+  "version": 1,
+  "occurred_at": "2023-12-01T10:00:00Z"
 }
-
-func (e OrderCreatedEvent) EventType() string { return "OrderCreated" }
-func (e OrderCreatedEvent) AggregateID() string { return e.OrderID }
-func (e OrderCreatedEvent) Version() int { return 1 }
-func (e OrderCreatedEvent) OccurredAt() time.Time { return e.CreatedAt }
-
-// OrderConfirmedEvent represents order confirmation
-type OrderConfirmedEvent struct {
-    OrderID     string    `json:"order_id"`
-    ConfirmedAt time.Time `json:"confirmed_at"`
-}
-
-func (e OrderConfirmedEvent) EventType() string { return "OrderConfirmed" }
-func (e OrderConfirmedEvent) AggregateID() string { return e.OrderID }
-func (e OrderConfirmedEvent) Version() int { return 1 }
-func (e OrderConfirmedEvent) OccurredAt() time.Time { return e.ConfirmedAt }
-
-// OrderItemAddedEvent represents item addition
-type OrderItemAddedEvent struct {
-    OrderID string      `json:"order_id"`
-    Item    OrderItem   `json:"item"`
-    AddedAt time.Time   `json:"added_at"`
-}
-
-func (e OrderItemAddedEvent) EventType() string { return "OrderItemAdded" }
-func (e OrderItemAddedEvent) AggregateID() string { return e.OrderID }
-func (e OrderItemAddedEvent) Version() int { return 1 }
-func (e OrderItemAddedEvent) OccurredAt() time.Time { return e.AddedAt }
-
-// OrderItemUpdatedEvent represents item quantity update
-type OrderItemUpdatedEvent struct {
-    OrderID   string    `json:"order_id"`
-    ProductID string    `json:"product_id"`
-    Quantity  int       `json:"quantity"`
-    UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (e OrderItemUpdatedEvent) EventType() string { return "OrderItemUpdated" }
-func (e OrderItemUpdatedEvent) AggregateID() string { return e.OrderID }
-func (e OrderItemUpdatedEvent) Version() int { return 1 }
-func (e OrderItemUpdatedEvent) OccurredAt() time.Time { return e.UpdatedAt }
-
-// OrderCancelledEvent represents order cancellation
-type OrderCancelledEvent struct {
-    OrderID     string    `json:"order_id"`
-    Reason      string    `json:"reason"`
-    CancelledAt time.Time `json:"cancelled_at"`
-}
-
-func (e OrderCancelledEvent) EventType() string { return "OrderCancelled" }
-func (e OrderCancelledEvent) AggregateID() string { return e.OrderID }
-func (e OrderCancelledEvent) Version() int { return 1 }
-func (e OrderCancelledEvent) OccurredAt() time.Time { return e.CancelledAt }
 ```
 
-### Step 6: Add Getter Methods
+### Step 5: Add Getter Methods
 
 ```go
 // Getter methods for accessing aggregate state
@@ -369,6 +321,9 @@ func (o *Order) ItemCount() int {
     }
     return count
 }
+
+// Note: ID(), Version(), UncommittedEvents(), MarkEventsAsCommitted() 
+// are inherited from the embedded Entity struct
 ```
 
 ## Usage Example
@@ -401,6 +356,18 @@ if err != nil {
     return err
 }
 
+// Check the generated events
+events := order.UncommittedEvents()
+fmt.Printf("Generated %d events:\n", len(events))
+for _, event := range events {
+    fmt.Printf("- %s\n", event.EventType())
+}
+// Output:
+// Generated 3 events:
+// - Order.Created
+// - Order.ItemAdded  
+// - Order.Confirmed
+
 // Save the order (this will persist the events)
 err = orderRepository.Save(ctx, order)
 if err != nil {
@@ -410,27 +377,38 @@ if err != nil {
 
 ## Best Practices
 
-### 1. Encapsulate Business Logic
+### 1. Use the Standard Entity Struct
+- Embed `domain.Entity` to get event management for free
+- Don't reimplement ID, version, or event handling
+- Focus on your business logic, not infrastructure
+
+### 2. Use StandardEvent for Flexibility
+- Use `domain.NewEvent()` for all events - no custom event types needed
+- Include all relevant data in the event data map
+- Use clear, descriptive action names ("Created", "Confirmed", "Cancelled")
+
+### 3. Encapsulate Business Logic
 - Keep all business rules inside the aggregate
 - Don't expose internal state directly
 - Use methods to modify state, not direct field access
 
-### 2. Generate Meaningful Events
+### 4. Generate Meaningful Events
 - Events should capture business intent, not just data changes
 - Include relevant context in event data
-- Use past tense for event names (OrderCreated, not CreateOrder)
+- Use past tense for event action names (Created, not Create)
 
-### 3. Maintain Invariants
+### 5. Maintain Invariants
 - Validate all state changes
 - Ensure the aggregate is always in a valid state
 - Use private methods to enforce consistency
 
-### 4. Handle Event Sourcing Properly
+### 6. Handle Event Sourcing Properly
 - Implement `LoadFromHistory` to reconstruct state
 - Apply events in the same order they were generated
 - Don't include business logic in event application
+- Call `Entity.LoadFromHistory()` to handle version/sequence
 
-### 5. Keep Aggregates Focused
+### 7. Keep Aggregates Focused
 - One aggregate should manage one consistency boundary
 - Don't make aggregates too large or complex
 - Use domain services for cross-aggregate logic
@@ -458,32 +436,100 @@ func TestOrder_ConfirmOrder(t *testing.T) {
     }
     
     events := order.UncommittedEvents()
-    if len(events) != 2 { // OrderCreated + OrderConfirmed
+    if len(events) != 2 { // Order.Created + Order.Confirmed
         t.Errorf("Expected 2 events, got %d", len(events))
     }
     
-    // Check the confirmation event
-    confirmEvent, ok := events[1].(OrderConfirmedEvent)
+    // Check the confirmation event (StandardEvent)
+    confirmEvent, ok := events[1].(*domain.StandardEvent)
     if !ok {
-        t.Error("Expected OrderConfirmedEvent")
+        t.Error("Expected StandardEvent")
     }
     
-    if confirmEvent.OrderID != order.ID() {
-        t.Error("Event order ID should match aggregate ID")
+    if confirmEvent.EventType() != "Order.Confirmed" {
+        t.Errorf("Expected 'Order.Confirmed', got %s", confirmEvent.EventType())
+    }
+    
+    if confirmEvent.AggregateID() != order.ID() {
+        t.Error("Event aggregate ID should match order ID")
+    }
+    
+    // Check event data
+    data := confirmEvent.Data().(map[string]interface{})
+    if data["status"] != "confirmed" {
+        t.Errorf("Expected status 'confirmed' in event data, got %v", data["status"])
+    }
+}
+
+func TestOrder_LoadFromHistory(t *testing.T) {
+    // Arrange - create events that represent order history
+    orderID := "order-123"
+    events := []domain.Event{
+        domain.NewEvent(orderID, "Order", "Created", map[string]interface{}{
+            "customer_id": "customer-456",
+            "status":      "pending",
+        }),
+        domain.NewEvent(orderID, "Order", "Confirmed", map[string]interface{}{
+            "status": "confirmed",
+        }),
+    }
+    
+    // Act - reconstruct order from events
+    order := &Order{Entity: domain.NewEntity(orderID)}
+    order.LoadFromHistory(events)
+    
+    // Assert
+    if order.ID() != orderID {
+        t.Errorf("Expected ID %s, got %s", orderID, order.ID())
+    }
+    
+    if order.Status() != OrderStatusConfirmed {
+        t.Errorf("Expected status confirmed, got %v", order.Status())
+    }
+    
+    if order.Version() != 2 {
+        t.Errorf("Expected version 2, got %d", order.Version())
+    }
+    
+    // Should have no uncommitted events after loading from history
+    if len(order.UncommittedEvents()) != 0 {
+        t.Errorf("Expected no uncommitted events, got %d", len(order.UncommittedEvents()))
     }
 }
 ```
 
+## Key Benefits of This Approach
+
+### 1. Less Boilerplate
+- No need to implement aggregate root interface methods
+- No custom event types to define and maintain
+- Entity struct handles all event management automatically
+
+### 2. Consistent Event Format
+- All events follow the same `EntityType.ActionType` pattern
+- Flexible data structure accommodates any business data
+- Built-in JSON serialization and metadata support
+
+### 3. Easy Testing
+- StandardEvent makes it easy to verify event data
+- Entity provides consistent behavior across all aggregates
+- Clear separation between business logic and infrastructure
+
+### 4. Maintainable Code
+- Focus on business logic, not infrastructure concerns
+- Single factory function for all events
+- Embedded Entity provides proven, tested functionality
+
 ## Alternatives
 
-### 1. Anemic Domain Model
-If you don't need complex business logic, you might use a simpler data structure with external services handling the logic. However, this loses the benefits of encapsulation.
+### 1. Custom Event Types (Not Recommended)
+You could define specific event types for each business event, but this creates unnecessary boilerplate and maintenance overhead.
 
-### 2. Active Record Pattern
-You could combine data and persistence logic in the same class, but this violates separation of concerns and makes testing harder.
+### 2. Manual Event Management (Not Recommended)
+You could implement your own event handling instead of using Entity, but you'd lose the benefits of the tested, optimized implementation.
 
-### 3. Transaction Script
-For simple operations, you might use procedural code. This works for simple cases but doesn't scale well with complexity.
+### 3. Anemic Domain Model
+If you don't need complex business logic, you might use simpler data structures, but this loses the benefits of encapsulation and domain modeling.
 
 ## Related Guides
 
@@ -494,8 +540,11 @@ For simple operations, you might use procedural code. This works for simple case
 
 ## Common Pitfalls
 
-1. **Making aggregates too large** - Keep them focused on a single consistency boundary
-2. **Exposing internal state** - Use methods, not public fields
-3. **Forgetting to generate events** - Every state change should generate an event
-4. **Complex event application** - Keep `applyEvent` simple and free of business logic
-5. **Not validating invariants** - Always validate state changes
+1. **Not using the standard Entity** - Don't reimplement event management yourself
+2. **Creating custom event types** - Use StandardEvent instead of defining specific event classes
+3. **Making aggregates too large** - Keep them focused on a single consistency boundary
+4. **Exposing internal state** - Use methods, not public fields
+5. **Forgetting to generate events** - Every state change should generate an event
+6. **Complex event application** - Keep `applyEvent` simple and free of business logic
+7. **Not validating invariants** - Always validate state changes
+8. **Forgetting to call Entity.LoadFromHistory()** - This handles version and sequence management
