@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"github.com/example/pericarp/pkg/domain"
+	"github.com/google/uuid"
 )
 
 // User represents a user aggregate for internal examples and testing

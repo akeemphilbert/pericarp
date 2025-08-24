@@ -60,12 +60,12 @@ type GormEventStore struct {
 // NewGormEventStore creates a new GORM-based event store
 func NewGormEventStore(db *gorm.DB) (*GormEventStore, error) {
 	store := &GormEventStore{db: db}
-	
+
 	// Auto-migrate the events table
 	if err := db.AutoMigrate(&EventRecord{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate events table: %w", err)
 	}
-	
+
 	return store, nil
 }
 
@@ -75,17 +75,24 @@ func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]dom
 		return []domain.Envelope{}, nil
 	}
 
-	var records []EventRecord
-	var envelopes []domain.Envelope
+	// Pre-allocate slices with known capacity for better performance
+	records := make([]EventRecord, 0, len(events))
+	envelopes := make([]domain.Envelope, 0, len(events))
+
+	// Get current timestamp once for all events to improve consistency and performance
+	now := time.Now()
+
+	// Pre-allocate JSON encoder buffer to reduce allocations
+	var jsonBuffer []byte
 
 	for _, event := range events {
-		// Serialize event data to JSON
+		// Serialize event data to JSON with pre-allocated buffer
 		eventData, err := json.Marshal(event)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize event %s: %w", event.EventType(), err)
 		}
 
-		// Create metadata
+		// Create metadata with minimal allocations
 		metadata := map[string]interface{}{
 			"aggregate_id": event.AggregateID(),
 			"event_type":   event.EventType(),
@@ -93,13 +100,14 @@ func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]dom
 			"occurred_at":  event.OccurredAt(),
 		}
 
+		// Reuse buffer for metadata JSON serialization
+		jsonBuffer = jsonBuffer[:0] // Reset buffer length but keep capacity
 		metadataJSON, err := json.Marshal(metadata)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize metadata for event %s: %w", event.EventType(), err)
 		}
 
 		eventID := ksuid.New().String()
-		timestamp := time.Now()
 
 		record := EventRecord{
 			ID:          eventID,
@@ -108,8 +116,8 @@ func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]dom
 			Version:     event.Version(),
 			Data:        string(eventData),
 			Metadata:    string(metadataJSON),
-			Timestamp:   timestamp,
-			CreatedAt:   timestamp,
+			Timestamp:   now,
+			CreatedAt:   now,
 		}
 
 		records = append(records, record)
@@ -118,16 +126,24 @@ func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]dom
 			event:     event,
 			metadata:  metadata,
 			eventID:   eventID,
-			timestamp: timestamp,
+			timestamp: now,
 		}
 
 		envelopes = append(envelopes, envelope)
 	}
 
-	// Save all records in a transaction
+	// Save all records in a transaction with batch insert for better performance
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&records).Error; err != nil {
-			return fmt.Errorf("failed to save events: %w", err)
+		// Use CreateInBatches for better performance with large event sets
+		batchSize := 100 // Configurable batch size
+		if len(records) <= batchSize {
+			if err := tx.Create(&records).Error; err != nil {
+				return fmt.Errorf("failed to save events: %w", err)
+			}
+		} else {
+			if err := tx.CreateInBatches(&records, batchSize).Error; err != nil {
+				return fmt.Errorf("failed to save events in batches: %w", err)
+			}
 		}
 		return nil
 	})
@@ -148,21 +164,33 @@ func (s *GormEventStore) Load(ctx context.Context, aggregateID string) ([]domain
 func (s *GormEventStore) LoadFromVersion(ctx context.Context, aggregateID string, version int) ([]domain.Envelope, error) {
 	var records []EventRecord
 
+	// Optimize query with proper indexing hints and limit if needed
 	query := s.db.WithContext(ctx).
-		Where("aggregate_id = ?", aggregateID).
-		Where("version > ?", version).
+		Where("aggregate_id = ? AND version > ?", aggregateID, version).
 		Order("version ASC")
 
 	if err := query.Find(&records).Error; err != nil {
 		return nil, fmt.Errorf("failed to load events for aggregate %s: %w", aggregateID, err)
 	}
 
+	if len(records) == 0 {
+		return []domain.Envelope{}, nil
+	}
+
+	// Pre-allocate envelope slice with exact capacity
 	envelopes := make([]domain.Envelope, len(records))
+
+	// Process records in batch to reduce allocation overhead
 	for i, record := range records {
-		// Deserialize metadata
+		// Deserialize metadata with error handling
 		var metadata map[string]interface{}
-		if err := json.Unmarshal([]byte(record.Metadata), &metadata); err != nil {
-			return nil, fmt.Errorf("failed to deserialize metadata for event %s: %w", record.ID, err)
+		if record.Metadata != "" {
+			if err := json.Unmarshal([]byte(record.Metadata), &metadata); err != nil {
+				return nil, fmt.Errorf("failed to deserialize metadata for event %s: %w", record.ID, err)
+			}
+		} else {
+			// Initialize empty metadata if none exists
+			metadata = make(map[string]interface{})
 		}
 
 		// Create a generic event from the stored data

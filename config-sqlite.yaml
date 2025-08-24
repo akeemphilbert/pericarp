@@ -1,0 +1,12 @@
+# Pericarp Library Configuration - SQLite Example
+
+database:
+  driver: "sqlite"
+  dsn: "file:demo.db?cache=shared&mode=rwc"
+
+events:
+  publisher: "channel"
+
+logging:
+  level: "debug"
+  format: "text"

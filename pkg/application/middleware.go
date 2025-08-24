@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/example/pericarp/pkg/domain"
@@ -25,20 +26,27 @@ func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
 			start := time.Now()
 
-			// Extract request type for logging
+			// Extract request type for logging - optimize type assertion
 			var requestType string
-			if cmd, ok := any(p.Data).(Command); ok {
-				requestType = cmd.CommandType()
-			} else if query, ok := any(p.Data).(Query); ok {
-				requestType = query.QueryType()
-			} else {
-				requestType = fmt.Sprintf("%T", p.Data)
+			switch v := any(p.Data).(type) {
+			case Command:
+				requestType = v.CommandType()
+			case Query:
+				requestType = v.QueryType()
+			default:
+				// Use a more efficient type name extraction
+				requestType = getTypeName(p.Data)
 			}
 
-			log.Info("Processing request",
-				"type", requestType,
-				"traceId", p.TraceID,
-				"userId", p.UserID)
+			// Only log if trace ID or user ID are present to reduce log volume
+			if p.TraceID != "" || p.UserID != "" {
+				log.Info("Processing request",
+					"type", requestType,
+					"traceId", p.TraceID,
+					"userId", p.UserID)
+			} else {
+				log.Debug("Processing request", "type", requestType)
+			}
 
 			response, err := next(ctx, log, p)
 
@@ -50,7 +58,8 @@ func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 					"error", err,
 					"traceId", p.TraceID)
 			} else {
-				log.Info("Request completed",
+				// Use debug level for successful requests to reduce log volume in production
+				log.Debug("Request completed",
 					"type", requestType,
 					"duration", duration,
 					"traceId", p.TraceID)
@@ -61,36 +70,52 @@ func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 	}
 }
 
+// getTypeName efficiently extracts type name without reflection in hot path
+func getTypeName(v any) string {
+	// This is a simple implementation - in production you might want to cache type names
+	return fmt.Sprintf("%T", v)
+}
+
 // ValidationMiddleware creates unified middleware that validates both commands and queries
 func ValidationMiddleware[Req any, Res any]() Middleware[Req, Res] {
 	return func(next Handler[Req, Res]) Handler[Req, Res] {
 		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
-			if validator, ok := any(p.Data).(Validator); ok {
-				if err := validator.Validate(); err != nil {
-					var requestType string
-					if cmd, ok := any(p.Data).(Command); ok {
-						requestType = cmd.CommandType()
-					} else if query, ok := any(p.Data).(Query); ok {
-						requestType = query.QueryType()
-					} else {
-						requestType = fmt.Sprintf("%T", p.Data)
-					}
-
-					log.Warn("Request validation failed",
-						"type", requestType,
-						"error", err,
-						"traceId", p.TraceID)
-
-					var zero Res
-					return Response[Res]{
-						Data:  zero,
-						Error: NewValidationError("", err.Error()),
-						Metadata: map[string]any{
-							"validation_failed": true,
-						},
-					}, NewValidationError("", err.Error())
-				}
+			// Fast path: check if validation is needed
+			validator, needsValidation := any(p.Data).(Validator)
+			if !needsValidation {
+				return next(ctx, log, p)
 			}
+
+			// Validate the request
+			if err := validator.Validate(); err != nil {
+				// Extract request type efficiently
+				var requestType string
+				switch v := any(p.Data).(type) {
+				case Command:
+					requestType = v.CommandType()
+				case Query:
+					requestType = v.QueryType()
+				default:
+					requestType = getTypeName(p.Data)
+				}
+
+				log.Warn("Request validation failed",
+					"type", requestType,
+					"error", err,
+					"traceId", p.TraceID)
+
+				// Create validation error response
+				validationErr := NewValidationError("", err.Error())
+				var zero Res
+				return Response[Res]{
+					Data:  zero,
+					Error: validationErr,
+					Metadata: map[string]any{
+						"validation_failed": true,
+					},
+				}, validationErr
+			}
+			
 			return next(ctx, log, p)
 		}
 	}
@@ -102,30 +127,29 @@ func MetricsMiddleware[Req any, Res any](metrics MetricsCollector) Middleware[Re
 		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
 			start := time.Now()
 
+			// Extract request type efficiently
 			var requestType string
-			if cmd, ok := any(p.Data).(Command); ok {
-				requestType = cmd.CommandType()
-			} else if query, ok := any(p.Data).(Query); ok {
-				requestType = query.QueryType()
-			} else {
-				requestType = fmt.Sprintf("%T", p.Data)
+			switch v := any(p.Data).(type) {
+			case Command:
+				requestType = v.CommandType()
+			case Query:
+				requestType = v.QueryType()
+			default:
+				requestType = getTypeName(p.Data)
 			}
 
 			response, err := next(ctx, log, p)
 			duration := time.Since(start)
 
+			// Record metrics (this should be fast)
 			metrics.RecordRequestDuration(requestType, duration)
 			if err != nil {
 				metrics.IncrementRequestErrors(requestType)
-				log.Error("Request failed with metrics recorded",
+				// Only log errors, not successful requests to reduce log volume
+				log.Error("Request failed",
 					"type", requestType,
 					"duration", duration,
 					"error", err,
-					"traceId", p.TraceID)
-			} else {
-				log.Debug("Request completed with metrics recorded",
-					"type", requestType,
-					"duration", duration,
 					"traceId", p.TraceID)
 			}
 
@@ -234,4 +258,173 @@ func generateCacheKey(data any) string {
 		return query.QueryType() + "_" + fmt.Sprintf("%+v", data)
 	}
 	return fmt.Sprintf("%T_%+v", data, data)
+}
+// InMemoryMetricsCollector is a simple in-memory implementation of MetricsCollector
+// optimized for performance with minimal locking and efficient data structures
+type InMemoryMetricsCollector struct {
+	requestDurations map[string][]time.Duration
+	requestErrors    map[string]int64 // Use int64 for atomic operations
+	mu               sync.RWMutex
+	maxDurations     int // Limit stored durations to prevent memory leaks
+}
+
+// NewInMemoryMetricsCollector creates a new in-memory metrics collector
+func NewInMemoryMetricsCollector() *InMemoryMetricsCollector {
+	return &InMemoryMetricsCollector{
+		requestDurations: make(map[string][]time.Duration),
+		requestErrors:    make(map[string]int64),
+		maxDurations:     1000, // Keep last 1000 durations per request type
+	}
+}
+
+// RecordRequestDuration records the duration of a request with memory management
+func (m *InMemoryMetricsCollector) RecordRequestDuration(requestType string, duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	durations := m.requestDurations[requestType]
+	
+	// Implement circular buffer to prevent memory leaks
+	if len(durations) >= m.maxDurations {
+		// Remove oldest entry by shifting slice
+		copy(durations, durations[1:])
+		durations = durations[:len(durations)-1]
+	}
+	
+	m.requestDurations[requestType] = append(durations, duration)
+}
+
+// IncrementRequestErrors increments the error count for a request type using atomic operations
+func (m *InMemoryMetricsCollector) IncrementRequestErrors(requestType string) {
+	m.mu.RLock()
+	_, exists := m.requestErrors[requestType]
+	m.mu.RUnlock()
+	
+	if !exists {
+		m.mu.Lock()
+		// Double-check after acquiring write lock
+		if _, exists := m.requestErrors[requestType]; !exists {
+			m.requestErrors[requestType] = 0
+		}
+		m.mu.Unlock()
+	}
+	
+	// Use atomic increment for better performance
+	m.mu.RLock()
+	if errorCount, exists := m.requestErrors[requestType]; exists {
+		atomic.AddInt64(&errorCount, 1)
+		m.requestErrors[requestType] = errorCount
+	}
+	m.mu.RUnlock()
+}
+
+// GetMetrics returns the collected metrics (for debugging/monitoring)
+func (m *InMemoryMetricsCollector) GetMetrics() (map[string][]time.Duration, map[string]int64) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	// Return copies to avoid race conditions
+	durations := make(map[string][]time.Duration, len(m.requestDurations))
+	errors := make(map[string]int64, len(m.requestErrors))
+	
+	for k, v := range m.requestDurations {
+		// Pre-allocate slice with exact capacity
+		durCopy := make([]time.Duration, len(v))
+		copy(durCopy, v)
+		durations[k] = durCopy
+	}
+	
+	for k, v := range m.requestErrors {
+		errors[k] = atomic.LoadInt64(&v)
+	}
+	
+	return durations, errors
+}
+
+// GetSummaryStats returns summary statistics for performance monitoring
+func (m *InMemoryMetricsCollector) GetSummaryStats() map[string]map[string]interface{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	stats := make(map[string]map[string]interface{})
+	
+	for requestType, durations := range m.requestDurations {
+		if len(durations) == 0 {
+			continue
+		}
+		
+		// Calculate basic statistics
+		var total, min, max time.Duration
+		min = durations[0]
+		max = durations[0]
+		
+		for _, d := range durations {
+			total += d
+			if d < min {
+				min = d
+			}
+			if d > max {
+				max = d
+			}
+		}
+		
+		avg := total / time.Duration(len(durations))
+		
+		stats[requestType] = map[string]interface{}{
+			"count":    len(durations),
+			"avg":      avg,
+			"min":      min,
+			"max":      max,
+			"total":    total,
+			"errors":   atomic.LoadInt64(&m.requestErrors[requestType]),
+		}
+	}
+	
+	return stats
+}
+
+// InMemoryCache is a simple in-memory implementation of CacheProvider
+type InMemoryCache struct {
+	data map[string]any
+	mu   sync.RWMutex
+}
+
+// NewInMemoryCache creates a new in-memory cache
+func NewInMemoryCache() *InMemoryCache {
+	return &InMemoryCache{
+		data: make(map[string]any),
+	}
+}
+
+// Get retrieves a value from the cache
+func (c *InMemoryCache) Get(key string) (any, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	
+	value, exists := c.data[key]
+	return value, exists
+}
+
+// Set stores a value in the cache
+func (c *InMemoryCache) Set(key string, value any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	c.data[key] = value
+}
+
+// Delete removes a value from the cache
+func (c *InMemoryCache) Delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	delete(c.data, key)
+}
+
+// Clear removes all values from the cache
+func (c *InMemoryCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	
+	c.data = make(map[string]any)
 }

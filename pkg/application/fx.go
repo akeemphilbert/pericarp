@@ -12,6 +12,8 @@ var ApplicationModule = fx.Options(
 		QueryBusProvider,
 		ApplicationServiceProvider,
 		HandlerRegistrarProvider,
+		MetricsCollectorProvider,
+		CacheProviderProvider,
 
 		// Standard middleware providers (tagged for different use cases)
 		fx.Annotate(ErrorHandlingCommandMiddlewareProvider, fx.ResultTags(`group:"admin_command_middleware" group:"public_command_middleware" group:"internal_command_middleware"`)),
@@ -193,4 +195,14 @@ func setupInternalQueryHandlers(
 	middleware []TaggedQueryMiddleware,
 ) {
 	registrar.RegisterQueryHandlers(queryBus, handlers, middleware)
+}
+
+// MetricsCollectorProvider creates a metrics collector
+func MetricsCollectorProvider() MetricsCollector {
+	return NewInMemoryMetricsCollector()
+}
+
+// CacheProviderProvider creates a cache provider
+func CacheProviderProvider() CacheProvider {
+	return NewInMemoryCache()
 }

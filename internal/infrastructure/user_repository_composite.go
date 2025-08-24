@@ -5,6 +5,7 @@ import (
 
 	"github.com/example/pericarp/internal/application"
 	"github.com/example/pericarp/internal/domain"
+	"github.com/google/uuid"
 )
 
 // UserRepositoryComposite combines event sourcing repository with read model queries

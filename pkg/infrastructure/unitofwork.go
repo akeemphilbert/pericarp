@@ -10,11 +10,11 @@ import (
 
 // UnitOfWorkImpl implements the UnitOfWork interface with Persist-then-Dispatch pattern
 type UnitOfWorkImpl struct {
-	eventStore     domain.EventStore
+	eventStore      domain.EventStore
 	eventDispatcher domain.EventDispatcher
-	events         []domain.Event
-	mu             sync.Mutex
-	committed      bool
+	events          []domain.Event
+	mu              sync.RWMutex // Use RWMutex for better read performance
+	committed       bool
 }
 
 // NewUnitOfWork creates a new Unit of Work instance
@@ -22,19 +22,35 @@ func NewUnitOfWork(eventStore domain.EventStore, eventDispatcher domain.EventDis
 	return &UnitOfWorkImpl{
 		eventStore:      eventStore,
 		eventDispatcher: eventDispatcher,
-		events:          make([]domain.Event, 0),
+		events:          make([]domain.Event, 0, 10), // Pre-allocate with reasonable capacity
 		committed:       false,
 	}
 }
 
 // RegisterEvents adds events to be persisted in the current transaction
 func (uow *UnitOfWorkImpl) RegisterEvents(events []domain.Event) {
+	if len(events) == 0 {
+		return // Early return for empty slice
+	}
+
 	uow.mu.Lock()
 	defer uow.mu.Unlock()
 
 	if uow.committed {
 		// This is a programming error - should not register events after commit
 		panic("cannot register events after unit of work has been committed")
+	}
+
+	// Optimize append operation by pre-allocating if needed
+	if cap(uow.events)-len(uow.events) < len(events) {
+		// Need to grow the slice
+		newCap := len(uow.events) + len(events)
+		if newCap < cap(uow.events)*2 {
+			newCap = cap(uow.events) * 2
+		}
+		newEvents := make([]domain.Event, len(uow.events), newCap)
+		copy(newEvents, uow.events)
+		uow.events = newEvents
 	}
 
 	uow.events = append(uow.events, events...)
@@ -91,8 +107,8 @@ func (uow *UnitOfWorkImpl) Rollback() error {
 
 // GetRegisteredEvents returns a copy of the currently registered events (for testing)
 func (uow *UnitOfWorkImpl) GetRegisteredEvents() []domain.Event {
-	uow.mu.Lock()
-	defer uow.mu.Unlock()
+	uow.mu.RLock()
+	defer uow.mu.RUnlock()
 
 	events := make([]domain.Event, len(uow.events))
 	copy(events, uow.events)
@@ -101,14 +117,14 @@ func (uow *UnitOfWorkImpl) GetRegisteredEvents() []domain.Event {
 
 // IsCommitted returns whether the unit of work has been committed (for testing)
 func (uow *UnitOfWorkImpl) IsCommitted() bool {
-	uow.mu.Lock()
-	defer uow.mu.Unlock()
+	uow.mu.RLock()
+	defer uow.mu.RUnlock()
 	return uow.committed
 }
 
 // EventCount returns the number of registered events (for testing)
 func (uow *UnitOfWorkImpl) EventCount() int {
-	uow.mu.Lock()
-	defer uow.mu.Unlock()
+	uow.mu.RLock()
+	defer uow.mu.RUnlock()
 	return len(uow.events)
 }

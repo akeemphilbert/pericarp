@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -27,11 +28,16 @@ type LoggingConfig struct {
 
 // LoadConfig loads configuration from file and environment variables
 func LoadConfig() (*Config, error) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath(".")
-	viper.AddConfigPath("./configs")
-	viper.AddConfigPath("./config")
+	// Check if a specific config file is requested
+	if configFile := os.Getenv("PERICARP_CONFIG_FILE"); configFile != "" {
+		viper.SetConfigFile(configFile)
+	} else {
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath(".")
+		viper.AddConfigPath("./configs")
+		viper.AddConfigPath("./config")
+	}
 
 	// Environment variable support
 	viper.AutomaticEnv()

@@ -25,8 +25,29 @@ test-unit: ## Run unit tests
 test-bdd: ## Run BDD tests with Cucumber
 	go test -v ./test/bdd/...
 
+test-bdd-sqlite: ## Run BDD tests for SQLite database
+	go test -v ./test/bdd/... -run="SQLite"
+
+test-bdd-postgres: ## Run BDD tests for PostgreSQL database (requires POSTGRES_TEST_DSN)
+	go test -v ./test/bdd/... -run="PostgreSQL"
+
+test-all-databases: ## Run all tests with both SQLite and PostgreSQL
+	$(MAKE) test-unit
+	$(MAKE) test-bdd
+	$(MAKE) test-integration
+	@echo "All database tests completed!"
+
 test-integration: ## Run integration tests
 	go test -v -tags=integration ./test/integration/...
+
+test-integration-sqlite: ## Run integration tests with SQLite only
+	go test -v -tags=integration ./test/integration/... -run="SQLite"
+
+test-integration-postgres: ## Run integration tests with PostgreSQL (requires POSTGRES_TEST_DSN)
+	go test -v -tags=integration ./test/integration/... -run="PostgreSQL"
+
+test-performance: ## Run performance tests
+	go test -v -tags=integration ./test/integration/... -run="Performance"
 
 test-coverage: ## Generate test coverage report
 	go test -v -race -coverprofile=coverage.out ./...

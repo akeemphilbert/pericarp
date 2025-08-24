@@ -1,0 +1,12 @@
+# Pericarp Library Configuration - PostgreSQL Example
+
+database:
+  driver: "postgres"
+  dsn: "host=localhost user=pericarp password=secret dbname=pericarp port=5432 sslmode=disable"
+
+events:
+  publisher: "channel"
+
+logging:
+  level: "info"
+  format: "text"
