@@ -79,9 +79,15 @@ func NewTestEnvironment() *TestEnvironment {
 // Setup prepares the test environment
 func (e *TestEnvironment) Setup() error {
 	// Set environment variables for testing
-	os.Setenv("PERICARP_LOG_LEVEL", e.config.LogLevel)
-	os.Setenv("PERICARP_DATABASE_DRIVER", "sqlite")
-	os.Setenv("PERICARP_DATABASE_DSN", e.config.DatabaseURL)
+	if err := os.Setenv("PERICARP_LOG_LEVEL", e.config.LogLevel); err != nil {
+		return fmt.Errorf("failed to set PERICARP_LOG_LEVEL: %w", err)
+	}
+	if err := os.Setenv("PERICARP_DATABASE_DRIVER", "sqlite"); err != nil {
+		return fmt.Errorf("failed to set PERICARP_DATABASE_DRIVER: %w", err)
+	}
+	if err := os.Setenv("PERICARP_DATABASE_DSN", e.config.DatabaseURL); err != nil {
+		return fmt.Errorf("failed to set PERICARP_DATABASE_DSN: %w", err)
+	}
 
 	return nil
 }

@@ -41,11 +41,21 @@ func TestLoadConfig_EnvironmentVariables(t *testing.T) {
 	clearEnvVars()
 
 	// Set environment variables
-	os.Setenv("PERICARP_DATABASE_DRIVER", "postgres")
-	os.Setenv("PERICARP_DATABASE_DSN", "host=localhost user=test password=test dbname=test port=5432 sslmode=disable")
-	os.Setenv("PERICARP_EVENTS_PUBLISHER", "pubsub")
-	os.Setenv("PERICARP_LOGGING_LEVEL", "debug")
-	os.Setenv("PERICARP_LOGGING_FORMAT", "json")
+	if err := os.Setenv("PERICARP_DATABASE_DRIVER", "postgres"); err != nil {
+		t.Fatalf("Failed to set PERICARP_DATABASE_DRIVER: %v", err)
+	}
+	if err := os.Setenv("PERICARP_DATABASE_DSN", "host=localhost user=test password=test dbname=test port=5432 sslmode=disable"); err != nil {
+		t.Fatalf("Failed to set PERICARP_DATABASE_DSN: %v", err)
+	}
+	if err := os.Setenv("PERICARP_EVENTS_PUBLISHER", "pubsub"); err != nil {
+		t.Fatalf("Failed to set PERICARP_EVENTS_PUBLISHER: %v", err)
+	}
+	if err := os.Setenv("PERICARP_LOGGING_LEVEL", "debug"); err != nil {
+		t.Fatalf("Failed to set PERICARP_LOGGING_LEVEL: %v", err)
+	}
+	if err := os.Setenv("PERICARP_LOGGING_FORMAT", "json"); err != nil {
+		t.Fatalf("Failed to set PERICARP_LOGGING_FORMAT: %v", err)
+	}
 
 	defer clearEnvVars()
 

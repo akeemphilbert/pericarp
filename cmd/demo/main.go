@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -21,6 +22,17 @@ var (
 	verbose    bool
 )
 
+// setEnvironmentVariableSecurely sets an environment variable with proper error handling
+// and logging. This addresses CWE-703 by ensuring all system operations are error-checked.
+func setEnvironmentVariableSecurely(key, value string) error {
+	if err := os.Setenv(key, value); err != nil {
+		log.Printf("ERROR: Failed to set environment variable %s: %v", key, err)
+		return fmt.Errorf("failed to set environment variable %s: %w", key, err)
+	}
+	log.Printf("DEBUG: Environment variable %s set successfully", key)
+	return nil
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "pericarp-demo",
@@ -31,12 +43,18 @@ Domain-Driven Design, CQRS, and Event Sourcing capabilities.`,
 			// Set config file if provided
 			if configFile != "" {
 				// This would be used by viper in LoadConfig
-				os.Setenv("PERICARP_CONFIG_FILE", configFile)
+				if err := setEnvironmentVariableSecurely("PERICARP_CONFIG_FILE", configFile); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Failed to set config file environment variable: %v\n", err)
+					// Continue execution as this is not critical for basic functionality
+				}
 			}
 			
 			// Set verbose logging if requested
 			if verbose {
-				os.Setenv("PERICARP_LOGGING_LEVEL", "debug")
+				if err := setEnvironmentVariableSecurely("PERICARP_LOGGING_LEVEL", "debug"); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: Failed to set logging level environment variable: %v\n", err)
+					// Continue execution as this is not critical for basic functionality
+				}
 			}
 		},
 	}

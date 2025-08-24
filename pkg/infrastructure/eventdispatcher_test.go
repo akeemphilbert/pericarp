@@ -41,7 +41,11 @@ func TestWatermillEventDispatcher_SubscribeAndDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create event dispatcher: %v", err)
 	}
-	defer dispatcher.Close()
+	defer func() {
+		if err := dispatcher.Close(); err != nil {
+			t.Logf("Warning: Failed to close dispatcher: %v", err)
+		}
+	}()
 
 	// Create test handler
 	handler := &testEventHandler{
@@ -107,7 +111,11 @@ func TestWatermillEventDispatcher_MultipleHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create event dispatcher: %v", err)
 	}
-	defer dispatcher.Close()
+	defer func() {
+		if err := dispatcher.Close(); err != nil {
+			t.Logf("Warning: Failed to close dispatcher: %v", err)
+		}
+	}()
 
 	// Create multiple handlers for the same event type
 	handler1 := &testEventHandler{eventTypes: []string{"TestEvent"}}
@@ -175,7 +183,11 @@ func TestWatermillEventDispatcher_DifferentEventTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create event dispatcher: %v", err)
 	}
-	defer dispatcher.Close()
+	defer func() {
+		if err := dispatcher.Close(); err != nil {
+			t.Logf("Warning: Failed to close dispatcher: %v", err)
+		}
+	}()
 
 	// Create handlers for different event types
 	handler1 := &testEventHandler{eventTypes: []string{"EventType1"}}

@@ -551,10 +551,17 @@ func (tc *SQLiteTestContext) theTransactionIsCommitted() error {
 // Cleanup
 func (tc *SQLiteTestContext) cleanup() {
 	if tc.dbFile != "" && tc.dbFile != ":memory:" {
-		os.Remove(tc.dbFile)
+		if err := os.Remove(tc.dbFile); err != nil {
+			// Log but don't fail cleanup - file might not exist
+			fmt.Printf("Warning: Failed to remove database file %s: %v\n", tc.dbFile, err)
+		}
 	}
 	if tc.tempDbFile != "" {
-		os.Remove(tc.tempDbFile)
-		os.Remove(tc.tempDbFile + ".restored")
+		if err := os.Remove(tc.tempDbFile); err != nil {
+			fmt.Printf("Warning: Failed to remove temp database file %s: %v\n", tc.tempDbFile, err)
+		}
+		if err := os.Remove(tc.tempDbFile + ".restored"); err != nil {
+			fmt.Printf("Warning: Failed to remove restored database file %s: %v\n", tc.tempDbFile+".restored", err)
+		}
 	}
 }

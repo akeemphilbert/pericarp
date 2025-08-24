@@ -178,7 +178,9 @@ func setupSystem(t *testing.T, driver, dsn string) (*TestSystem, func()) {
 
 	cleanup := func() {
 		if driver == "sqlite" && dsn != ":memory:" {
-			os.Remove(dsn)
+			if err := os.Remove(dsn); err != nil {
+				t.Logf("Warning: Failed to cleanup test database file %s: %v", dsn, err)
+			}
 		}
 	}
 

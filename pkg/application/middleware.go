@@ -309,13 +309,10 @@ func (m *InMemoryMetricsCollector) IncrementRequestErrors(requestType string) {
 		m.mu.Unlock()
 	}
 	
-	// Use atomic increment for better performance
-	m.mu.RLock()
-	if errorCount, exists := m.requestErrors[requestType]; exists {
-		atomic.AddInt64(&errorCount, 1)
-		m.requestErrors[requestType] = errorCount
-	}
-	m.mu.RUnlock()
+	// Increment error count with proper mutex protection
+	m.mu.Lock()
+	m.requestErrors[requestType]++
+	m.mu.Unlock()
 }
 
 // GetMetrics returns the collected metrics (for debugging/monitoring)
@@ -335,7 +332,7 @@ func (m *InMemoryMetricsCollector) GetMetrics() (map[string][]time.Duration, map
 	}
 	
 	for k, v := range m.requestErrors {
-		errors[k] = atomic.LoadInt64(&v)
+		errors[k] = v
 	}
 	
 	return durations, errors
@@ -376,7 +373,7 @@ func (m *InMemoryMetricsCollector) GetSummaryStats() map[string]map[string]inter
 			"min":      min,
 			"max":      max,
 			"total":    total,
-			"errors":   atomic.LoadInt64(&m.requestErrors[requestType]),
+			"errors":   m.requestErrors[requestType],
 		}
 	}
 	
