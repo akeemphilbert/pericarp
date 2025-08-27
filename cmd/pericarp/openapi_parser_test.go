@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +21,76 @@ func TestOpenAPIParser_SupportedExtensions(t *testing.T) {
 func TestOpenAPIParser_FormatName(t *testing.T) {
 	parser := NewOpenAPIParser()
 	assert.Equal(t, "OpenAPI", parser.FormatName())
+}
+
+func TestOpenAPIParser_isAggregateSchema(t *testing.T) {
+	parser := &OpenAPIParser{}
+
+	tests := []struct {
+		name     string
+		schema   map[string]interface{}
+		expected bool
+	}{
+		{
+			name:     "no extensions",
+			schema:   map[string]interface{}{},
+			expected: false,
+		},
+		{
+			name: "x-aggregate true (boolean)",
+			schema: map[string]interface{}{
+				"x-aggregate": true,
+			},
+			expected: true,
+		},
+		{
+			name: "x-aggregate false (boolean)",
+			schema: map[string]interface{}{
+				"x-aggregate": false,
+			},
+			expected: false,
+		},
+		{
+			name: "x-aggregate true (string)",
+			schema: map[string]interface{}{
+				"x-aggregate": "true",
+			},
+			expected: true,
+		},
+		{
+			name: "x-aggregate false (string)",
+			schema: map[string]interface{}{
+				"x-aggregate": "false",
+			},
+			expected: false,
+		},
+		{
+			name: "x-aggregate invalid value",
+			schema: map[string]interface{}{
+				"x-aggregate": "invalid",
+			},
+			expected: false,
+		},
+		{
+			name: "x-aggregate numeric value",
+			schema: map[string]interface{}{
+				"x-aggregate": 1,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock schema with extensions
+			schema := &openapi3.Schema{
+				Extensions: tt.schema,
+			}
+
+			result := parser.isAggregateSchema(schema)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
 
 func TestOpenAPIParser_Validate(t *testing.T) {
@@ -64,6 +135,7 @@ components:
   schemas:
     TestEntity:
       type: object
+      x-aggregate: true
       properties:
         id:
           type: string`
@@ -84,6 +156,7 @@ components:
   schemas:
     TestEntity:
       type: object
+      x-aggregate: true
       properties:
         id:
           type: string`
@@ -106,6 +179,7 @@ components:
     "schemas": {
       "TestEntity": {
         "type": "object",
+        "x-aggregate": true,
         "properties": {
           "id": {
             "type": "string"
@@ -163,6 +237,7 @@ components:
   schemas:
     User:
       type: object
+      x-aggregate: true
       required:
         - email
         - name
@@ -194,6 +269,7 @@ components:
             type: string
     Profile:
       type: object
+      x-aggregate: true
       properties:
         bio:
           type: string
@@ -301,6 +377,7 @@ components:
   schemas:
     Order:
       type: object
+      x-aggregate: true
       properties:
         id:
           type: string
@@ -320,6 +397,7 @@ components:
           format: date-time
     OrderItem:
       type: object
+      x-aggregate: true
       properties:
         productId:
           type: string
@@ -333,6 +411,7 @@ components:
           format: float
     Customer:
       type: object
+      x-aggregate: true
       properties:
         id:
           type: string
@@ -389,6 +468,114 @@ components:
 	require.NotNil(t, arrayRelation)
 	assert.Equal(t, "Order", arrayRelation.From)
 	assert.Equal(t, "OrderItem", arrayRelation.To)
+}
+
+func TestOpenAPIParser_Parse_AggregateFiltering(t *testing.T) {
+	parser := NewOpenAPIParser()
+
+	// Test spec with mixed aggregate and non-aggregate schemas
+	mixedSpec := `openapi: 3.0.0
+info:
+  title: Mixed API
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    User:
+      type: object
+      x-aggregate: true
+      required:
+        - email
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+    Profile:
+      type: object
+      x-aggregate: false
+      properties:
+        bio:
+          type: string
+    Product:
+      type: object
+      x-aggregate: true
+      required:
+        - name
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    Category:
+      type: object
+      properties:
+        name:
+          type: string`
+
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "mixed.yaml")
+	err := os.WriteFile(filePath, []byte(mixedSpec), 0644)
+	require.NoError(t, err)
+
+	model, err := parser.Parse(filePath)
+	require.NoError(t, err)
+	require.NotNil(t, model)
+
+	// Should only have User and Product (x-aggregate: true)
+	// Profile (x-aggregate: false) and Category (no x-aggregate) should be excluded
+	assert.Len(t, model.Entities, 2)
+
+	entityNames := make([]string, len(model.Entities))
+	for i, entity := range model.Entities {
+		entityNames[i] = entity.Name
+	}
+
+	assert.Contains(t, entityNames, "User")
+	assert.Contains(t, entityNames, "Product")
+	assert.NotContains(t, entityNames, "Profile")
+	assert.NotContains(t, entityNames, "Category")
+}
+
+func TestOpenAPIParser_Parse_NoAggregateSchemas(t *testing.T) {
+	parser := NewOpenAPIParser()
+
+	// Test spec with no aggregate schemas
+	noAggregateSpec := `openapi: 3.0.0
+info:
+  title: No Aggregate API
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Profile:
+      type: object
+      x-aggregate: false
+      properties:
+        bio:
+          type: string
+    Category:
+      type: object
+      properties:
+        name:
+          type: string`
+
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "no-aggregate.yaml")
+	err := os.WriteFile(filePath, []byte(noAggregateSpec), 0644)
+	require.NoError(t, err)
+
+	model, err := parser.Parse(filePath)
+	assert.Nil(t, model)
+	assert.Error(t, err)
+
+	if cliErr, ok := err.(*CliError); ok {
+		assert.Equal(t, ParseError, cliErr.Type)
+		assert.Contains(t, cliErr.Message, "must contain at least one object schema with x-aggregate: true extension")
+	}
 }
 
 func TestOpenAPIParser_Parse_InvalidSpecs(t *testing.T) {
@@ -480,6 +667,7 @@ components:
   schemas:
     TypeTest:
       type: object
+      x-aggregate: true
       properties:
         stringField:
           type: string
@@ -564,6 +752,7 @@ components:
   schemas:
     ValidationTest:
       type: object
+      x-aggregate: true
       properties:
         minMaxString:
           type: string
@@ -635,6 +824,7 @@ components:
   schemas:
     User:
       type: object
+      x-aggregate: true
       properties:
         id:
           type: string`,
@@ -652,6 +842,7 @@ components:
   schemas:
     User:
       type: object
+      x-aggregate: true
       properties:
         id:
           type: string`,

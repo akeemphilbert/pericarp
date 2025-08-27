@@ -8,6 +8,7 @@ components:
   schemas:
     Product:
       type: object
+      x-aggregate: true
       required:
         - name
         - price

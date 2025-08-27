@@ -8,6 +8,7 @@ components:
   schemas:
     Order:
       type: object
+      x-aggregate: true
       required:
         - customerId
         - items
@@ -59,6 +60,7 @@ components:
           description: Additional notes for the order
     OrderItem:
       type: object
+      x-aggregate: false
       required:
         - productId
         - quantity
@@ -93,6 +95,7 @@ components:
           description: Discount percentage applied
     ShippingAddress:
       type: object
+      x-aggregate: false
       required:
         - recipientName
         - street
@@ -130,6 +133,7 @@ components:
           maxLength: 500
     BillingAddress:
       type: object
+      x-aggregate: false
       required:
         - name
         - street
@@ -161,6 +165,7 @@ components:
           pattern: "^[A-Z]{2}$"
     PaymentMethod:
       type: object
+      x-aggregate: false
       required:
         - type
       properties:

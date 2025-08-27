@@ -132,24 +132,26 @@ func (p *OpenAPIParser) validateContent(filePath string) error {
 			err)
 	}
 
-	// Check if there are any object schemas
+	// Check if there are any aggregate schemas (object schemas with x-aggregate: true)
 	if doc.Components == nil || doc.Components.Schemas == nil {
 		return NewCliError(ParseError,
 			fmt.Sprintf("OpenAPI file must contain components.schemas section: %s", filePath),
 			nil)
 	}
 
-	hasObjectSchema := false
+	hasAggregateSchema := false
 	for _, schemaRef := range doc.Components.Schemas {
 		if schemaRef.Value != nil && schemaRef.Value.Type != nil && schemaRef.Value.Type.Is("object") {
-			hasObjectSchema = true
-			break
+			if p.isAggregateSchema(schemaRef.Value) {
+				hasAggregateSchema = true
+				break
+			}
 		}
 	}
 
-	if !hasObjectSchema {
+	if !hasAggregateSchema {
 		return NewCliError(ParseError,
-			fmt.Sprintf("OpenAPI file must contain at least one object schema: %s", filePath),
+			fmt.Sprintf("OpenAPI file must contain at least one object schema with x-aggregate: true extension: %s", filePath),
 			nil)
 	}
 
@@ -168,9 +170,14 @@ func (p *OpenAPIParser) convertToDomainModel(doc *openapi3.T, filePath string) (
 	entities := make([]Entity, 0)
 	relations := make([]Relation, 0)
 
-	// Convert each schema to an entity
+	// Convert each schema to an entity, but only if it has x-aggregate: true
 	for schemaName, schemaRef := range doc.Components.Schemas {
 		if schemaRef.Value != nil && schemaRef.Value.Type != nil && schemaRef.Value.Type.Is("object") {
+			// Check if schema has x-aggregate extension with value true
+			if !p.isAggregateSchema(schemaRef.Value) {
+				continue // Skip schemas that are not marked as aggregates
+			}
+
 			entity, entityRelations, err := p.convertSchemaToEntity(schemaName, schemaRef.Value, doc.Components.Schemas)
 			if err != nil {
 				return nil, NewCliError(ParseError,
@@ -184,7 +191,7 @@ func (p *OpenAPIParser) convertToDomainModel(doc *openapi3.T, filePath string) (
 
 	if len(entities) == 0 {
 		return nil, NewCliError(ParseError,
-			"no valid object schemas found in OpenAPI specification",
+			"no schemas with x-aggregate: true extension found in OpenAPI specification",
 			nil)
 	}
 
@@ -466,6 +473,28 @@ func (p *OpenAPIParser) isPropertyRequired(propName string, required []string) b
 		}
 	}
 	return false
+}
+
+// isAggregateSchema checks if a schema has the x-aggregate extension with value true
+func (p *OpenAPIParser) isAggregateSchema(schema *openapi3.Schema) bool {
+	if schema.Extensions == nil {
+		return false
+	}
+
+	xAggregate, exists := schema.Extensions["x-aggregate"]
+	if !exists {
+		return false
+	}
+
+	// Check if the value is true (can be boolean true or string "true")
+	switch v := xAggregate.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.ToLower(v) == "true"
+	default:
+		return false
+	}
 }
 
 // extractProjectName extracts project name from OpenAPI spec or file path

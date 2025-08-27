@@ -8,6 +8,7 @@ components:
   schemas:
     User:
       type: object
+      x-aggregate: true
       required:
         - email
         - name
@@ -53,6 +54,7 @@ components:
               default: true
     Profile:
       type: object
+      x-aggregate: false
       required:
         - bio
       properties:
@@ -79,6 +81,7 @@ components:
             format: uri
     Address:
       type: object
+      x-aggregate: false
       required:
         - street
         - city
