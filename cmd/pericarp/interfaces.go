@@ -43,6 +43,9 @@ type ComponentFactory interface {
 	// GenerateHandlers creates command and query handlers with error handling (Requirement 6.1, 8.4)
 	GenerateHandlers(entity Entity) ([]*GeneratedFile, error)
 
+	// GenerateServices creates service layer with CRUD operations (Requirement 6.6)
+	GenerateServices(entity Entity) ([]*GeneratedFile, error)
+
 	// GenerateTests creates unit tests for all components (Requirement 8.6)
 	GenerateTests(entity Entity) ([]*GeneratedFile, error)
 

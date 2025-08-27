@@ -211,6 +211,26 @@ func (p *ProjectCreator) previewProjectStructure(model *DomainModel, destination
 		"test/mocks/",
 	}
 
+	// Add entity-specific files if entities exist
+	for _, entity := range model.Entities {
+		entityName := strings.ToLower(entity.Name)
+		structure = append(structure, []string{
+			fmt.Sprintf("internal/domain/%s.go", entityName),
+			fmt.Sprintf("internal/domain/%s_test.go", entityName),
+			fmt.Sprintf("internal/domain/%s_events.go", entityName),
+			fmt.Sprintf("internal/domain/%s_repository.go", entityName),
+			fmt.Sprintf("internal/application/%s_service.go", entityName),
+			fmt.Sprintf("internal/application/%s_service_test.go", entityName),
+			fmt.Sprintf("internal/application/%s_commands.go", entityName),
+			fmt.Sprintf("internal/application/%s_queries.go", entityName),
+			fmt.Sprintf("internal/application/%s_command_handlers.go", entityName),
+			fmt.Sprintf("internal/application/%s_query_handlers.go", entityName),
+			fmt.Sprintf("internal/application/%s_handlers_test.go", entityName),
+			fmt.Sprintf("internal/infrastructure/%s_repository.go", entityName),
+			fmt.Sprintf("internal/infrastructure/%s_repository_test.go", entityName),
+		}...)
+	}
+
 	for _, item := range structure {
 		fullPath := filepath.Join(destination, item)
 		if strings.HasSuffix(item, "/") {
@@ -501,6 +521,16 @@ func (g *CodeGenerator) generateEntityComponents(entity Entity) ([]*GeneratedFil
 		return nil, fmt.Errorf("failed to generate handlers: %w", err)
 	}
 	files = append(files, handlerFiles...)
+
+	// Generate services (Requirement 6.6)
+	if verboseLogger, ok := g.logger.(*VerboseLogger); ok {
+		verboseLogger.LogGenerationDetails("Services", entity)
+	}
+	serviceFiles, err := g.factory.GenerateServices(entity)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate services: %w", err)
+	}
+	files = append(files, serviceFiles...)
 
 	// Generate tests (Requirement 8.6)
 	if verboseLogger, ok := g.logger.(*VerboseLogger); ok {

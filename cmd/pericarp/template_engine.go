@@ -54,6 +54,7 @@ func NewTemplateEngine(logger CliLogger) (*TemplateEngine, error) {
 		"isRequired":     engine.isRequired,
 		"filterRequired": engine.filterRequired,
 		"filterOptional": engine.filterOptional,
+		"last":           engine.isLast,
 	}
 
 	// Load all templates from embedded filesystem
@@ -396,4 +397,18 @@ func (te *TemplateEngine) filterOptional(properties []Property) []Property {
 		}
 	}
 	return optional
+}
+
+// isLast checks if the current index is the last in a slice
+func (te *TemplateEngine) isLast(index int, slice interface{}) bool {
+	switch s := slice.(type) {
+	case []Entity:
+		return index == len(s)-1
+	case []Property:
+		return index == len(s)-1
+	case []string:
+		return index == len(s)-1
+	default:
+		return false
+	}
 }

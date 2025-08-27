@@ -206,6 +206,50 @@ func (f *PericarpComponentFactory) GenerateHandlers(entity Entity) ([]*Generated
 	return files, nil
 }
 
+// GenerateServices creates service layer with CRUD operations (Requirement 6.6)
+func (f *PericarpComponentFactory) GenerateServices(entity Entity) ([]*GeneratedFile, error) {
+	f.logger.Debug(fmt.Sprintf("Generating service for entity: %s", entity.Name))
+
+	var files []*GeneratedFile
+
+	// Create service data structure
+	serviceData := f.createServiceData(entity)
+
+	// Generate service
+	serviceContent, err := f.templateEngine.Execute("service.go", serviceData)
+	if err != nil {
+		return nil, NewCliError(GenerationError,
+			fmt.Sprintf("failed to generate service for %s", entity.Name), err)
+	}
+
+	files = append(files, &GeneratedFile{
+		Path:    fmt.Sprintf("internal/application/%s_service.go", strings.ToLower(entity.Name)),
+		Content: serviceContent,
+		Metadata: map[string]interface{}{
+			"type":   "service",
+			"entity": entity.Name,
+		},
+	})
+
+	// Generate service tests
+	serviceTestContent, err := f.templateEngine.Execute("service_test.go", serviceData)
+	if err != nil {
+		return nil, NewCliError(GenerationError,
+			fmt.Sprintf("failed to generate service tests for %s", entity.Name), err)
+	}
+
+	files = append(files, &GeneratedFile{
+		Path:    fmt.Sprintf("internal/application/%s_service_test.go", strings.ToLower(entity.Name)),
+		Content: serviceTestContent,
+		Metadata: map[string]interface{}{
+			"type":   "service_test",
+			"entity": entity.Name,
+		},
+	})
+
+	return files, nil
+}
+
 // GenerateTests creates unit tests for all components (Requirement 8.6)
 func (f *PericarpComponentFactory) GenerateTests(entity Entity) ([]*GeneratedFile, error) {
 	f.logger.Debug(fmt.Sprintf("Generating tests for entity: %s", entity.Name))
@@ -326,6 +370,18 @@ func (f *PericarpComponentFactory) GenerateProjectStructure(model *DomainModel, 
 		return err
 	}
 
+	// Generate config.yaml
+	configContent, err := f.templateEngine.Execute("config.yaml", model)
+	if err != nil {
+		return NewCliError(GenerationError,
+			fmt.Sprintf("failed to generate config.yaml for %s", model.ProjectName), err)
+	}
+
+	configPath := filepath.Join(destination, "config.yaml.example")
+	if err := f.writeFile(configPath, configContent); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -386,6 +442,21 @@ func (f *PericarpComponentFactory) GenerateProjectFiles(model *DomainModel) ([]*
 		return nil, err
 	}
 	files = append(files, makefile)
+
+	// Generate config.yaml
+	configContent, err := f.templateEngine.Execute("config.yaml", model)
+	if err != nil {
+		return nil, NewCliError(GenerationError,
+			fmt.Sprintf("failed to generate config.yaml for %s", model.ProjectName), err)
+	}
+	files = append(files, &GeneratedFile{
+		Path:    "config.yaml.example",
+		Content: configContent,
+		Metadata: map[string]interface{}{
+			"type":    "configuration",
+			"project": model.ProjectName,
+		},
+	})
 
 	return files, nil
 }
@@ -518,6 +589,14 @@ func (f *PericarpComponentFactory) createQueryHandlerData(entity Entity) map[str
 			fmt.Sprintf("Get%sByIdHandler", entity.Name),
 			fmt.Sprintf("List%sHandler", entity.Name),
 		},
+	}
+}
+
+// createServiceData creates data structure for service generation
+func (f *PericarpComponentFactory) createServiceData(entity Entity) map[string]interface{} {
+	return map[string]interface{}{
+		"Entity":      entity,
+		"ProjectName": "example.com/project", // Default project name, should be configurable
 	}
 }
 

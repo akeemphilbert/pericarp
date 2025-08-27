@@ -1,105 +1,261 @@
 package main
 
 import (
-	"context"
-	"log"
+	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
 
-	"github.com/akeemphilbert/pericarp/pkg/application"
-	"github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/akeemphilbert/pericarp/pkg/infrastructure"
+	"github.com/spf13/cobra"
 	"{{.ProjectName}}/internal/application"
-	"{{.ProjectName}}/internal/domain"
 	"{{.ProjectName}}/internal/infrastructure"
 )
 
+var (
+	// Build information - set via ldflags during build
+	version   = "dev"
+	commit    = "none"
+	date      = "unknown"
+	goVersion = "unknown"
+)
+
+// Global flags
+var (
+	verbose    bool
+	configFile string
+)
+
+// rootCmd represents the base command when called without any subcommands
+var rootCmd = &cobra.Command{
+	Use:   "{{.ProjectName}}",
+	Short: "{{.ProjectName}} CLI application",
+	Long: `{{.ProjectName}} is a CLI application built with Pericarp framework.
+	
+This application provides command-line interface for managing {{range $index, $entity := .Entities}}{{$entity.Name | lower}}s{{if not (last $index $.Entities)}}, {{end}}{{end}}.
+It follows domain-driven design principles and provides comprehensive CRUD operations.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		// Show help when no command is provided
+		cmd.Help()
+	},
+}
+
+{{range .Entities}}
+// {{.Name | lower}}Cmd represents the {{.Name | lower}} command
+var {{.Name | lower}}Cmd = &cobra.Command{
+	Use:   "{{.Name | lower}}",
+	Short: "Manage {{.Name | lower}}s",
+	Long:  `Commands for managing {{.Name | lower}}s in the system.`,
+}
+
+// create{{.Name}}Cmd represents the create {{.Name | lower}} command
+var create{{.Name}}Cmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a new {{.Name | lower}}",
+	Long:  `Create a new {{.Name | lower}} in the system.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Initialize dependencies
+		logger := infrastructure.NewLogger()
+		config, err := infrastructure.LoadConfig(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		db, err := infrastructure.NewDatabase(config.Database)
+		if err != nil {
+			return fmt.Errorf("failed to initialize database: %w", err)
+		}
+		defer db.Close()
+
+		eventStore, err := infrastructure.NewEventStore(db, logger)
+		if err != nil {
+			return fmt.Errorf("failed to initialize event store: %w", err)
+		}
+
+		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
+		service := application.New{{.Name}}Service(repository, logger)
+
+		// TODO: Get input from flags or interactive prompts
+		// For now, this is a placeholder
+		fmt.Println("Create {{.Name | lower}} command executed")
+		return nil
+	},
+}
+
+// get{{.Name}}Cmd represents the get {{.Name | lower}} command
+var get{{.Name}}Cmd = &cobra.Command{
+	Use:   "get [id]",
+	Short: "Get a {{.Name | lower}} by ID",
+	Long:  `Retrieve a {{.Name | lower}} by its unique identifier.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Initialize dependencies
+		logger := infrastructure.NewLogger()
+		config, err := infrastructure.LoadConfig(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		db, err := infrastructure.NewDatabase(config.Database)
+		if err != nil {
+			return fmt.Errorf("failed to initialize database: %w", err)
+		}
+		defer db.Close()
+
+		eventStore, err := infrastructure.NewEventStore(db, logger)
+		if err != nil {
+			return fmt.Errorf("failed to initialize event store: %w", err)
+		}
+
+		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
+		service := application.New{{.Name}}Service(repository, logger)
+
+		// TODO: Parse ID and call service
+		id := args[0]
+		fmt.Printf("Get {{.Name | lower}} command executed with ID: %s\n", id)
+		return nil
+	},
+}
+
+// list{{.Name}}Cmd represents the list {{.Name | lower}}s command
+var list{{.Name}}Cmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all {{.Name | lower}}s",
+	Long:  `Retrieve a list of all {{.Name | lower}}s in the system.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Initialize dependencies
+		logger := infrastructure.NewLogger()
+		config, err := infrastructure.LoadConfig(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		db, err := infrastructure.NewDatabase(config.Database)
+		if err != nil {
+			return fmt.Errorf("failed to initialize database: %w", err)
+		}
+		defer db.Close()
+
+		eventStore, err := infrastructure.NewEventStore(db, logger)
+		if err != nil {
+			return fmt.Errorf("failed to initialize event store: %w", err)
+		}
+
+		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
+		service := application.New{{.Name}}Service(repository, logger)
+
+		// TODO: Call service to list {{.Name | lower}}s
+		fmt.Println("List {{.Name | lower}}s command executed")
+		return nil
+	},
+}
+
+// update{{.Name}}Cmd represents the update {{.Name | lower}} command
+var update{{.Name}}Cmd = &cobra.Command{
+	Use:   "update [id]",
+	Short: "Update a {{.Name | lower}}",
+	Long:  `Update an existing {{.Name | lower}} by its unique identifier.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Initialize dependencies
+		logger := infrastructure.NewLogger()
+		config, err := infrastructure.LoadConfig(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		db, err := infrastructure.NewDatabase(config.Database)
+		if err != nil {
+			return fmt.Errorf("failed to initialize database: %w", err)
+		}
+		defer db.Close()
+
+		eventStore, err := infrastructure.NewEventStore(db, logger)
+		if err != nil {
+			return fmt.Errorf("failed to initialize event store: %w", err)
+		}
+
+		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
+		service := application.New{{.Name}}Service(repository, logger)
+
+		// TODO: Parse ID and get update data from flags
+		id := args[0]
+		fmt.Printf("Update {{.Name | lower}} command executed with ID: %s\n", id)
+		return nil
+	},
+}
+
+// delete{{.Name}}Cmd represents the delete {{.Name | lower}} command
+var delete{{.Name}}Cmd = &cobra.Command{
+	Use:   "delete [id]",
+	Short: "Delete a {{.Name | lower}}",
+	Long:  `Delete an existing {{.Name | lower}} by its unique identifier.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Initialize dependencies
+		logger := infrastructure.NewLogger()
+		config, err := infrastructure.LoadConfig(configFile)
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		db, err := infrastructure.NewDatabase(config.Database)
+		if err != nil {
+			return fmt.Errorf("failed to initialize database: %w", err)
+		}
+		defer db.Close()
+
+		eventStore, err := infrastructure.NewEventStore(db, logger)
+		if err != nil {
+			return fmt.Errorf("failed to initialize event store: %w", err)
+		}
+
+		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
+		service := application.New{{.Name}}Service(repository, logger)
+
+		// TODO: Parse ID and call service
+		id := args[0]
+		fmt.Printf("Delete {{.Name | lower}} command executed with ID: %s\n", id)
+		return nil
+	},
+}
+{{end}}
+
+// versionCmd represents the version command
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Show version information",
+	Long:  `Display version information including build details.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("{{.ProjectName}}\n")
+		fmt.Printf("Version:    %s\n", version)
+		fmt.Printf("Commit:     %s\n", commit)
+		fmt.Printf("Built:      %s\n", date)
+		fmt.Printf("Go version: %s\n", goVersion)
+	},
+}
+
+func init() {
+	// Add global flags
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "config file (default is ./config.yaml)")
+
+	// Add version command
+	rootCmd.AddCommand(versionCmd)
+
+	{{range .Entities}}
+	// Add {{.Name | lower}} subcommands
+	{{.Name | lower}}Cmd.AddCommand(create{{.Name}}Cmd)
+	{{.Name | lower}}Cmd.AddCommand(get{{.Name}}Cmd)
+	{{.Name | lower}}Cmd.AddCommand(list{{.Name}}Cmd)
+	{{.Name | lower}}Cmd.AddCommand(update{{.Name}}Cmd)
+	{{.Name | lower}}Cmd.AddCommand(delete{{.Name}}Cmd)
+	
+	// Add {{.Name | lower}} command to root
+	rootCmd.AddCommand({{.Name | lower}}Cmd)
+	{{end}}
+}
+
 func main() {
-	// Create context that listens for the interrupt signal from the OS
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	// Initialize logger
-	logger := infrastructure.NewLogger()
-	logger.Info("Starting {{.ProjectName}} application")
-
-	// Initialize configuration
-	config, err := infrastructure.LoadConfig()
-	if err != nil {
-		logger.Error("Failed to load configuration: " + err.Error())
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Initialize database
-	db, err := infrastructure.NewDatabase(config.Database)
-	if err != nil {
-		logger.Error("Failed to initialize database: " + err.Error())
-		os.Exit(1)
-	}
-	defer db.Close()
-
-	// Initialize event store
-	eventStore, err := infrastructure.NewEventStore(db, logger)
-	if err != nil {
-		logger.Error("Failed to initialize event store: " + err.Error())
-		os.Exit(1)
-	}
-
-	// Initialize event dispatcher
-	eventDispatcher := infrastructure.NewEventDispatcher(logger)
-
-	// Initialize unit of work
-	unitOfWork := infrastructure.NewUnitOfWork(eventStore, eventDispatcher, logger)
-
-	// Initialize repositories
-	{{range .Entities}}{{.Name | camelCase}}Repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
-	{{end}}
-
-	// Initialize command handlers
-	{{range .Entities}}create{{.Name}}Handler := application.NewCreate{{.Name}}Handler({{.Name | camelCase}}Repository, logger)
-	update{{.Name}}Handler := application.NewUpdate{{.Name}}Handler({{.Name | camelCase}}Repository, logger)
-	delete{{.Name}}Handler := application.NewDelete{{.Name}}Handler({{.Name | camelCase}}Repository, logger)
-	{{end}}
-
-	// Initialize query handlers
-	{{range .Entities}}get{{.Name}}ByIdHandler := application.NewGet{{.Name}}ByIdHandler({{.Name | camelCase}}Repository, logger)
-	list{{.Name}}Handler := application.NewList{{.Name}}Handler({{.Name | camelCase}}Repository, logger)
-	{{end}}
-
-	// Initialize command bus
-	commandBus := application.NewCommandBus(logger)
-	{{range .Entities}}commandBus.RegisterHandler("Create{{.Name}}Command", create{{.Name}}Handler)
-	commandBus.RegisterHandler("Update{{.Name}}Command", update{{.Name}}Handler)
-	commandBus.RegisterHandler("Delete{{.Name}}Command", delete{{.Name}}Handler)
-	{{end}}
-
-	// Initialize query bus
-	queryBus := application.NewQueryBus(logger)
-	{{range .Entities}}queryBus.RegisterHandler("Get{{.Name}}ByIdQuery", get{{.Name}}ByIdHandler)
-	queryBus.RegisterHandler("List{{.Name}}Query", list{{.Name}}Handler)
-	{{end}}
-
-	// Initialize application service
-	appService := application.NewService(commandBus, queryBus, unitOfWork, logger)
-
-	// TODO: Initialize HTTP server, gRPC server, or other interfaces
-	// This would depend on the specific requirements of your application
-
-	logger.Info("{{.ProjectName}} application started successfully")
-
-	// Wait for interrupt signal to gracefully shutdown
-	<-ctx.Done()
-
-	// Restore default behavior on the interrupt signal and notify user of shutdown
-	stop()
-	logger.Info("Shutting down {{.ProjectName}} application...")
-
-	// TODO: Implement graceful shutdown logic
-	// - Close HTTP server
-	// - Close database connections
-	// - Finish processing in-flight requests
-	// - etc.
-
-	logger.Info("{{.ProjectName}} application stopped")
 }
