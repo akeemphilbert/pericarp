@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // logLevel represents the logging level
@@ -40,9 +40,9 @@ type simpleLogger struct {
 func NewLogger(level, format string) domain.Logger {
 	logLevel := parseLogLevel(level)
 	logFormat := parseLogFormat(format)
-	
+
 	logger := log.New(os.Stdout, "", 0) // No default prefix or flags
-	
+
 	return &simpleLogger{
 		level:  logLevel,
 		format: logFormat,
@@ -151,7 +151,7 @@ func (l *simpleLogger) Fatalf(format string, args ...interface{}) {
 // log handles structured logging with key-value pairs
 func (l *simpleLogger) log(level, msg string, keysAndValues ...interface{}) {
 	timestamp := time.Now().Format(time.RFC3339)
-	
+
 	if l.format == jsonFormat {
 		l.logJSON(timestamp, level, msg, keysAndValues...)
 	} else {
@@ -163,7 +163,7 @@ func (l *simpleLogger) log(level, msg string, keysAndValues ...interface{}) {
 func (l *simpleLogger) logf(level, format string, args ...interface{}) {
 	timestamp := time.Now().Format(time.RFC3339)
 	msg := fmt.Sprintf(format, args...)
-	
+
 	if l.format == jsonFormat {
 		l.logJSON(timestamp, level, msg)
 	} else {
@@ -174,7 +174,7 @@ func (l *simpleLogger) logf(level, format string, args ...interface{}) {
 // logJSON outputs logs in JSON format
 func (l *simpleLogger) logJSON(timestamp, level, msg string, keysAndValues ...interface{}) {
 	jsonLog := fmt.Sprintf(`{"timestamp":"%s","level":"%s","message":"%s"`, timestamp, level, msg)
-	
+
 	// Add key-value pairs
 	for i := 0; i < len(keysAndValues); i += 2 {
 		if i+1 < len(keysAndValues) {
@@ -183,7 +183,7 @@ func (l *simpleLogger) logJSON(timestamp, level, msg string, keysAndValues ...in
 			jsonLog += fmt.Sprintf(`,"%s":"%s"`, key, value)
 		}
 	}
-	
+
 	jsonLog += "}"
 	l.logger.Println(jsonLog)
 }
@@ -191,7 +191,7 @@ func (l *simpleLogger) logJSON(timestamp, level, msg string, keysAndValues ...in
 // logText outputs logs in text format
 func (l *simpleLogger) logText(timestamp, level, msg string, keysAndValues ...interface{}) {
 	logLine := fmt.Sprintf("[%s] %s: %s", timestamp, level, msg)
-	
+
 	// Add key-value pairs
 	if len(keysAndValues) > 0 {
 		var pairs []string
@@ -206,6 +206,6 @@ func (l *simpleLogger) logText(timestamp, level, msg string, keysAndValues ...in
 			logLine += " " + strings.Join(pairs, " ")
 		}
 	}
-	
+
 	l.logger.Println(logLine)
 }

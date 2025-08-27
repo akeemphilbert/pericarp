@@ -15,9 +15,9 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	internaldomain "github.com/example/pericarp/internal/domain"
-	pkgdomain "github.com/example/pericarp/pkg/domain"
-	pkginfra "github.com/example/pericarp/pkg/infrastructure"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 )
 
 // TestEventStoreIntegration tests the EventStore with real database connections
@@ -273,7 +273,7 @@ func testConcurrentEventSaving(t *testing.T, eventStore pkgdomain.EventStore) {
 			}
 
 			envelopes, err := eventStore.Save(ctx, events)
-			
+
 			mu.Lock()
 			if err != nil {
 				errors = append(errors, err)
@@ -450,7 +450,7 @@ func TestEventStoreErrorHandling(t *testing.T) {
 				t.Error("expected panic with nil database")
 			}
 		}()
-		
+
 		pkginfra.NewEventStore(nil)
 	})
 

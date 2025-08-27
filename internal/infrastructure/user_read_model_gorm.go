@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/example/pericarp/internal/application"
+	"github.com/akeemphilbert/pericarp/internal/application"
 	"gorm.io/gorm"
 )
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 )

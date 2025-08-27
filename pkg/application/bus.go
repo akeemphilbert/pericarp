@@ -3,7 +3,7 @@ package application
 import (
 	"context"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // commandBus implements CommandBus with unified handler support

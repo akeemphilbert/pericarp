@@ -2,7 +2,7 @@ package infrastructure
 
 import (
 	"github.com/ThreeDotsLabs/watermill"
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // WatermillLoggerAdapter adapts our domain.Logger to watermill.LoggerAdapter

@@ -3,9 +3,9 @@ package application
 import (
 	"context"
 
-	internaldomain "github.com/example/pericarp/internal/domain"
-	pkgapp "github.com/example/pericarp/pkg/application"
-	pkgdomain "github.com/example/pericarp/pkg/domain"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	pkgapp "github.com/akeemphilbert/pericarp/pkg/application"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // CreateUserHandler handles CreateUserCommand

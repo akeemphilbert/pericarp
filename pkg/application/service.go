@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // ApplicationService provides base functionality for application services

@@ -1,0 +1,247 @@
+syntax = "proto3";
+
+package order;
+
+option go_package = "github.com/example/order/pb";
+
+// Order represents a customer order with complex business logic
+message Order {
+  // Unique identifier for the order
+  string id = 1;
+  
+  // Human-readable order number
+  string order_number = 2;
+  
+  // Customer ID who placed the order
+  string customer_id = 3;
+  
+  // Items in the order
+  repeated OrderItem items = 4;
+  
+  // Current order status
+  OrderStatus status = 5;
+  
+  // Total order amount in cents
+  int64 total_amount_cents = 6;
+  
+  // Shipping address
+  Address shipping_address = 7;
+  
+  // Billing address
+  Address billing_address = 8;
+  
+  // Payment information
+  PaymentInfo payment_info = 9;
+  
+  // Order creation timestamp
+  int64 created_at = 10;
+  
+  // Order last update timestamp
+  int64 updated_at = 11;
+  
+  // Additional notes for the order
+  string notes = 12;
+  
+  // Shipping tracking number
+  string tracking_number = 13;
+  
+  // Estimated delivery date
+  int64 estimated_delivery = 14;
+}
+
+// OrderItem represents an item within an order
+message OrderItem {
+  // Unique identifier for the order item
+  string id = 1;
+  
+  // Product ID
+  string product_id = 2;
+  
+  // Product name at time of order
+  string product_name = 3;
+  
+  // Quantity ordered
+  int32 quantity = 4;
+  
+  // Unit price in cents at time of order
+  int64 unit_price_cents = 5;
+  
+  // Total price for this item in cents
+  int64 total_price_cents = 6;
+  
+  // Discount percentage applied (0-100)
+  int32 discount_percent = 7;
+  
+  // Product SKU
+  string sku = 8;
+}
+
+// Address represents a shipping or billing address
+message Address {
+  // Recipient or billing name
+  string name = 1;
+  
+  // Street address
+  string street = 2;
+  
+  // City
+  string city = 3;
+  
+  // State or province
+  string state = 4;
+  
+  // Postal or ZIP code
+  string postal_code = 5;
+  
+  // Country code (ISO 3166-1 alpha-2)
+  string country = 6;
+  
+  // Phone number
+  string phone = 7;
+  
+  // Special delivery instructions
+  string instructions = 8;
+}
+
+// PaymentInfo represents payment method information
+message PaymentInfo {
+  // Payment method type
+  PaymentMethod method = 1;
+  
+  // Last 4 digits of card (for card payments)
+  string card_last4 = 2;
+  
+  // Card brand (for card payments)
+  CardBrand card_brand = 3;
+  
+  // Card expiry month (for card payments)
+  int32 expiry_month = 4;
+  
+  // Card expiry year (for card payments)
+  int32 expiry_year = 5;
+  
+  // Payment processor transaction ID
+  string transaction_id = 6;
+  
+  // Payment status
+  PaymentStatus payment_status = 7;
+}
+
+// OrderStatus enum for order status values
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_PENDING = 1;
+  ORDER_STATUS_CONFIRMED = 2;
+  ORDER_STATUS_PROCESSING = 3;
+  ORDER_STATUS_SHIPPED = 4;
+  ORDER_STATUS_DELIVERED = 5;
+  ORDER_STATUS_CANCELLED = 6;
+  ORDER_STATUS_RETURNED = 7;
+}
+
+// PaymentMethod enum for payment method types
+enum PaymentMethod {
+  PAYMENT_METHOD_UNSPECIFIED = 0;
+  PAYMENT_METHOD_CREDIT_CARD = 1;
+  PAYMENT_METHOD_DEBIT_CARD = 2;
+  PAYMENT_METHOD_PAYPAL = 3;
+  PAYMENT_METHOD_BANK_TRANSFER = 4;
+  PAYMENT_METHOD_CASH_ON_DELIVERY = 5;
+}
+
+// CardBrand enum for credit card brands
+enum CardBrand {
+  CARD_BRAND_UNSPECIFIED = 0;
+  CARD_BRAND_VISA = 1;
+  CARD_BRAND_MASTERCARD = 2;
+  CARD_BRAND_AMEX = 3;
+  CARD_BRAND_DISCOVER = 4;
+}
+
+// PaymentStatus enum for payment status values
+enum PaymentStatus {
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  PAYMENT_STATUS_PENDING = 1;
+  PAYMENT_STATUS_AUTHORIZED = 2;
+  PAYMENT_STATUS_CAPTURED = 3;
+  PAYMENT_STATUS_FAILED = 4;
+  PAYMENT_STATUS_REFUNDED = 5;
+}
+
+// CreateOrderRequest represents a request to create a new order
+message CreateOrderRequest {
+  string customer_id = 1;
+  repeated OrderItemRequest items = 2;
+  Address shipping_address = 3;
+  Address billing_address = 4;
+  PaymentInfo payment_info = 5;
+  string notes = 6;
+}
+
+// OrderItemRequest represents an item to be added to an order
+message OrderItemRequest {
+  string product_id = 1;
+  int32 quantity = 2;
+}
+
+// CreateOrderResponse represents a response after creating an order
+message CreateOrderResponse {
+  Order order = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+// GetOrderRequest represents a request to retrieve an order
+message GetOrderRequest {
+  string id = 1;
+}
+
+// GetOrderResponse represents a response when getting an order
+message GetOrderResponse {
+  Order order = 1;
+  bool found = 2;
+}
+
+// UpdateOrderStatusRequest represents a request to update order status
+message UpdateOrderStatusRequest {
+  string id = 1;
+  OrderStatus status = 2;
+  string tracking_number = 3;
+}
+
+// UpdateOrderStatusResponse represents a response after updating order status
+message UpdateOrderStatusResponse {
+  Order order = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+// ListOrdersRequest represents a request to list orders with pagination
+message ListOrdersRequest {
+  string customer_id = 1;
+  OrderStatus status = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+// ListOrdersResponse represents a response when listing orders
+message ListOrdersResponse {
+  repeated Order orders = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// OrderService defines comprehensive order management operations
+service OrderService {
+  // CreateOrder creates a new order
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  
+  // GetOrder retrieves an order by ID
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+  
+  // UpdateOrderStatus updates the status of an order
+  rpc UpdateOrderStatus(UpdateOrderStatusRequest) returns (UpdateOrderStatusResponse);
+  
+  // ListOrders retrieves a paginated list of orders
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+}

@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // SecurityErrorHandler provides centralized secure error handling
@@ -31,8 +31,8 @@ func (h *SecurityErrorHandler) HandleSystemError(err error, operation string) er
 
 	// Log the full error for debugging (sanitized)
 	sanitizedErr := h.sanitizer.Sanitize(err)
-	h.logger.Error("System operation failed", 
-		"operation", operation, 
+	h.logger.Error("System operation failed",
+		"operation", operation,
 		"error", sanitizedErr.Error(),
 		"error_type", fmt.Sprintf("%T", err))
 
@@ -47,7 +47,7 @@ func (h *SecurityErrorHandler) HandleValidationError(err error, input string) er
 	}
 
 	// Log validation failure (without exposing the actual input)
-	h.logger.Warn("Input validation failed", 
+	h.logger.Warn("Input validation failed",
 		"error", err.Error(),
 		"input_type", fmt.Sprintf("%T", input))
 
@@ -62,7 +62,7 @@ func (h *SecurityErrorHandler) HandleConfigurationError(err error, configKey str
 	}
 
 	// Log configuration error (without exposing sensitive config values)
-	h.logger.Error("Configuration error", 
+	h.logger.Error("Configuration error",
 		"config_key", configKey,
 		"error", h.sanitizer.Sanitize(err).Error())
 
@@ -83,19 +83,19 @@ func NewErrorSanitizer() *ErrorSanitizer {
 		regexp.MustCompile(`(?i)password[=:\s]+[^\s]+`),
 		regexp.MustCompile(`(?i)pwd[=:\s]+[^\s]+`),
 		regexp.MustCompile(`(?i)pass[=:\s]+[^\s]+`),
-		
+
 		// API keys and tokens
 		regexp.MustCompile(`(?i)api[_-]?key[=:\s]+[^\s]+`),
 		regexp.MustCompile(`(?i)token[=:\s]+[^\s]+`),
 		regexp.MustCompile(`(?i)secret[=:\s]+[^\s]+`),
-		
+
 		// Database connection strings
 		regexp.MustCompile(`(?i)://[^:]+:[^@]+@`), // user:pass@host pattern
-		
+
 		// File paths that might contain sensitive info
 		regexp.MustCompile(`/home/[^/\s]+`),
 		regexp.MustCompile(`/Users/[^/\s]+`),
-		
+
 		// Common sensitive environment variable patterns
 		regexp.MustCompile(`(?i)[A-Z_]*SECRET[A-Z_]*[=:\s]+[^\s]+`),
 		regexp.MustCompile(`(?i)[A-Z_]*KEY[A-Z_]*[=:\s]+[^\s]+`),
@@ -148,7 +148,7 @@ func (s *ErrorSanitizer) AddSensitivePattern(pattern string) error {
 	if err != nil {
 		return fmt.Errorf("invalid regex pattern: %w", err)
 	}
-	
+
 	s.sensitivePatterns = append(s.sensitivePatterns, compiled)
 	return nil
 }
@@ -168,10 +168,10 @@ func NewFailureRecovery(logger domain.Logger) *FailureRecovery {
 // RecoverFromPanic recovers from panics and logs them securely
 func (f *FailureRecovery) RecoverFromPanic(operation string) {
 	if r := recover(); r != nil {
-		f.logger.Error("Panic recovered", 
+		f.logger.Error("Panic recovered",
 			"operation", operation,
 			"panic", fmt.Sprintf("%v", r))
-		
+
 		// In a real application, you might want to:
 		// 1. Send alerts
 		// 2. Gracefully shutdown resources
@@ -183,12 +183,12 @@ func (f *FailureRecovery) RecoverFromPanic(operation string) {
 func (f *FailureRecovery) SafeExecute(operation string, fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			f.logger.Error("Panic during safe execution", 
+			f.logger.Error("Panic during safe execution",
 				"operation", operation,
 				"panic", fmt.Sprintf("%v", r))
 			err = fmt.Errorf("operation failed due to unexpected error: %s", operation)
 		}
 	}()
-	
+
 	return fn()
 }

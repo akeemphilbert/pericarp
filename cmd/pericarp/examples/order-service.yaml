@@ -1,0 +1,187 @@
+openapi: 3.0.0
+info:
+  title: Order Service API
+  version: 1.0.0
+  description: E-commerce order service demonstrating complex business relationships
+paths: {}
+components:
+  schemas:
+    Order:
+      type: object
+      required:
+        - customerId
+        - items
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the order
+        orderNumber:
+          type: string
+          pattern: "^ORD-[0-9]{8}$"
+          description: Human-readable order number
+        customerId:
+          type: string
+          format: uuid
+          description: ID of the customer who placed the order
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+          minItems: 1
+          description: Items in the order
+        status:
+          type: string
+          enum: [pending, confirmed, processing, shipped, delivered, cancelled]
+          description: Current order status
+        totalAmount:
+          type: number
+          minimum: 0
+          description: Total order amount in USD
+        shippingAddress:
+          $ref: '#/components/schemas/ShippingAddress'
+        billingAddress:
+          $ref: '#/components/schemas/BillingAddress'
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        createdAt:
+          type: string
+          format: date-time
+          description: When the order was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the order was last updated
+        notes:
+          type: string
+          maxLength: 1000
+          description: Additional notes for the order
+    OrderItem:
+      type: object
+      required:
+        - productId
+        - quantity
+        - unitPrice
+      properties:
+        id:
+          type: string
+          format: uuid
+        productId:
+          type: string
+          format: uuid
+          description: ID of the product
+        productName:
+          type: string
+          description: Name of the product at time of order
+        quantity:
+          type: integer
+          minimum: 1
+          description: Quantity ordered
+        unitPrice:
+          type: number
+          minimum: 0
+          description: Price per unit at time of order
+        totalPrice:
+          type: number
+          minimum: 0
+          description: Total price for this item (quantity * unitPrice)
+        discount:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Discount percentage applied
+    ShippingAddress:
+      type: object
+      required:
+        - recipientName
+        - street
+        - city
+        - country
+      properties:
+        recipientName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        street:
+          type: string
+          minLength: 1
+          maxLength: 200
+        city:
+          type: string
+          minLength: 1
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        postalCode:
+          type: string
+          pattern: "^[0-9]{5}(-[0-9]{4})?$"
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          pattern: "^[A-Z]{2}$"
+        phone:
+          type: string
+          pattern: "^\\+?[1-9]\\d{1,14}$"
+        instructions:
+          type: string
+          maxLength: 500
+    BillingAddress:
+      type: object
+      required:
+        - name
+        - street
+        - city
+        - country
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        street:
+          type: string
+          minLength: 1
+          maxLength: 200
+        city:
+          type: string
+          minLength: 1
+          maxLength: 100
+        state:
+          type: string
+          maxLength: 100
+        postalCode:
+          type: string
+          pattern: "^[0-9]{5}(-[0-9]{4})?$"
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          pattern: "^[A-Z]{2}$"
+    PaymentMethod:
+      type: object
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [credit_card, debit_card, paypal, bank_transfer, cash_on_delivery]
+        cardLast4:
+          type: string
+          pattern: "^[0-9]{4}$"
+          description: Last 4 digits of card (for card payments)
+        cardBrand:
+          type: string
+          enum: [visa, mastercard, amex, discover]
+          description: Card brand (for card payments)
+        expiryMonth:
+          type: integer
+          minimum: 1
+          maximum: 12
+          description: Card expiry month (for card payments)
+        expiryYear:
+          type: integer
+          minimum: 2024
+          maximum: 2050
+          description: Card expiry year (for card payments)

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	internaldomain "github.com/example/pericarp/internal/domain"
-	"github.com/example/pericarp/pkg/domain"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // UserProjector handles domain events to maintain user read models

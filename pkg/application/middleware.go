@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // Validator interface for commands and queries that can be validated
@@ -115,7 +115,7 @@ func ValidationMiddleware[Req any, Res any]() Middleware[Req, Res] {
 					},
 				}, validationErr
 			}
-			
+
 			return next(ctx, log, p)
 		}
 	}
@@ -259,6 +259,7 @@ func generateCacheKey(data any) string {
 	}
 	return fmt.Sprintf("%T_%+v", data, data)
 }
+
 // InMemoryMetricsCollector is a simple in-memory implementation of MetricsCollector
 // optimized for performance with minimal locking and efficient data structures
 type InMemoryMetricsCollector struct {
@@ -281,16 +282,16 @@ func NewInMemoryMetricsCollector() *InMemoryMetricsCollector {
 func (m *InMemoryMetricsCollector) RecordRequestDuration(requestType string, duration time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	durations := m.requestDurations[requestType]
-	
+
 	// Implement circular buffer to prevent memory leaks
 	if len(durations) >= m.maxDurations {
 		// Remove oldest entry by shifting slice
 		copy(durations, durations[1:])
 		durations = durations[:len(durations)-1]
 	}
-	
+
 	m.requestDurations[requestType] = append(durations, duration)
 }
 
@@ -299,7 +300,7 @@ func (m *InMemoryMetricsCollector) IncrementRequestErrors(requestType string) {
 	m.mu.RLock()
 	_, exists := m.requestErrors[requestType]
 	m.mu.RUnlock()
-	
+
 	if !exists {
 		m.mu.Lock()
 		// Double-check after acquiring write lock
@@ -308,7 +309,7 @@ func (m *InMemoryMetricsCollector) IncrementRequestErrors(requestType string) {
 		}
 		m.mu.Unlock()
 	}
-	
+
 	// Increment error count with proper mutex protection
 	m.mu.Lock()
 	m.requestErrors[requestType]++
@@ -319,22 +320,22 @@ func (m *InMemoryMetricsCollector) IncrementRequestErrors(requestType string) {
 func (m *InMemoryMetricsCollector) GetMetrics() (map[string][]time.Duration, map[string]int64) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	// Return copies to avoid race conditions
 	durations := make(map[string][]time.Duration, len(m.requestDurations))
 	errors := make(map[string]int64, len(m.requestErrors))
-	
+
 	for k, v := range m.requestDurations {
 		// Pre-allocate slice with exact capacity
 		durCopy := make([]time.Duration, len(v))
 		copy(durCopy, v)
 		durations[k] = durCopy
 	}
-	
+
 	for k, v := range m.requestErrors {
 		errors[k] = v
 	}
-	
+
 	return durations, errors
 }
 
@@ -342,19 +343,19 @@ func (m *InMemoryMetricsCollector) GetMetrics() (map[string][]time.Duration, map
 func (m *InMemoryMetricsCollector) GetSummaryStats() map[string]map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	stats := make(map[string]map[string]interface{})
-	
+
 	for requestType, durations := range m.requestDurations {
 		if len(durations) == 0 {
 			continue
 		}
-		
+
 		// Calculate basic statistics
 		var total, min, max time.Duration
 		min = durations[0]
 		max = durations[0]
-		
+
 		for _, d := range durations {
 			total += d
 			if d < min {
@@ -364,19 +365,19 @@ func (m *InMemoryMetricsCollector) GetSummaryStats() map[string]map[string]inter
 				max = d
 			}
 		}
-		
+
 		avg := total / time.Duration(len(durations))
-		
+
 		stats[requestType] = map[string]interface{}{
-			"count":    len(durations),
-			"avg":      avg,
-			"min":      min,
-			"max":      max,
-			"total":    total,
-			"errors":   m.requestErrors[requestType],
+			"count":  len(durations),
+			"avg":    avg,
+			"min":    min,
+			"max":    max,
+			"total":  total,
+			"errors": m.requestErrors[requestType],
 		}
 	}
-	
+
 	return stats
 }
 
@@ -397,7 +398,7 @@ func NewInMemoryCache() *InMemoryCache {
 func (c *InMemoryCache) Get(key string) (any, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	value, exists := c.data[key]
 	return value, exists
 }
@@ -406,7 +407,7 @@ func (c *InMemoryCache) Get(key string) (any, bool) {
 func (c *InMemoryCache) Set(key string, value any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	c.data[key] = value
 }
 
@@ -414,7 +415,7 @@ func (c *InMemoryCache) Set(key string, value any) {
 func (c *InMemoryCache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	delete(c.data, key)
 }
 
@@ -422,6 +423,6 @@ func (c *InMemoryCache) Delete(key string) {
 func (c *InMemoryCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	c.data = make(map[string]any)
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"log"
 
-	"github.com/example/pericarp/pkg"
-	"github.com/example/pericarp/pkg/application"
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg"
+	"github.com/akeemphilbert/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 	"go.uber.org/fx"
 )
 

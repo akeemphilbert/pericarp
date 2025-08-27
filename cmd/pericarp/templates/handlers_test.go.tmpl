@@ -1,0 +1,241 @@
+package application
+
+import (
+	"context"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+example.com/project/internal/domain
+	example.com/project/test/mocks
+)
+
+{{$entityName := .Name}}
+{{$entityLower := .Name | lower}}
+
+// Mock{{$entityName}}Repository for testing
+type Mock{{$entityName}}Repository struct {
+	mock.Mock
+}
+
+func (m *Mock{{$entityName}}Repository) Save(ctx context.Context, {{$entityLower}} *domain.{{$entityName}}) error {
+	args := m.Called(ctx, {{$entityLower}})
+	return args.Error(0)
+}
+
+func (m *Mock{{$entityName}}Repository) Load(ctx context.Context, id uuid.UUID) (*domain.{{$entityName}}, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*domain.{{$entityName}}), args.Error(1)
+}
+
+// MockLogger for testing
+type MockLogger struct {
+	mock.Mock
+}
+
+func (m *MockLogger) Info(msg string) {
+	m.Called(msg)
+}
+
+func (m *MockLogger) Debug(msg string) {
+	m.Called(msg)
+}
+
+func (m *MockLogger) Error(msg string) {
+	m.Called(msg)
+}
+
+func (m *MockLogger) Warn(msg string) {
+	m.Called(msg)
+}
+
+func TestCreate{{$entityName}}Handler_Handle(t *testing.T) {
+	tests := []struct {
+		name    string
+		command Create{{$entityName}}Command
+		setupMocks func(*Mock{{$entityName}}Repository, *MockLogger)
+		wantErr bool
+	}{
+		{
+			name: "successful creation",
+			command: Create{{$entityName}}Command{
+				{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
+				{{end}}
+			},
+			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
+				logger.On("Info", mock.AnythingOfType("string")).Return()
+				repo.On("Save", mock.Anything, mock.AnythingOfType("*domain.{{$entityName}}")).Return(nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid command",
+			command: Create{{$entityName}}Command{
+				// Missing required fields
+			},
+			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
+				logger.On("Info", mock.AnythingOfType("string")).Return()
+			},
+			wantErr: true,
+		},
+		{
+			name: "repository save error",
+			command: Create{{$entityName}}Command{
+				{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
+				{{end}}
+			},
+			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
+				logger.On("Info", mock.AnythingOfType("string")).Return()
+				repo.On("Save", mock.Anything, mock.AnythingOfType("*domain.{{$entityName}}")).Return(assert.AnError)
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := &Mock{{$entityName}}Repository{}
+			mockLogger := &MockLogger{}
+			tt.setupMocks(mockRepo, mockLogger)
+
+			handler := NewCreate{{$entityName}}Handler(mockRepo, mockLogger)
+			err := handler.Handle(context.Background(), tt.command)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockRepo.AssertExpectations(t)
+			mockLogger.AssertExpectations(t)
+		})
+	}
+}
+
+func TestUpdate{{$entityName}}Handler_Handle(t *testing.T) {
+	existingID := uuid.New()
+	existing{{$entityName}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"existing-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		command Update{{$entityName}}Command
+		setupMocks func(*Mock{{$entityName}}Repository, *MockLogger)
+		wantErr bool
+	}{
+		{
+			name: "successful update",
+			command: Update{{$entityName}}Command{
+				Id: existingID,
+				{{range .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}},
+				{{end}}
+			},
+			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
+				logger.On("Info", mock.AnythingOfType("string")).Return()
+				repo.On("Load", mock.Anything, existingID).Return(existing{{$entityName}}, nil)
+				repo.On("Save", mock.Anything, mock.AnythingOfType("*domain.{{$entityName}}")).Return(nil)
+			},
+			wantErr: false,
+		},
+		{
+			name: "{{$entityLower}} not found",
+			command: Update{{$entityName}}Command{
+				Id: uuid.New(),
+				{{range .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}},
+				{{end}}
+			},
+			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
+				logger.On("Info", mock.AnythingOfType("string")).Return()
+				repo.On("Load", mock.Anything, mock.AnythingOfType("uuid.UUID")).Return(nil, assert.AnError)
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := &Mock{{$entityName}}Repository{}
+			mockLogger := &MockLogger{}
+			tt.setupMocks(mockRepo, mockLogger)
+
+			handler := NewUpdate{{$entityName}}Handler(mockRepo, mockLogger)
+			err := handler.Handle(context.Background(), tt.command)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockRepo.AssertExpectations(t)
+			mockLogger.AssertExpectations(t)
+		})
+	}
+}
+
+func TestGet{{$entityName}}ByIdHandler_Handle(t *testing.T) {
+	existingID := uuid.New()
+	existing{{$entityName}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"existing-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		query   Get{{$entityName}}ByIdQuery
+		setupMocks func(*Mock{{$entityName}}Repository, *MockLogger)
+		want    *domain.{{$entityName}}
+		wantErr bool
+	}{
+		{
+			name: "successful retrieval",
+			query: Get{{$entityName}}ByIdQuery{
+				Id: existingID,
+			},
+			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
+				logger.On("Debug", mock.AnythingOfType("string")).Return()
+				repo.On("Load", mock.Anything, existingID).Return(existing{{$entityName}}, nil)
+			},
+			want:    existing{{$entityName}},
+			wantErr: false,
+		},
+		{
+			name: "{{$entityLower}} not found",
+			query: Get{{$entityName}}ByIdQuery{
+				Id: uuid.New(),
+			},
+			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
+				logger.On("Debug", mock.AnythingOfType("string")).Return()
+				repo.On("Load", mock.Anything, mock.AnythingOfType("uuid.UUID")).Return(nil, assert.AnError)
+			},
+			want:    nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := &Mock{{$entityName}}Repository{}
+			mockLogger := &MockLogger{}
+			tt.setupMocks(mockRepo, mockLogger)
+
+			handler := NewGet{{$entityName}}ByIdHandler(mockRepo, mockLogger)
+			result, err := handler.Handle(context.Background(), tt.query)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.want, result)
+			}
+
+			mockRepo.AssertExpectations(t)
+			mockLogger.AssertExpectations(t)
+		})
+	}
+}

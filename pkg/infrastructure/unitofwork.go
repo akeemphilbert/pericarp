@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // UnitOfWorkImpl implements the UnitOfWork interface with Persist-then-Dispatch pattern

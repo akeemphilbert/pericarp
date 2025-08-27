@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // Shared mock implementations for testing

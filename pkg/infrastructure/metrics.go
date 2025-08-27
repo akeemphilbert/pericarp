@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/pericarp/pkg/application"
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // simpleMetricsCollector implements the MetricsCollector interface

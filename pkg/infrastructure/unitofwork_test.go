@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // mockEventStore implements domain.EventStore for testing

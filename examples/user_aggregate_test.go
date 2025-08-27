@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 func TestNewUser(t *testing.T) {

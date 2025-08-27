@@ -1,0 +1,189 @@
+syntax = "proto3";
+
+package user;
+
+option go_package = "github.com/example/user/pb";
+
+// User represents a user in the system with comprehensive profile information
+message User {
+  // Unique identifier for the user
+  string id = 1;
+  
+  // User's email address (required)
+  string email = 2;
+  
+  // User's full name (required)
+  string name = 3;
+  
+  // Whether the user is active
+  bool is_active = 4;
+  
+  // User's age
+  int32 age = 5;
+  
+  // User's profile information
+  Profile profile = 6;
+  
+  // User's roles in the system
+  repeated string roles = 7;
+  
+  // User creation timestamp (Unix timestamp)
+  int64 created_at = 8;
+  
+  // User last update timestamp (Unix timestamp)
+  int64 updated_at = 9;
+  
+  // User preferences
+  UserPreferences preferences = 10;
+}
+
+// Profile represents detailed user profile information
+message Profile {
+  // Profile biography
+  string bio = 1;
+  
+  // Profile avatar URL
+  string avatar_url = 2;
+  
+  // Personal website URL
+  string website = 3;
+  
+  // Social media links
+  repeated string social_links = 4;
+  
+  // Profile settings as key-value pairs
+  map<string, string> settings = 5;
+  
+  // Profile visibility level
+  ProfileVisibility visibility = 6;
+}
+
+// UserPreferences represents user application preferences
+message UserPreferences {
+  // UI theme preference
+  Theme theme = 1;
+  
+  // Notification settings
+  bool notifications_enabled = 2;
+  
+  // Email notification frequency
+  NotificationFrequency email_frequency = 3;
+  
+  // Language preference (ISO 639-1 code)
+  string language = 4;
+  
+  // Timezone (IANA timezone identifier)
+  string timezone = 5;
+}
+
+// ProfileVisibility enum for profile visibility levels
+enum ProfileVisibility {
+  PROFILE_VISIBILITY_UNSPECIFIED = 0;
+  PROFILE_VISIBILITY_PUBLIC = 1;
+  PROFILE_VISIBILITY_PRIVATE = 2;
+  PROFILE_VISIBILITY_FRIENDS_ONLY = 3;
+}
+
+// Theme enum for UI theme preferences
+enum Theme {
+  THEME_UNSPECIFIED = 0;
+  THEME_LIGHT = 1;
+  THEME_DARK = 2;
+  THEME_AUTO = 3;
+}
+
+// NotificationFrequency enum for notification frequency settings
+enum NotificationFrequency {
+  NOTIFICATION_FREQUENCY_UNSPECIFIED = 0;
+  NOTIFICATION_FREQUENCY_IMMEDIATE = 1;
+  NOTIFICATION_FREQUENCY_DAILY = 2;
+  NOTIFICATION_FREQUENCY_WEEKLY = 3;
+  NOTIFICATION_FREQUENCY_NEVER = 4;
+}
+
+// CreateUserRequest represents a request to create a new user
+message CreateUserRequest {
+  string email = 1;
+  string name = 2;
+  int32 age = 3;
+  Profile profile = 4;
+  UserPreferences preferences = 5;
+}
+
+// CreateUserResponse represents a response after creating a user
+message CreateUserResponse {
+  User user = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+// GetUserRequest represents a request to retrieve a user
+message GetUserRequest {
+  string id = 1;
+}
+
+// GetUserResponse represents a response when getting a user
+message GetUserResponse {
+  User user = 1;
+  bool found = 2;
+}
+
+// UpdateUserRequest represents a request to update an existing user
+message UpdateUserRequest {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+  bool is_active = 4;
+  Profile profile = 5;
+  UserPreferences preferences = 6;
+}
+
+// UpdateUserResponse represents a response after updating a user
+message UpdateUserResponse {
+  User user = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+// DeleteUserRequest represents a request to delete a user
+message DeleteUserRequest {
+  string id = 1;
+}
+
+// DeleteUserResponse represents a response after deleting a user
+message DeleteUserResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ListUsersRequest represents a request to list users with pagination
+message ListUsersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string filter = 3;
+}
+
+// ListUsersResponse represents a response when listing users
+message ListUsersResponse {
+  repeated User users = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// UserService defines comprehensive user-related operations
+service UserService {
+  // CreateUser creates a new user in the system
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  
+  // GetUser retrieves a user by their unique ID
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  
+  // UpdateUser updates an existing user's information
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+  
+  // DeleteUser removes a user from the system
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  
+  // ListUsers retrieves a paginated list of users
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+}

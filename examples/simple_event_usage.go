@@ -3,7 +3,7 @@ package examples
 import (
 	"fmt"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // SimpleEventUsageExample demonstrates the clean, simple API for creating events

@@ -1,10 +1,10 @@
 package pkg
 
 import (
-	"github.com/example/pericarp/internal"
-	"github.com/example/pericarp/pkg/application"
-	"github.com/example/pericarp/pkg/domain"
-	"github.com/example/pericarp/pkg/infrastructure"
+	"github.com/akeemphilbert/pericarp/internal"
+	"github.com/akeemphilbert/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/infrastructure"
 	"go.uber.org/fx"
 )
 
@@ -23,7 +23,7 @@ var PericarpModule = fx.Options(
 func NewApp(additionalOptions ...fx.Option) *fx.App {
 	options := []fx.Option{PericarpModule}
 	options = append(options, additionalOptions...)
-	
+
 	return fx.New(options...)
 }
 

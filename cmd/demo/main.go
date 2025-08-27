@@ -7,11 +7,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/example/pericarp/internal/application"
-	"github.com/example/pericarp/pkg"
-	pkgapp "github.com/example/pericarp/pkg/application"
-	"github.com/example/pericarp/pkg/domain"
-	"github.com/example/pericarp/pkg/infrastructure"
+	"github.com/akeemphilbert/pericarp/internal/application"
+	"github.com/akeemphilbert/pericarp/pkg"
+	pkgapp "github.com/akeemphilbert/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/infrastructure"
 	"github.com/segmentio/ksuid"
 	"github.com/spf13/cobra"
 	"go.uber.org/fx"
@@ -48,7 +48,7 @@ Domain-Driven Design, CQRS, and Event Sourcing capabilities.`,
 					// Continue execution as this is not critical for basic functionality
 				}
 			}
-			
+
 			// Set verbose logging if requested
 			if verbose {
 				if err := setEnvironmentVariableSecurely("PERICARP_LOGGING_LEVEL", "debug"); err != nil {

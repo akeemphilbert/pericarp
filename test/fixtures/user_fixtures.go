@@ -3,7 +3,7 @@ package fixtures
 import (
 	"time"
 
-	internalapp "github.com/example/pericarp/internal/application"
+	internalapp "github.com/akeemphilbert/pericarp/internal/application"
 	i
 )
 

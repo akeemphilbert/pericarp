@@ -1,0 +1,59 @@
+package domain
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
+)
+
+// {{.Name}}CreatedEvent represents the creation of a {{.Name | lower}}
+type {{.Name}}CreatedEvent struct {
+	domain.StandardEvent
+	{{range filterRequired .Properties}}{{.Name | pascalCase}} {{.Type | goType}} `json:"{{.Name | snakeCase}}"`
+	{{end}}
+}
+
+// New{{.Name}}CreatedEvent creates a new {{.Name}}CreatedEvent
+func New{{.Name}}CreatedEvent(aggregateID uuid.UUID{{range filterRequired .Properties}}, {{.Name | camelCase}} {{.Type | goType}}{{end}}) *{{.Name}}CreatedEvent {
+	return &{{.Name}}CreatedEvent{
+		StandardEvent: domain.NewStandardEvent(
+			uuid.New(),
+			"{{.Name}}Created",
+			aggregateID,
+			1,
+			time.Now(),
+			map[string]interface{}{
+				{{range filterRequired .Properties}}"{{.Name | snakeCase}}": {{.Name | camelCase}},
+				{{end}}
+			},
+		),
+		{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{.Name | camelCase}},
+		{{end}}
+	}
+}
+
+{{range .Properties}}{{if not .Required}}
+// {{$.Name}}{{.Name | pascalCase}}UpdatedEvent represents an update to {{$.Name | lower}} {{.Name | lower}}
+type {{$.Name}}{{.Name | pascalCase}}UpdatedEvent struct {
+	domain.StandardEvent
+	{{.Name | pascalCase}} {{.Type | goType}} `json:"{{.Name | snakeCase}}"`
+}
+
+// New{{$.Name}}{{.Name | pascalCase}}UpdatedEvent creates a new {{$.Name}}{{.Name | pascalCase}}UpdatedEvent
+func New{{$.Name}}{{.Name | pascalCase}}UpdatedEvent(aggregateID uuid.UUID, {{.Name | camelCase}} {{.Type | goType}}) *{{$.Name}}{{.Name | pascalCase}}UpdatedEvent {
+	return &{{$.Name}}{{.Name | pascalCase}}UpdatedEvent{
+		StandardEvent: domain.NewStandardEvent(
+			uuid.New(),
+			"{{$.Name}}{{.Name | pascalCase}}Updated",
+			aggregateID,
+			1,
+			time.Now(),
+			map[string]interface{}{
+				"{{.Name | snakeCase}}": {{.Name | camelCase}},
+			},
+		),
+		{{.Name | pascalCase}}: {{.Name | camelCase}},
+	}
+}
+{{end}}{{end}}

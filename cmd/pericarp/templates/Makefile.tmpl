@@ -1,0 +1,81 @@
+# Generated Makefile for {{.ProjectName}}
+
+.PHONY: help build test clean deps fmt lint security gosec
+
+help: ## Show this help message
+	@echo 'Usage: make [target]'
+	@echo ''
+	@echo 'Targets:'
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# Dependencies (Requirement 5.2)
+deps: ## Install dependencies
+	go mod download
+	go mod tidy
+
+# Build (Requirement 5.5)
+build: ## Build the application
+	go build -v ./...
+
+build-cmd: ## Build the main command
+	go build -o bin/{{.ProjectName}} ./cmd/{{.ProjectName}}
+
+# Testing (Requirement 5.3)
+test: ## Run all tests
+	go test -v -race -coverprofile=coverage.out ./...
+
+test-unit: ## Run unit tests only
+	go test -v -race ./internal/domain/... ./internal/application/...
+
+test-integration: ## Run integration tests
+	go test -v -tags=integration ./test/integration/...
+
+coverage: ## Generate coverage report
+	go test -v -race -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
+# Code quality (Requirement 5.7)
+fmt: ## Format code
+	go fmt ./...
+
+lint: ## Run linter (Requirement 5.7)
+	golangci-lint run
+
+# Security (Requirement 5.4)
+gosec: ## Run security scan
+	gosec ./...
+
+security: gosec ## Alias for gosec
+
+# Development workflow
+dev-setup: deps ## Set up development environment
+	@echo "Development environment ready!"
+
+dev-test: fmt lint test ## Run complete development workflow
+
+# Clean (Requirement 5.6)
+clean: ## Clean build artifacts
+	rm -rf bin/
+	rm -f coverage.out coverage.html
+	go clean -testcache
+
+{{if .HasDatabase}}
+# Database (if applicable)
+db-migrate: ## Run database migrations
+	go run ./cmd/{{.ProjectName}} migrate
+
+db-reset: ## Reset database
+	rm -f *.db
+	$(MAKE) db-migrate
+{{end}}
+
+# Additional targets for Pericarp projects
+validate-architecture: ## Validate DDD architecture
+	@echo "Validating domain-driven design architecture..."
+	@go test -v ./internal/domain/... -tags=architecture
+
+performance-test: ## Run performance benchmarks
+	go test -bench=. -benchmem ./...
+
+mock-generate: ## Generate mocks for testing
+	go generate ./...

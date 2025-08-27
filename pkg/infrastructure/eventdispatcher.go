@@ -9,7 +9,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // WatermillEventDispatcher implements the EventDispatcher interface using Watermill
@@ -255,7 +255,7 @@ func (d *WatermillEventDispatcher) Close() error {
 func (d *WatermillEventDispatcher) GetHandlers(eventType string) []domain.EventHandler {
 	d.handlersMu.RLock()
 	defer d.handlersMu.RUnlock()
-	
+
 	handlers := make([]domain.EventHandler, len(d.handlers[eventType]))
 	copy(handlers, d.handlers[eventType])
 	return handlers

@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
-	internaldomain "github.com/example/pericarp/internal/domain"
-	pkgdomain "github.com/example/pericarp/pkg/domain"
-	pkginfra "github.com/example/pericarp/pkg/infrastructure"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 )
 
 // TestEventDispatcherIntegration tests the EventDispatcher with Watermill channels
@@ -336,7 +336,7 @@ func testHandlerErrors(t *testing.T) {
 		eventTypes: []string{"UserCreated"},
 		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
 			event := envelope.Event()
-			
+
 			// Fail if aggregate ID contains "fail"
 			if contains(event.AggregateID(), "fail") {
 				return fmt.Errorf("simulated handler error")
@@ -651,11 +651,11 @@ func (e *TestEnvelope) Metadata() map[string]interface{} {
 
 // Helper functions
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || 
-		(len(s) > len(substr) && 
-			(s[:len(substr)] == substr || 
-			 s[len(s)-len(substr):] == substr || 
-			 containsSubstring(s, substr))))
+	return len(s) >= len(substr) && (s == substr ||
+		(len(s) > len(substr) &&
+			(s[:len(substr)] == substr ||
+				s[len(s)-len(substr):] == substr ||
+				containsSubstring(s, substr))))
 }
 
 func containsSubstring(s, substr string) bool {

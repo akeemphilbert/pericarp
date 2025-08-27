@@ -1,0 +1,30 @@
+package application
+
+import (
+	"errors"
+
+	"github.com/google/uuid"
+)
+
+{{range .Commands}}
+// {{.Name}} represents a command to {{.Description}}
+type {{.Name}} struct {
+	{{range .Properties}}{{.Name | pascalCase}} {{.Type | goType}} `{{jsonTag .Name .Required}}{{if .Validation}} {{validationTag .}}{{end}}`
+	{{end}}
+}
+
+// CommandType returns the command type identifier
+func (c {{.Name}}) CommandType() string {
+	return "{{.Name}}"
+}
+
+// Validate validates the command data
+func (c {{.Name}}) Validate() error {
+	{{range .Properties}}{{if .Required}}if c.{{.Name | pascalCase}} == {{.Type | goType | zeroValue}} {
+		return errors.New("{{.Name | snakeCase}} is required")
+	}
+	{{end}}{{end}}
+	return nil
+}
+
+{{end}}

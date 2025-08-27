@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // testEvent implements domain.Event for testing

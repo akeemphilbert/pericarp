@@ -22,7 +22,7 @@ package application
 import (
 	"context"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // Payload wraps request data with metadata for unified handler signatures.
@@ -171,21 +171,21 @@ type Query interface {
 // Example command handler:
 //
 //	func (h *CreateUserHandler) Handle(
-//	    ctx context.Context, 
-//	    log domain.Logger, 
+//	    ctx context.Context,
+//	    log domain.Logger,
 //	    p Payload[CreateUserCommand],
 //	) (Response[struct{}], error) {
 //	    log.Info("Creating user", "email", p.Data.Email)
-//	    
+//
 //	    user, err := domain.NewUser(p.Data.Email, p.Data.Name)
 //	    if err != nil {
 //	        return Response[struct{}]{Error: err}, err
 //	    }
-//	    
+//
 //	    if err := h.userRepo.Save(ctx, user); err != nil {
 //	        return Response[struct{}]{Error: err}, err
 //	    }
-//	    
+//
 //	    return Response[struct{}]{
 //	        Data: struct{}{},
 //	        Metadata: map[string]any{"userId": user.ID()},
@@ -195,17 +195,17 @@ type Query interface {
 // Example query handler:
 //
 //	func (h *GetUserHandler) Handle(
-//	    ctx context.Context, 
-//	    log domain.Logger, 
+//	    ctx context.Context,
+//	    log domain.Logger,
 //	    p Payload[GetUserQuery],
 //	) (Response[UserView], error) {
 //	    log.Debug("Getting user", "userId", p.Data.UserID)
-//	    
+//
 //	    user, err := h.userRepo.Load(ctx, p.Data.UserID)
 //	    if err != nil {
 //	        return Response[UserView]{Error: err}, err
 //	    }
-//	    
+//
 //	    view := UserView{ID: user.ID(), Email: user.Email()}
 //	    return Response[UserView]{
 //	        Data: view,

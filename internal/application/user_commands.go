@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/example/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/application"
 	"github.com/google/uuid"
 )
 

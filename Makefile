@@ -16,6 +16,15 @@ build: ## Build the library and demo application
 build-demo: ## Build the demo application
 	go build -o bin/demo ./cmd/demo
 
+build-cli: ## Build the Pericarp CLI
+	./scripts/build.sh
+
+build-cli-release: ## Build CLI for multiple platforms
+	./scripts/build-release.sh
+
+install-cli: ## Install CLI via go install
+	go install ./cmd/pericarp
+
 # Test targets
 test: test-unit test-bdd ## Run all tests
 

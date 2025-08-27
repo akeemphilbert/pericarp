@@ -1,7 +1,7 @@
 package infrastructure
 
 import (
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 	"go.uber.org/fx"
 )
 

@@ -4,12 +4,12 @@ import (
 	"context"
 	"time"
 
-	internalapp "github.com/example/pericarp/internal/application"
-	internalappmocks "github.com/example/pericarp/internal/application/mocks"
-	internaldomain "github.com/example/pericarp/internal/domain"
-	internaldomainmocks "github.com/example/pericarp/in
-	pkgdomain "github.com/example/pericarp/pkg/domain"
-	pkgdomainmocks "github.com/example/pericarp/pkg/domain/mocks"
+	internalapp "github.com/akeemphilbert/pericarp/internal/application"
+	internalappmocks "github.com/akeemphilbert/pericarp/internal/application/mocks"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	internaldomainmocks "github.com/akeemphilbert/pericarp/in
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	pkgdomainmocks "github.com/akeemphilbert/pericarp/pkg/domain/mocks"
 p
 )
 

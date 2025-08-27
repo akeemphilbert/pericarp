@@ -3,7 +3,7 @@ package examples
 import (
 	"testing"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 func TestNewUserWithStandardEvents(t *testing.T) {

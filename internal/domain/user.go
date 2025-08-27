@@ -6,7 +6,7 @@ package domain
 import (
 	"errors"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 	"github.com/google/uuid"
 )
 

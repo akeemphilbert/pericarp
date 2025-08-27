@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/pericarp/pkg/application"
-	"github.com/example/pericarp/pkg/domain"
-	"github.com/example/pericarp/pkg/infrastructure"
+	"github.com/akeemphilbert/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/infrastructure"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 )
@@ -55,7 +55,7 @@ func TestPericarpModule(t *testing.T) {
 
 			// Test basic functionality
 			logger.Info("Pericarp module test", "status", "success")
-			
+
 			// Test event store with empty events
 			ctx := context.Background()
 			events := []domain.Event{}

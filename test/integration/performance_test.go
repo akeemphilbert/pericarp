@@ -16,11 +16,11 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	internaldomain "github.com/example/pericarp/internal/domain"
-	internalapp "github.com/example/pericarp/internal/application"
-	internalinfra "github.com/example/pericarp/internal/infrastructure"
-	pkgdomain "github.com/example/pericarp/pkg/domain"
-	pkginfra "github.com/example/pericarp/pkg/infrastructure"
+	internalapp "github.com/akeemphilbert/pericarp/internal/application"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	internalinfra "github.com/akeemphilbert/pericarp/internal/infrastructure"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 )
 
 // TestPerformanceAndConcurrency runs performance and concurrency tests
@@ -167,7 +167,7 @@ func testConcurrentUserOperations(t *testing.T, system *TestSystem) {
 
 			for i := 0; i < operationsPerGoroutine; i++ {
 				userID := uuid.New()
-				
+
 				// Create user
 				createCmd := internalapp.CreateUserCommand{
 					ID:    userID,
@@ -319,7 +319,7 @@ func testLargeEventStreamPerformance(t *testing.T, system *TestSystem) {
 	// Test reconstruction performance
 	t.Log("Reconstructing aggregate from large event stream...")
 	reconstructStart := time.Now()
-	
+
 	events := make([]pkgdomain.Event, len(envelopes))
 	for i, envelope := range envelopes {
 		events[i] = envelope.Event()
@@ -327,7 +327,7 @@ func testLargeEventStreamPerformance(t *testing.T, system *TestSystem) {
 
 	reconstructedUser := &internaldomain.User{}
 	reconstructedUser.LoadFromHistory(events)
-	
+
 	reconstructDuration := time.Since(reconstructStart)
 
 	t.Logf("Reconstructed aggregate in %v", reconstructDuration)
@@ -437,13 +437,13 @@ func testQueryPerformance(t *testing.T, system *TestSystem) {
 		}
 
 		listDuration := time.Since(listStart)
-		t.Logf("List query (page size %d) completed in %v, returned %d users", 
+		t.Logf("List query (page size %d) completed in %v, returned %d users",
 			pageSize, listDuration, len(result.Users))
 
 		// Performance assertion for list queries
 		maxListDuration := 1 * time.Second
 		if listDuration > maxListDuration {
-			t.Errorf("list query too slow for page size %d: %v (max: %v)", 
+			t.Errorf("list query too slow for page size %d: %v (max: %v)",
 				pageSize, listDuration, maxListDuration)
 		}
 	}
@@ -473,7 +473,7 @@ func testQueryPerformance(t *testing.T, system *TestSystem) {
 func testConcurrentReadWrite(t *testing.T, system *TestSystem) {
 	ctx := context.Background()
 	duration := 10 * time.Second
-	
+
 	t.Logf("Running concurrent read/write test for %v...", duration)
 
 	var wg sync.WaitGroup
@@ -490,7 +490,7 @@ func testConcurrentReadWrite(t *testing.T, system *TestSystem) {
 		wg.Add(1)
 		go func(writerID int) {
 			defer wg.Done()
-			
+
 			for time.Now().Before(deadline) {
 				userID := uuid.New()
 				cmd := internalapp.CreateUserCommand{
@@ -517,7 +517,7 @@ func testConcurrentReadWrite(t *testing.T, system *TestSystem) {
 		wg.Add(1)
 		go func(readerID int) {
 			defer wg.Done()
-			
+
 			for time.Now().Before(deadline) {
 				// List users
 				listQuery := internalapp.ListUsersQuery{

@@ -3,7 +3,7 @@ package domain
 import (
 	"testing"
 
-	pkgdomain "github.com/example/pericarp/pkg/domain"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
 	"github.com/google/uuid"
 )
 

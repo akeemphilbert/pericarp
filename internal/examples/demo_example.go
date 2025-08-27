@@ -1,11 +1,11 @@
 package examples
 
 import (
-	"github.com/example/pericarp/internal/application"
-	"github.com/example/pericarp/internal/domain"
-	"github.com/example/pericarp/internal/infrastructure"
-	pkgapp "github.com/example/pericarp/pkg/application"
-	pkginfra "github.com/example/pericarp/pkg/infrastructure"
+	"github.com/akeemphilbert/pericarp/internal/application"
+	"github.com/akeemphilbert/pericarp/internal/domain"
+	"github.com/akeemphilbert/pericarp/internal/infrastructure"
+	pkgapp "github.com/akeemphilbert/pericarp/pkg/application"
+	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 )
 
 // DemoRegistrationExample shows how to register handlers with different middleware combinations

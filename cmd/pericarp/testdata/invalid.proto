@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+// This is an invalid proto file with syntax errors
+message InvalidMessage {
+  string name = ; // Missing field number
+  invalid_type field = 2; // Invalid type
+}

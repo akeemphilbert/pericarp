@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // PerformanceMonitor provides performance monitoring capabilities

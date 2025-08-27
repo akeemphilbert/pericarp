@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	internalapp "github.com/example/pericarp/internal/application"
-	internaldomain "github.com/example/pericarp/internal/domain"
-	pkgdomain "github.com/example/pericarp/pkg/domain"
+	internalapp "github.com/akeemphilbert/pericarp/internal/application"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
 	"github.com/google/uuid"
 )
 

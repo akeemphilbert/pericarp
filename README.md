@@ -47,7 +47,7 @@ func main() {
 The `StandardEvent` provides a single, flexible way to create domain events without needing to define specific event types for each use case.
 
 ```go
-import "github.com/example/pericarp/pkg/domain"
+import "github.com/akeemphilbert/pericarp/pkg/domain"
 
 // User creation event
 event := domain.NewEvent("user-123", "User", "Created", map[string]interface{}{

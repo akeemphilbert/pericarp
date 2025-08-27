@@ -4,8 +4,8 @@ import (
 	"context"
 	"math"
 
-	pkgapp "github.com/example/pericarp/pkg/application"
-	"github.com/example/pericarp/pkg/domain"
+	pkgapp "github.com/akeemphilbert/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // GetUserHandler handles GetUserQuery

@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/example/pericarp/internal/application"
-	"github.com/example/pericarp/internal/domain"
-	"github.com/example/pericarp/internal/infrastructure"
-	pkgapp "github.com/example/pericarp/pkg/application"
-	pkgdomain "github.com/example/pericarp/pkg/domain"
-	pkginfra "github.com/example/pericarp/pkg/infrastructure"
+	"github.com/akeemphilbert/pericarp/internal/application"
+	"github.com/akeemphilbert/pericarp/internal/domain"
+	"github.com/akeemphilbert/pericarp/internal/infrastructure"
+	pkgapp "github.com/akeemphilbert/pericarp/pkg/application"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 	"go.uber.org/fx"
 )
 
@@ -137,7 +137,7 @@ func CreateUserTaggedHandlerProvider(handler *application.CreateUserHandler) pkg
 			if !ok {
 				return pkgapp.Response[struct{}]{}, fmt.Errorf("invalid command type")
 			}
-			
+
 			err := handler.Handle(ctx, log, cmd)
 			return pkgapp.Response[struct{}]{Data: struct{}{}}, err
 		},
@@ -153,7 +153,7 @@ func UpdateUserEmailTaggedHandlerProvider(handler *application.UpdateUserEmailHa
 			if !ok {
 				return pkgapp.Response[struct{}]{}, fmt.Errorf("invalid command type")
 			}
-			
+
 			err := handler.Handle(ctx, log, cmd)
 			return pkgapp.Response[struct{}]{Data: struct{}{}}, err
 		},
@@ -169,7 +169,7 @@ func GetUserTaggedHandlerProvider(handler *application.GetUserHandler) pkgapp.Ta
 			if !ok {
 				return pkgapp.Response[any]{}, fmt.Errorf("invalid query type")
 			}
-			
+
 			result, err := handler.Handle(ctx, log, query)
 			return pkgapp.Response[any]{Data: result}, err
 		},
@@ -185,7 +185,7 @@ func GetUserByEmailTaggedHandlerProvider(handler *application.GetUserByEmailHand
 			if !ok {
 				return pkgapp.Response[any]{}, fmt.Errorf("invalid query type")
 			}
-			
+
 			result, err := handler.Handle(ctx, log, query)
 			return pkgapp.Response[any]{Data: result}, err
 		},
@@ -201,7 +201,7 @@ func ListUsersTaggedHandlerProvider(handler *application.ListUsersHandler) pkgap
 			if !ok {
 				return pkgapp.Response[any]{}, fmt.Errorf("invalid query type")
 			}
-			
+
 			result, err := handler.Handle(ctx, log, query)
 			return pkgapp.Response[any]{Data: result}, err
 		},

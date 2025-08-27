@@ -1,0 +1,132 @@
+package application
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+	"github.com/akeemphilbert/pericarp/pkg/application"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
+example.com/project/internal/domain
+)
+
+{{$entityName := .Entity.Name}}
+{{$entityLower := .Entity.Name | lower}}
+
+// Create{{$entityName}}Handler handles Create{{$entityName}}Command
+type Create{{$entityName}}Handler struct {
+	repository domain.{{$entityName}}Repository
+	logger     domain.Logger
+}
+
+// NewCreate{{$entityName}}Handler creates a new Create{{$entityName}}Handler
+func NewCreate{{$entityName}}Handler(repository domain.{{$entityName}}Repository, logger domain.Logger) *Create{{$entityName}}Handler {
+	return &Create{{$entityName}}Handler{
+		repository: repository,
+		logger:     logger,
+	}
+}
+
+// Handle processes the Create{{$entityName}}Command
+func (h *Create{{$entityName}}Handler) Handle(ctx context.Context, cmd Create{{$entityName}}Command) error {
+	h.logger.Info(fmt.Sprintf("Creating {{$entityLower}}: %+v", cmd))
+
+	// Validate command
+	if err := cmd.Validate(); err != nil {
+		return fmt.Errorf("invalid command: %w", err)
+	}
+
+	// Create new {{$entityLower}} aggregate
+	{{$entityLower}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Entity.Properties)}}{{if $i}}, {{end}}cmd.{{$prop.Name | pascalCase}}{{end}})
+	if err != nil {
+		return fmt.Errorf("failed to create {{$entityLower}}: %w", err)
+	}
+
+	// Save to repository
+	if err := h.repository.Save(ctx, {{$entityLower}}); err != nil {
+		return fmt.Errorf("failed to save {{$entityLower}}: %w", err)
+	}
+
+	h.logger.Info(fmt.Sprintf("Successfully created {{$entityLower}} with ID: %s", {{$entityLower}}.ID()))
+	return nil
+}
+
+// Update{{$entityName}}Handler handles Update{{$entityName}}Command
+type Update{{$entityName}}Handler struct {
+	repository domain.{{$entityName}}Repository
+	logger     domain.Logger
+}
+
+// NewUpdate{{$entityName}}Handler creates a new Update{{$entityName}}Handler
+func NewUpdate{{$entityName}}Handler(repository domain.{{$entityName}}Repository, logger domain.Logger) *Update{{$entityName}}Handler {
+	return &Update{{$entityName}}Handler{
+		repository: repository,
+		logger:     logger,
+	}
+}
+
+// Handle processes the Update{{$entityName}}Command
+func (h *Update{{$entityName}}Handler) Handle(ctx context.Context, cmd Update{{$entityName}}Command) error {
+	h.logger.Info(fmt.Sprintf("Updating {{$entityLower}}: %+v", cmd))
+
+	// Validate command
+	if err := cmd.Validate(); err != nil {
+		return fmt.Errorf("invalid command: %w", err)
+	}
+
+	// Load existing {{$entityLower}}
+	{{$entityLower}}, err := h.repository.Load(ctx, cmd.Id)
+	if err != nil {
+		return fmt.Errorf("failed to load {{$entityLower}}: %w", err)
+	}
+
+	// Update properties
+	{{range .Entity.Properties}}{{if not .Required}}{{$entityLower}}.Set{{.Name | pascalCase}}(cmd.{{.Name | pascalCase}})
+	{{end}}{{end}}
+
+	// Save updated {{$entityLower}}
+	if err := h.repository.Save(ctx, {{$entityLower}}); err != nil {
+		return fmt.Errorf("failed to save updated {{$entityLower}}: %w", err)
+	}
+
+	h.logger.Info(fmt.Sprintf("Successfully updated {{$entityLower}} with ID: %s", {{$entityLower}}.ID()))
+	return nil
+}
+
+// Delete{{$entityName}}Handler handles Delete{{$entityName}}Command
+type Delete{{$entityName}}Handler struct {
+	repository domain.{{$entityName}}Repository
+	logger     domain.Logger
+}
+
+// NewDelete{{$entityName}}Handler creates a new Delete{{$entityName}}Handler
+func NewDelete{{$entityName}}Handler(repository domain.{{$entityName}}Repository, logger domain.Logger) *Delete{{$entityName}}Handler {
+	return &Delete{{$entityName}}Handler{
+		repository: repository,
+		logger:     logger,
+	}
+}
+
+// Handle processes the Delete{{$entityName}}Command
+func (h *Delete{{$entityName}}Handler) Handle(ctx context.Context, cmd Delete{{$entityName}}Command) error {
+	h.logger.Info(fmt.Sprintf("Deleting {{$entityLower}} with ID: %s", cmd.Id))
+
+	// Validate command
+	if err := cmd.Validate(); err != nil {
+		return fmt.Errorf("invalid command: %w", err)
+	}
+
+	// Load existing {{$entityLower}} to ensure it exists
+	{{$entityLower}}, err := h.repository.Load(ctx, cmd.Id)
+	if err != nil {
+		return fmt.Errorf("failed to load {{$entityLower}} for deletion: %w", err)
+	}
+
+	// TODO: Implement soft delete or hard delete based on business requirements
+	// For now, this is a placeholder that would need to be implemented
+	// based on the specific repository implementation
+	_ = {{$entityLower}} // Prevent unused variable error
+
+	h.logger.Info(fmt.Sprintf("Successfully deleted {{$entityLower}} with ID: %s", cmd.Id))
+	return fmt.Errorf("delete operation not yet implemented")
+}

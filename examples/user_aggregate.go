@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // User demonstrates how to use the Entity struct as a base for concrete aggregates.

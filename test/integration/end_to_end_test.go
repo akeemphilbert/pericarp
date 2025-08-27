@@ -14,12 +14,12 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	internalapp "github.com/example/pericarp/internal/application"
-	internaldomain "github.com/example/pericarp/internal/domain"
-	internalinfra "github.com/example/pericarp/internal/infrastructure"
-	pkgapp "github.com/example/pericarp/pkg/application"
-	pkgdomain "github.com/example/pericarp/pkg/domain"
-	pkginfra "github.com/example/pericarp/pkg/infrastructure"
+	internalapp "github.com/akeemphilbert/pericarp/internal/application"
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	internalinfra "github.com/akeemphilbert/pericarp/internal/infrastructure"
+	pkgapp "github.com/akeemphilbert/pericarp/pkg/application"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 )
 
 // TestEndToEndFlow tests complete command and query flows
@@ -84,14 +84,14 @@ func testEndToEndWithDatabase(t *testing.T, driver, dsn string) {
 
 // TestSystem encapsulates all system components
 type TestSystem struct {
-	DB                    *gorm.DB
-	Logger                pkgdomain.Logger
-	EventStore            pkgdomain.EventStore
-	EventDispatcher       pkgdomain.EventDispatcher
-	UnitOfWork            pkgdomain.UnitOfWork
-	UserRepo              internaldomain.UserRepository
-	UserReadModelRepo     internalapp.UserReadModelRepository
-	CreateUserHandler     *internalapp.CreateUserHandler
+	DB                     *gorm.DB
+	Logger                 pkgdomain.Logger
+	EventStore             pkgdomain.EventStore
+	EventDispatcher        pkgdomain.EventDispatcher
+	UnitOfWork             pkgdomain.UnitOfWork
+	UserRepo               internaldomain.UserRepository
+	UserReadModelRepo      internalapp.UserReadModelRepository
+	CreateUserHandler      *internalapp.CreateUserHandler
 	UpdateUserEmailHandler *internalapp.UpdateUserEmailHandler
 	UpdateUserNameHandler  *internalapp.UpdateUserNameHandler
 	DeactivateUserHandler  *internalapp.DeactivateUserHandler

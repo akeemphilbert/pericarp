@@ -3,8 +3,8 @@ package infrastructure
 import (
 	"context"
 
-	"github.com/example/pericarp/internal/application"
-	"github.com/example/pericarp/internal/domain"
+	"github.com/akeemphilbert/pericarp/internal/application"
+	"github.com/akeemphilbert/pericarp/internal/domain"
 	"github.com/google/uuid"
 )
 

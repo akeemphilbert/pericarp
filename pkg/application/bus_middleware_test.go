@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/example/pericarp/pkg/domain"
+	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // Test middleware that tracks execution order
