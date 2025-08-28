@@ -1,17 +1,17 @@
 package application
 
-//go:generate moq -out mocks/user_read_model_repository_mock.go . UserReadModelRepository
+//go:generate moq -out mocks/user_read_model_repository_mock.go -pkg mocks . UserReadModelRepository
 
 import (
 	"context"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // UserReadModel represents a user in the read model optimized for queries
 type UserReadModel struct {
-	ID        uuid.UUID
+	ID        ksuid.KSUID
 	Email     string
 	Name      string
 	IsActive  bool
@@ -22,7 +22,7 @@ type UserReadModel struct {
 // UserReadModelRepository defines the interface for querying user read models
 type UserReadModelRepository interface {
 	// GetByID retrieves a user read model by ID
-	GetByID(ctx context.Context, id uuid.UUID) (*UserReadModel, error)
+	GetByID(ctx context.Context, id ksuid.KSUID) (*UserReadModel, error)
 
 	// GetByEmail retrieves a user read model by email
 	GetByEmail(ctx context.Context, email string) (*UserReadModel, error)
@@ -34,7 +34,7 @@ type UserReadModelRepository interface {
 	Save(ctx context.Context, user *UserReadModel) error
 
 	// Delete removes a user read model
-	Delete(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, id ksuid.KSUID) error
 
 	// Count returns the total number of users with optional active filter
 	Count(ctx context.Context, active *bool) (int, error)

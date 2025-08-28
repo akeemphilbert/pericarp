@@ -176,7 +176,7 @@ func TestGeneratedCode_StructureValidation(t *testing.T) {
 		// Check for repository interface
 		assert.Contains(t, contentStr, "type UserRepository interface")
 		assert.Contains(t, contentStr, "Save(ctx context.Context, user *User) error")
-		assert.Contains(t, contentStr, "Load(ctx context.Context, id uuid.UUID) (*User, error)")
+		assert.Contains(t, contentStr, "Load(ctx context.Context, id string) (*User, error)")
 		assert.Contains(t, contentStr, "package domain")
 	})
 

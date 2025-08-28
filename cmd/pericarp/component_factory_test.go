@@ -64,7 +64,7 @@ func TestPericarpComponentFactory_GenerateEntity_EnsuresIDField(t *testing.T) {
 	file, err := factory.GenerateEntity(entity)
 
 	assert.NoError(t, err)
-	assert.Contains(t, file.Content, "Id uuid.UUID")
+	assert.Contains(t, file.Content, "Id ksuid.KSUID")
 }
 
 func TestPericarpComponentFactory_GenerateRepository(t *testing.T) {
@@ -318,7 +318,7 @@ func TestPericarpComponentFactory_filterRequiredProperties(t *testing.T) {
 	require.NoError(t, err)
 
 	properties := []Property{
-		{Name: "Id", Type: "uuid.UUID", Required: true},
+		{Name: "Id", Type: "ksuid.KSUID", Required: true},
 		{Name: "Email", Type: "string", Required: true},
 		{Name: "Name", Type: "string", Required: true},
 		{Name: "IsActive", Type: "bool", Required: false},
@@ -356,7 +356,7 @@ func TestPericarpComponentFactory_ensureIDField(t *testing.T) {
 			entity: Entity{
 				Name: "User",
 				Properties: []Property{
-					{Name: "Id", Type: "uuid.UUID", Required: true},
+					{Name: "Id", Type: "ksuid.KSUID", Required: true},
 					{Name: "Email", Type: "string", Required: true},
 				},
 			},
@@ -367,7 +367,7 @@ func TestPericarpComponentFactory_ensureIDField(t *testing.T) {
 			entity: Entity{
 				Name: "User",
 				Properties: []Property{
-					{Name: "id", Type: "uuid.UUID", Required: true},
+					{Name: "id", Type: "ksuid.KSUID", Required: true},
 					{Name: "Email", Type: "string", Required: true},
 				},
 			},
@@ -413,7 +413,7 @@ func TestPericarpComponentFactory_GenerateProjectStructure_FollowsConventions(t 
 			{
 				Name: "Order",
 				Properties: []Property{
-					{Name: "UserId", Type: "uuid.UUID", Required: true},
+					{Name: "UserId", Type: "ksuid.KSUID", Required: true},
 					{Name: "Total", Type: "float64", Required: true},
 				},
 			},

@@ -9,7 +9,7 @@ import (
 	internalapp "github.com/akeemphilbert/pericarp/internal/application"
 	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // InMemoryEventStore provides an in-memory implementation of EventStore for testing
@@ -35,7 +35,7 @@ func (s *InMemoryEventStore) Save(ctx context.Context, events []pkgdomain.Event)
 	for _, event := range events {
 		envelope := &TestEnvelope{
 			event:     event,
-			eventID:   uuid.New().String(),
+			eventID:   ksuid.New().String(),
 			timestamp: time.Now(),
 			metadata: map[string]interface{}{
 				"aggregate_id": event.AggregateID(),
@@ -227,14 +227,14 @@ func (u *InMemoryUnitOfWork) Rollback() error {
 
 // InMemoryUserRepository provides an in-memory implementation of UserRepository for testing
 type InMemoryUserRepository struct {
-	users map[uuid.UUID]*internaldomain.User
+	users map[string]*internaldomain.User
 	mu    sync.RWMutex
 }
 
 // NewInMemoryUserRepository creates a new in-memory user repository
 func NewInMemoryUserRepository() *InMemoryUserRepository {
 	return &InMemoryUserRepository{
-		users: make(map[uuid.UUID]*internaldomain.User),
+		users: make(map[string]*internaldomain.User),
 	}
 }
 
@@ -245,18 +245,19 @@ func (r *InMemoryUserRepository) Save(user *internaldomain.User) error {
 
 	// Create a copy to avoid shared state issues
 	userCopy := *user
-	r.users[user.UserID()] = &userCopy
+	r.users[user.ID()] = &userCopy
 	return nil
 }
 
 // FindByID retrieves a user by ID
-func (r *InMemoryUserRepository) FindByID(id uuid.UUID) (*internaldomain.User, error) {
+func (r *InMemoryUserRepository) FindByID(id ksuid.KSUID) (*internaldomain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	user, exists := r.users[id]
+	aggregateID := id.String() // ✅ Correct conversion
+	user, exists := r.users[aggregateID]
 	if !exists {
-		return nil, fmt.Errorf("user not found: %s", id)
+		return nil, fmt.Errorf("user not found: %s", aggregateID)
 	}
 
 	// Return a copy to avoid shared state issues
@@ -281,16 +282,17 @@ func (r *InMemoryUserRepository) FindByEmail(email string) (*internaldomain.User
 }
 
 // Delete removes a user
-func (r *InMemoryUserRepository) Delete(id uuid.UUID) error {
+func (r *InMemoryUserRepository) Delete(id ksuid.KSUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	delete(r.users, id)
+	aggregateID := id.String() // ✅ Correct conversion
+	delete(r.users, aggregateID)
 	return nil
 }
 
 // LoadFromVersion loads a user from a specific version (not implemented for in-memory)
-func (r *InMemoryUserRepository) LoadFromVersion(id uuid.UUID, version int) (*internaldomain.User, error) {
+func (r *InMemoryUserRepository) LoadFromVersion(id ksuid.KSUID, version int) (*internaldomain.User, error) {
 	return r.FindByID(id)
 }
 
@@ -298,24 +300,24 @@ func (r *InMemoryUserRepository) LoadFromVersion(id uuid.UUID, version int) (*in
 func (r *InMemoryUserRepository) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.users = make(map[uuid.UUID]*internaldomain.User)
+	r.users = make(map[ksuid.KSUID]*internaldomain.User)
 }
 
 // InMemoryUserReadModelRepository provides an in-memory implementation of UserReadModelRepository for testing
 type InMemoryUserReadModelRepository struct {
-	users map[uuid.UUID]*internalapp.UserReadModel
+	users map[ksuid.KSUID]*internalapp.UserReadModel
 	mu    sync.RWMutex
 }
 
 // NewInMemoryUserReadModelRepository creates a new in-memory user read model repository
 func NewInMemoryUserReadModelRepository() *InMemoryUserReadModelRepository {
 	return &InMemoryUserReadModelRepository{
-		users: make(map[uuid.UUID]*internalapp.UserReadModel),
+		users: make(map[ksuid.KSUID]*internalapp.UserReadModel),
 	}
 }
 
 // GetByID retrieves a user read model by ID
-func (r *InMemoryUserReadModelRepository) GetByID(ctx context.Context, id uuid.UUID) (*internalapp.UserReadModel, error) {
+func (r *InMemoryUserReadModelRepository) GetByID(ctx context.Context, id ksuid.KSUID) (*internalapp.UserReadModel, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -386,7 +388,7 @@ func (r *InMemoryUserReadModelRepository) Save(ctx context.Context, user *intern
 }
 
 // Delete removes a user read model
-func (r *InMemoryUserReadModelRepository) Delete(ctx context.Context, id uuid.UUID) error {
+func (r *InMemoryUserReadModelRepository) Delete(ctx context.Context, id ksuid.KSUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -413,5 +415,5 @@ func (r *InMemoryUserReadModelRepository) Count(ctx context.Context, active *boo
 func (r *InMemoryUserReadModelRepository) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.users = make(map[uuid.UUID]*internalapp.UserReadModel)
+	r.users = make(map[ksuid.KSUID]*internalapp.UserReadModel)
 }

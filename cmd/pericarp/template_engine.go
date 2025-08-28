@@ -55,6 +55,10 @@ func NewTemplateEngine(logger CliLogger) (*TemplateEngine, error) {
 		"filterRequired": engine.filterRequired,
 		"filterOptional": engine.filterOptional,
 		"last":           engine.isLast,
+		"ternary":        engine.ternary,
+		"gt":             engine.gt,
+		"len":            engine.length,
+		"default":        engine.defaultValue,
 	}
 
 	// Load all templates from embedded filesystem
@@ -302,8 +306,8 @@ func (te *TemplateEngine) getZeroValue(goType string) string {
 		return "false"
 	case "time.Time":
 		return "time.Time{}"
-	case "uuid.UUID":
-		return "uuid.UUID{}"
+	case "ksuid.KSUID":
+		return "ksuid.KSUID{}"
 	default:
 		if strings.HasPrefix(goType, "*") {
 			return "nil"
@@ -334,7 +338,7 @@ func (te *TemplateEngine) toGoType(genericType string) string {
 	case "bool", "boolean":
 		return "bool"
 	case "uuid", "guid":
-		return "uuid.UUID"
+		return "ksuid.KSUID"
 	case "time", "datetime", "timestamp":
 		return "time.Time"
 	case "date":
@@ -410,5 +414,61 @@ func (te *TemplateEngine) isLast(index int, slice interface{}) bool {
 		return index == len(s)-1
 	default:
 		return false
+	}
+}
+
+// ternary implements ternary operator (condition ? trueValue : falseValue)
+func (te *TemplateEngine) ternary(condition bool, trueValue, falseValue interface{}) interface{} {
+	if condition {
+		return trueValue
+	}
+	return falseValue
+}
+
+// gt checks if a > b
+func (te *TemplateEngine) gt(a, b interface{}) bool {
+	switch av := a.(type) {
+	case int:
+		if bv, ok := b.(int); ok {
+			return av > bv
+		}
+	case int64:
+		if bv, ok := b.(int64); ok {
+			return av > bv
+		}
+	}
+	return false
+}
+
+// length returns the length of a slice, array, map, or string
+func (te *TemplateEngine) length(v interface{}) int {
+	switch val := v.(type) {
+	case []Entity:
+		return len(val)
+	case []Property:
+		return len(val)
+	case []string:
+		return len(val)
+	case string:
+		return len(val)
+	case map[string]interface{}:
+		return len(val)
+	default:
+		return 0
+	}
+}
+
+// defaultValue returns the default value if the input is empty
+func (te *TemplateEngine) defaultValue(value, defaultVal interface{}) interface{} {
+	switch v := value.(type) {
+	case string:
+		if v == "" {
+			return defaultVal
+		}
+		return v
+	case nil:
+		return defaultVal
+	default:
+		return value
 	}
 }

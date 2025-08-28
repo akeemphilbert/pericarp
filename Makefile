@@ -17,7 +17,7 @@ build-demo: ## Build the demo application
 	go build -o bin/demo ./cmd/demo
 
 build-cli: ## Build the Pericarp CLI
-	./scripts/build.sh
+	go build -o bin/pericarp ./cmd/pericarp
 
 build-cli-release: ## Build CLI for multiple platforms
 	./scripts/build-release.sh

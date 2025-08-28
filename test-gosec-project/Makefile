@@ -1,7 +1,7 @@
-# Generated Makefile for {{.ProjectName}}
+# Generated Makefile for test-gosec-project
 
 # Variables
-BINARY_NAME={{.ProjectName}}
+BINARY_NAME=test-gosec-project
 BINARY_PATH=bin/$(BINARY_NAME)
 COVERAGE_FILE=coverage.out
 COVERAGE_HTML=coverage.html
@@ -169,11 +169,11 @@ clean: ## Clean build artifacts
 	@go clean -testcache
 	@echo "✅ Clean completed"
 
-{{if .HasDatabase}}
+
 # Database (if applicable)
 db-migrate: ## Run database migrations
 	@echo "🗄️  Running database migrations..."
-	@go run ./cmd/{{.ProjectName}} migrate
+	@go run ./cmd/test-gosec-project migrate
 
 db-reset: ## Reset database
 	@echo "🗄️  Resetting database..."
@@ -182,8 +182,8 @@ db-reset: ## Reset database
 
 db-seed: ## Seed database with test data
 	@echo "🌱 Seeding database..."
-	@go run ./cmd/{{.ProjectName}} seed
-{{end}}
+	@go run ./cmd/test-gosec-project seed
+
 
 # Docker (if applicable)
 docker-build: ## Build Docker image

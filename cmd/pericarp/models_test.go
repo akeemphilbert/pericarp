@@ -19,7 +19,7 @@ func TestDomainModel(t *testing.T) {
 					{
 						Name: "User",
 						Properties: []Property{
-							{Name: "id", Type: "uuid.UUID", Required: true},
+							{Name: "id", Type: "ksuid.KSUID", Required: true},
 							{Name: "email", Type: "string", Required: true},
 						},
 					},
@@ -42,7 +42,7 @@ func TestDomainModel(t *testing.T) {
 					{
 						Name: "User",
 						Properties: []Property{
-							{Name: "id", Type: "uuid.UUID", Required: true},
+							{Name: "id", Type: "ksuid.KSUID", Required: true},
 							{Name: "email", Type: "string", Required: true},
 						},
 					},
@@ -101,7 +101,7 @@ func TestEntity(t *testing.T) {
 			entity: Entity{
 				Name: "User",
 				Properties: []Property{
-					{Name: "id", Type: "uuid.UUID", Required: true},
+					{Name: "id", Type: "ksuid.KSUID", Required: true},
 					{Name: "email", Type: "string", Required: true},
 					{Name: "name", Type: "string", Required: false},
 				},
@@ -123,7 +123,7 @@ func TestEntity(t *testing.T) {
 			expected: Entity{
 				Name: "User",
 				Properties: []Property{
-					{Name: "id", Type: "uuid.UUID", Required: true},
+					{Name: "id", Type: "ksuid.KSUID", Required: true},
 					{Name: "email", Type: "string", Required: true},
 					{Name: "name", Type: "string", Required: false},
 				},

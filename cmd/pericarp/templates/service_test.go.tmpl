@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"{{.ProjectName}}/internal/domain"
@@ -69,7 +69,7 @@ func Test{{.Entity.Name}}Service_Create(t *testing.T) {
 }
 
 func Test{{.Entity.Name}}Service_GetById(t *testing.T) {
-	testID := uuid.New()
+	testID := ksuid.New()
 	test{{.Entity.Name}} := &domain.{{.Entity.Name}}{
 		Id: testID,
 		{{range .Entity.Properties}}{{if ne .Name "Id"}}{{.Name}}: {{if eq .Type "string"}}"test{{.Name}}"{{else if eq .Type "int"}}123{{else}}test{{.Name}}{{end}},
@@ -78,7 +78,7 @@ func Test{{.Entity.Name}}Service_GetById(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		id      uuid.UUID
+		id      ksuid.KSUID
 		setup   func(*mocks.Mock{{.Entity.Name}}Repository, *mocks.MockLogger)
 		want    *domain.{{.Entity.Name}}
 		wantErr bool
@@ -133,7 +133,7 @@ func Test{{.Entity.Name}}Service_GetById(t *testing.T) {
 }
 
 func Test{{.Entity.Name}}Service_Update(t *testing.T) {
-	testID := uuid.New()
+	testID := ksuid.New()
 	existing{{.Entity.Name}} := &domain.{{.Entity.Name}}{
 		Id: testID,
 		{{range .Entity.Properties}}{{if ne .Name "Id"}}{{.Name}}: {{if eq .Type "string"}}"original{{.Name}}"{{else if eq .Type "int"}}123{{else}}original{{.Name}}{{end}},
@@ -142,7 +142,7 @@ func Test{{.Entity.Name}}Service_Update(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		id      uuid.UUID
+		id      ksuid.KSUID
 		request *Update{{.Entity.Name}}Request
 		setup   func(*mocks.Mock{{.Entity.Name}}Repository, *mocks.MockLogger)
 		wantErr bool
@@ -201,7 +201,7 @@ func Test{{.Entity.Name}}Service_Update(t *testing.T) {
 }
 
 func Test{{.Entity.Name}}Service_Delete(t *testing.T) {
-	testID := uuid.New()
+	testID := ksuid.New()
 	existing{{.Entity.Name}} := &domain.{{.Entity.Name}}{
 		Id: testID,
 		{{range .Entity.Properties}}{{if ne .Name "Id"}}{{.Name}}: {{if eq .Type "string"}}"test{{.Name}}"{{else if eq .Type "int"}}123{{else}}test{{.Name}}{{end}},
@@ -210,7 +210,7 @@ func Test{{.Entity.Name}}Service_Delete(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		id      uuid.UUID
+		id      ksuid.KSUID
 		setup   func(*mocks.Mock{{.Entity.Name}}Repository, *mocks.MockLogger)
 		wantErr bool
 	}{
@@ -263,12 +263,12 @@ func Test{{.Entity.Name}}Service_Delete(t *testing.T) {
 func Test{{.Entity.Name}}Service_List(t *testing.T) {
 	test{{.Entity.Name}}s := []*domain.{{.Entity.Name}}{
 		{
-			Id: uuid.New(),
+			Id: ksuid.New(),
 			{{range .Entity.Properties}}{{if ne .Name "Id"}}{{.Name}}: {{if eq .Type "string"}}"test{{.Name}}1"{{else if eq .Type "int"}}123{{else}}test{{.Name}}1{{end}},
 			{{end}}{{end}}
 		},
 		{
-			Id: uuid.New(),
+			Id: ksuid.New(),
 			{{range .Entity.Properties}}{{if ne .Name "Id"}}{{.Name}}: {{if eq .Type "string"}}"test{{.Name}}2"{{else if eq .Type "int"}}456{{else}}test{{.Name}}2{{end}},
 			{{end}}{{end}}
 		},

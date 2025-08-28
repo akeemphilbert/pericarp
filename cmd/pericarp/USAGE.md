@@ -40,6 +40,11 @@ pericarp new <project-name> [flags]
   - Creates the directory if it doesn't exist
   - Example: `--destination /workspace/services`
 
+- `--openapi <file>`: OpenAPI specification file to generate code from during project creation
+  - Creates the project structure and generates code from the OpenAPI spec in one step
+  - Equivalent to running `pericarp new` followed by `pericarp generate --openapi`
+  - Example: `--openapi user-api.yaml`
+
 - `--dry-run`: Preview what would be created without actually creating files
   - Shows all files that would be generated
   - Displays file paths and content previews (with `--verbose`)
@@ -60,10 +65,19 @@ pericarp new user-service --destination /workspace/services
 # Preview creation with verbose output
 pericarp new user-service --dry-run --verbose
 
+# Create with OpenAPI code generation
+pericarp new user-service --openapi user-api.yaml
+
+# Create from repository with OpenAPI generation
+pericarp new user-service \
+  --repo https://github.com/company/base.git \
+  --openapi user-api.yaml
+
 # Create with all options
 pericarp new user-service \
   --repo https://github.com/company/base.git \
   --destination /workspace/services \
+  --openapi user-api.yaml \
   --verbose
 ```
 
@@ -78,11 +92,29 @@ pericarp new user-service \
 ├── config.yaml.example            # Configuration template
 ├── cmd/<project-name>/main.go      # Application entry point
 ├── internal/
-│   ├── application/                # Application layer
-│   ├── domain/                     # Domain layer
-│   └── infrastructure/             # Infrastructure layer
+│   ├── application/                # Application layer (with generated handlers if --openapi used)
+│   ├── domain/                     # Domain layer (with generated entities if --openapi used)
+│   └── infrastructure/             # Infrastructure layer (with generated repos if --openapi used)
 └── test/                          # Test files and fixtures
 ```
+
+#### Integrated OpenAPI Generation
+
+When using the `--openapi` flag with the `new` command, you get:
+
+1. **Complete Project Setup**: Full project structure with all boilerplate files
+2. **Generated Domain Code**: Entities, repositories, and handlers based on your OpenAPI spec
+3. **Single Command**: No need to run separate `new` and `generate` commands
+4. **Consistent Structure**: Generated code follows the same patterns as the project template
+
+This is equivalent to running:
+```bash
+pericarp new my-service
+cd my-service
+pericarp generate --openapi api.yaml
+```
+
+But more convenient and ensures proper integration between the project structure and generated code.
 
 ### `pericarp generate`
 

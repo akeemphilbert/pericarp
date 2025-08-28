@@ -4,12 +4,13 @@ import (
 	"time"
 
 	internalapp "github.com/akeemphilbert/pericarp/internal/application"
-	i
+	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	"github.com/segmentio/ksuid"
 )
 
 // UserBuilder provides a fluent interface for building test users
 type UserBuilder struct {
-	id       uuid.UUID
+	id       ksuid.KSUID
 	email    string
 	name     string
 	isActive bool
@@ -19,7 +20,7 @@ type UserBuilder struct {
 // NewUserBuilder creates a new UserBuilder with default values
 func NewUserBuilder() *UserBuilder {
 	return &UserBuilder{
-		id:       uuid.New(),
+		id:       ksuid.New(),
 		email:    "test@example.com",
 		name:     "Test User",
 		isActive: true,
@@ -28,7 +29,7 @@ func NewUserBuilder() *UserBuilder {
 }
 
 // WithID sets the user ID
-func (b *UserBuilder) WithID(id uuid.UUID) *UserBuilder {
+func (b *UserBuilder) WithID(id ksuid.KSUID) *UserBuilder {
 	b.id = id
 	return b
 }
@@ -81,14 +82,14 @@ func NewCommandBuilder() *CommandBuilder {
 // CreateUserCommand creates a CreateUserCommand with the given parameters
 func (b *CommandBuilder) CreateUserCommand(email, name string) internalapp.CreateUserCommand {
 	return internalapp.CreateUserCommand{
-		ID:    uuid.New(),
+		ID:    ksuid.New(),
 		Email: email,
 		Name:  name,
 	}
 }
 
 // UpdateUserEmailCommand creates an UpdateUserEmailCommand
-func (b *CommandBuilder) UpdateUserEmailCommand(userID uuid.UUID, newEmail string) internalapp.UpdateUserEmailCommand {
+func (b *CommandBuilder) UpdateUserEmailCommand(userID ksuid.KSUID, newEmail string) internalapp.UpdateUserEmailCommand {
 	return internalapp.UpdateUserEmailCommand{
 		ID:       userID,
 		NewEmail: newEmail,
@@ -96,7 +97,7 @@ func (b *CommandBuilder) UpdateUserEmailCommand(userID uuid.UUID, newEmail strin
 }
 
 // UpdateUserNameCommand creates an UpdateUserNameCommand
-func (b *CommandBuilder) UpdateUserNameCommand(userID uuid.UUID, newName string) internalapp.UpdateUserNameCommand {
+func (b *CommandBuilder) UpdateUserNameCommand(userID ksuid.KSUID, newName string) internalapp.UpdateUserNameCommand {
 	return internalapp.UpdateUserNameCommand{
 		ID:      userID,
 		NewName: newName,
@@ -104,14 +105,14 @@ func (b *CommandBuilder) UpdateUserNameCommand(userID uuid.UUID, newName string)
 }
 
 // DeactivateUserCommand creates a DeactivateUserCommand
-func (b *CommandBuilder) DeactivateUserCommand(userID uuid.UUID) internalapp.DeactivateUserCommand {
+func (b *CommandBuilder) DeactivateUserCommand(userID ksuid.KSUID) internalapp.DeactivateUserCommand {
 	return internalapp.DeactivateUserCommand{
 		ID: userID,
 	}
 }
 
 // ActivateUserCommand creates an ActivateUserCommand
-func (b *CommandBuilder) ActivateUserCommand(userID uuid.UUID) internalapp.ActivateUserCommand {
+func (b *CommandBuilder) ActivateUserCommand(userID ksuid.KSUID) internalapp.ActivateUserCommand {
 	return internalapp.ActivateUserCommand{
 		ID: userID,
 	}
@@ -126,7 +127,7 @@ func NewQueryBuilder() *QueryBuilder {
 }
 
 // GetUserQuery creates a GetUserQuery
-func (b *QueryBuilder) GetUserQuery(userID uuid.UUID) internalapp.GetUserQuery {
+func (b *QueryBuilder) GetUserQuery(userID ksuid.KSUID) internalapp.GetUserQuery {
 	return internalapp.GetUserQuery{
 		ID: userID,
 	}
@@ -150,7 +151,7 @@ func (b *QueryBuilder) ListUsersQuery(page, pageSize int, active *bool) internal
 
 // ReadModelBuilder provides a fluent interface for building test read models
 type ReadModelBuilder struct {
-	id        uuid.UUID
+	id        ksuid.KSUID
 	email     string
 	name      string
 	isActive  bool
@@ -162,7 +163,7 @@ type ReadModelBuilder struct {
 func NewReadModelBuilder() *ReadModelBuilder {
 	now := time.Now()
 	return &ReadModelBuilder{
-		id:        uuid.New(),
+		id:        ksuid.New(),
 		email:     "test@example.com",
 		name:      "Test User",
 		isActive:  true,
@@ -172,7 +173,7 @@ func NewReadModelBuilder() *ReadModelBuilder {
 }
 
 // WithID sets the read model ID
-func (b *ReadModelBuilder) WithID(id uuid.UUID) *ReadModelBuilder {
+func (b *ReadModelBuilder) WithID(id ksuid.KSUID) *ReadModelBuilder {
 	b.id = id
 	return b
 }
@@ -242,26 +243,26 @@ func NewEventBuilder() *EventBuilder {
 }
 
 // UserCreatedEvent creates a UserCreated event for testing
-func (b *EventBuilder) UserCreatedEvent(userID uuid.UUID, email, name string) internaldomain.UserCreatedEvent {
+func (b *EventBuilder) UserCreatedEvent(userID ksuid.KSUID, email, name string) internaldomain.UserCreatedEvent {
 	return internaldomain.NewUserCreatedEvent(userID, email, name, userID.String(), 1)
 }
 
 // UserEmailUpdatedEvent creates a UserEmailUpdated event for testing
-func (b *EventBuilder) UserEmailUpdatedEvent(userID uuid.UUID, oldEmail, newEmail string, version int) internaldomain.UserEmailUpdatedEvent {
+func (b *EventBuilder) UserEmailUpdatedEvent(userID ksuid.KSUID, oldEmail, newEmail string, version int) internaldomain.UserEmailUpdatedEvent {
 	return internaldomain.NewUserEmailUpdatedEvent(userID, oldEmail, newEmail, userID.String(), version)
 }
 
 // UserNameUpdatedEvent creates a UserNameUpdated event for testing
-func (b *EventBuilder) UserNameUpdatedEvent(userID uuid.UUID, oldName, newName string, version int) internaldomain.UserNameUpdatedEvent {
+func (b *EventBuilder) UserNameUpdatedEvent(userID ksuid.KSUID, oldName, newName string, version int) internaldomain.UserNameUpdatedEvent {
 	return internaldomain.NewUserNameUpdatedEvent(userID, oldName, newName, userID.String(), version)
 }
 
 // UserDeactivatedEvent creates a UserDeactivated event for testing
-func (b *EventBuilder) UserDeactivatedEvent(userID uuid.UUID, version int) internaldomain.UserDeactivatedEvent {
+func (b *EventBuilder) UserDeactivatedEvent(userID ksuid.KSUID, version int) internaldomain.UserDeactivatedEvent {
 	return internaldomain.NewUserDeactivatedEvent(userID, userID.String(), version)
 }
 
 // UserActivatedEvent creates a UserActivated event for testing
-func (b *EventBuilder) UserActivatedEvent(userID uuid.UUID, version int) internaldomain.UserActivatedEvent {
+func (b *EventBuilder) UserActivatedEvent(userID ksuid.KSUID, version int) internaldomain.UserActivatedEvent {
 	return internaldomain.NewUserActivatedEvent(userID, userID.String(), version)
 }

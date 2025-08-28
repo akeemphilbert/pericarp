@@ -34,7 +34,7 @@ func NewProjectCreator(logger CliLogger) *ProjectCreator {
 }
 
 // CreateProject creates a new Pericarp project with the specified configuration
-func (p *ProjectCreator) CreateProject(projectName, repoURL, destination string, dryRun bool) error {
+func (p *ProjectCreator) CreateProject(projectName, repoURL, destination string, dryRun bool, openAPIFile string) error {
 	// Enhanced logging for project creation process (Requirement 9.2, 9.6)
 	if verboseLogger, ok := p.logger.(*VerboseLogger); ok {
 		verboseLogger.LogSection("PROJECT CREATION")
@@ -47,6 +47,9 @@ func (p *ProjectCreator) CreateProject(projectName, repoURL, destination string,
 		}
 		if dryRun {
 			verboseLogger.Debug("Dry-run mode enabled - no files will be created")
+		}
+		if openAPIFile != "" {
+			verboseLogger.Debug("OpenAPI code generation requested", "file", openAPIFile)
 		}
 	}
 
@@ -107,10 +110,23 @@ func (p *ProjectCreator) CreateProject(projectName, repoURL, destination string,
 		return err
 	}
 
+	// Generate code from OpenAPI if provided
+	if openAPIFile != "" {
+		if verboseLogger, ok := p.logger.(*VerboseLogger); ok {
+			verboseLogger.LogSubSection("OpenAPI Code Generation Phase")
+		}
+		if err := p.generateFromOpenAPI(openAPIFile, actualDestination, dryRun); err != nil {
+			return err
+		}
+	}
+
 	if !dryRun {
 		p.logger.Infof("Successfully created project '%s' in '%s'", projectName, actualDestination)
 		if isExistingRepo {
 			p.logger.Info("Pericarp capabilities added to existing repository")
+		}
+		if openAPIFile != "" {
+			p.logger.Info("Generated code from OpenAPI specification")
 		}
 		p.logger.Info("Next steps:")
 		p.logger.Info("  1. cd " + actualDestination)
@@ -285,6 +301,23 @@ func (p *ProjectCreator) generateWithFilePreservation(model *DomainModel, destin
 		p.logger.Infof("Generated %d new files, preserved %d existing files", len(safeFiles), preservedCount)
 	} else {
 		p.logger.Infof("Generated %d files", len(safeFiles))
+	}
+
+	return nil
+}
+
+// generateFromOpenAPI generates code from an OpenAPI specification file
+func (p *ProjectCreator) generateFromOpenAPI(openAPIFile, destination string, dryRun bool) error {
+	p.logger.Infof("Generating code from OpenAPI specification: %s", openAPIFile)
+
+	// Create a code generator instance
+	generator := NewCodeGenerator(p.logger)
+
+	// Generate code from the OpenAPI file
+	if err := generator.Generate(openAPIFile, "openapi", destination, dryRun); err != nil {
+		return NewCliError(GenerationError,
+			fmt.Sprintf("failed to generate code from OpenAPI file: %s", openAPIFile),
+			err)
 	}
 
 	return nil

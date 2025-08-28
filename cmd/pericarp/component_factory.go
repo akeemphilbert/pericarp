@@ -382,6 +382,18 @@ func (f *PericarpComponentFactory) GenerateProjectStructure(model *DomainModel, 
 		return err
 	}
 
+	// Generate Makefile
+	makefile, err := f.GenerateMakefile(model.ProjectName)
+	if err != nil {
+		return NewCliError(GenerationError,
+			fmt.Sprintf("failed to generate Makefile for %s", model.ProjectName), err)
+	}
+
+	makefilePath := filepath.Join(destination, "Makefile")
+	if err := f.writeFile(makefilePath, makefile.Content); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -501,7 +513,7 @@ func (f *PericarpComponentFactory) ensureIDField(entity Entity) Entity {
 	if !hasID {
 		idProperty := Property{
 			Name:     "Id",
-			Type:     "uuid.UUID",
+			Type:     "ksuid.KSUID",
 			Required: true,
 			Tags: map[string]string{
 				"json": "id",
@@ -530,7 +542,7 @@ func (f *PericarpComponentFactory) createCommandData(entity Entity) map[string]i
 			"Name":        fmt.Sprintf("Delete%sCommand", entity.Name),
 			"Description": fmt.Sprintf("delete a %s", strings.ToLower(entity.Name)),
 			"Properties": []Property{
-				{Name: "Id", Type: "uuid.UUID", Required: true},
+				{Name: "Id", Type: "ksuid.KSUID", Required: true},
 			},
 		},
 	}
@@ -548,7 +560,7 @@ func (f *PericarpComponentFactory) createQueryData(entity Entity) map[string]int
 			"Name":        fmt.Sprintf("Get%sByIdQuery", entity.Name),
 			"Description": fmt.Sprintf("get a %s by ID", strings.ToLower(entity.Name)),
 			"Properties": []Property{
-				{Name: "Id", Type: "uuid.UUID", Required: true},
+				{Name: "Id", Type: "ksuid.KSUID", Required: true},
 			},
 			"ReturnType": fmt.Sprintf("*%s", entity.Name),
 		},

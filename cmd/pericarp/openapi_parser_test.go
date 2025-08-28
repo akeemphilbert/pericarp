@@ -719,7 +719,7 @@ components:
 	// Test type mappings
 	typeTests := map[string]string{
 		"stringField":   "string",
-		"uuidField":     "uuid.UUID",
+		"uuidField":     "ksuid.KSUID",
 		"emailField":    "string",
 		"dateField":     "time.Time",
 		"dateTimeField": "time.Time",

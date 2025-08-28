@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -25,7 +25,7 @@ func (m *Mock{{$entityName}}Repository) Save(ctx context.Context, {{$entityLower
 	return args.Error(0)
 }
 
-func (m *Mock{{$entityName}}Repository) Load(ctx context.Context, id uuid.UUID) (*domain.{{$entityName}}, error) {
+func (m *Mock{{$entityName}}Repository) Load(ctx context.Context, id string) (*domain.{{$entityName}}, error) {
 	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -64,7 +64,7 @@ func TestCreate{{$entityName}}Handler_Handle(t *testing.T) {
 		{
 			name: "successful creation",
 			command: Create{{$entityName}}Command{
-				{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
+				{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
 				{{end}}
 			},
 			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
@@ -86,7 +86,7 @@ func TestCreate{{$entityName}}Handler_Handle(t *testing.T) {
 		{
 			name: "repository save error",
 			command: Create{{$entityName}}Command{
-				{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
+				{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
 				{{end}}
 			},
 			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
@@ -119,8 +119,8 @@ func TestCreate{{$entityName}}Handler_Handle(t *testing.T) {
 }
 
 func TestUpdate{{$entityName}}Handler_Handle(t *testing.T) {
-	existingID := uuid.New()
-	existing{{$entityName}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"existing-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
+	existingID := ksuid.New()
+	existing{{$entityName}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"existing-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -133,7 +133,7 @@ func TestUpdate{{$entityName}}Handler_Handle(t *testing.T) {
 			name: "successful update",
 			command: Update{{$entityName}}Command{
 				Id: existingID,
-				{{range .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}},
+				{{range .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}},
 				{{end}}
 			},
 			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
@@ -146,13 +146,13 @@ func TestUpdate{{$entityName}}Handler_Handle(t *testing.T) {
 		{
 			name: "{{$entityLower}} not found",
 			command: Update{{$entityName}}Command{
-				Id: uuid.New(),
-				{{range .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}},
+				Id: ksuid.New(),
+				{{range .Properties}}{{.Name | pascalCase}}: {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}},
 				{{end}}
 			},
 			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
 				logger.On("Info", mock.AnythingOfType("string")).Return()
-				repo.On("Load", mock.Anything, mock.AnythingOfType("uuid.UUID")).Return(nil, assert.AnError)
+				repo.On("Load", mock.Anything, mock.AnythingOfType("string")).Return(nil, assert.AnError)
 			},
 			wantErr: true,
 		},
@@ -180,8 +180,8 @@ func TestUpdate{{$entityName}}Handler_Handle(t *testing.T) {
 }
 
 func TestGet{{$entityName}}ByIdHandler_Handle(t *testing.T) {
-	existingID := uuid.New()
-	existing{{$entityName}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"existing-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
+	existingID := ksuid.New()
+	existing{{$entityName}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"existing-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -206,11 +206,11 @@ func TestGet{{$entityName}}ByIdHandler_Handle(t *testing.T) {
 		{
 			name: "{{$entityLower}} not found",
 			query: Get{{$entityName}}ByIdQuery{
-				Id: uuid.New(),
+				Id: ksuid.New(),
 			},
 			setupMocks: func(repo *Mock{{$entityName}}Repository, logger *MockLogger) {
 				logger.On("Debug", mock.AnythingOfType("string")).Return()
-				repo.On("Load", mock.Anything, mock.AnythingOfType("uuid.UUID")).Return(nil, assert.AnError)
+				repo.On("Load", mock.Anything, mock.AnythingOfType("string")).Return(nil, assert.AnError)
 			},
 			want:    nil,
 			wantErr: true,

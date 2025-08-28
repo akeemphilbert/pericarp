@@ -1,18 +1,18 @@
 // Package domain contains the internal domain models used for examples and testing
 package domain
 
-//go:generate moq -out mocks/user_repository_mock.go . UserRepository
+//go:generate moq -out mocks/user_repository_mock.go -pkg mocks . UserRepository
 
 import (
 	"errors"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // User represents a user aggregate for internal examples and testing
 type User struct {
-	id                uuid.UUID
+	id                ksuid.KSUID
 	email             string
 	name              string
 	isActive          bool
@@ -29,7 +29,7 @@ func NewUser(email, name string) (*User, error) {
 		return nil, errors.New("name cannot be empty")
 	}
 
-	id := uuid.New()
+	id := ksuid.New()
 	user := &User{
 		id:                id,
 		email:             email,
@@ -50,8 +50,8 @@ func (u *User) ID() string {
 	return u.id.String()
 }
 
-// UserID returns the user's ID as UUID
-func (u *User) UserID() uuid.UUID {
+// UserID returns the user's ID as KSUID
+func (u *User) UserID() ksuid.KSUID {
 	return u.id
 }
 
@@ -188,8 +188,8 @@ func (u *User) Activate() error {
 // UserRepository defines the repository interface for users
 type UserRepository interface {
 	Save(user *User) error
-	FindByID(id uuid.UUID) (*User, error)
+	FindByID(id ksuid.KSUID) (*User, error)
 	FindByEmail(email string) (*User, error)
-	Delete(id uuid.UUID) error
-	LoadFromVersion(id uuid.UUID, version int) (*User, error)
+	Delete(id ksuid.KSUID) error
+	LoadFromVersion(id ksuid.KSUID, version int) (*User, error)
 }

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // OrderExample demonstrates the updated aggregate pattern using Entity and StandardEvent
@@ -58,7 +58,7 @@ func NewOrderExample(customerID string, items []OrderItemExample) (*OrderExample
 		totalAmount += item.Price.Amount * int64(item.Quantity)
 	}
 
-	orderID := uuid.New().String()
+	orderID := ksuid.New().String()
 	order := &OrderExample{
 		Entity:     domain.NewEntity(orderID), // Use standard Entity
 		customerID: customerID,

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/akeemphilbert/pericarp/internal/application"
+	"github.com/segmentio/ksuid"
 	"gorm.io/gorm"
 )
 
@@ -27,7 +27,7 @@ func (UserReadModelGORM) TableName() string {
 
 // ToApplication converts GORM model to application model
 func (u *UserReadModelGORM) ToApplication() *application.UserReadModel {
-	id, _ := uuid.Parse(u.ID)
+	id, _ := ksuid.Parse(u.ID)
 	return &application.UserReadModel{
 		ID:        id,
 		Email:     u.Email,
@@ -59,9 +59,9 @@ func NewUserReadModelGORMRepository(db *gorm.DB) *UserReadModelGORMRepository {
 }
 
 // GetByID retrieves a user read model by ID
-func (r *UserReadModelGORMRepository) GetByID(ctx context.Context, id uuid.UUID) (*application.UserReadModel, error) {
+func (r *UserReadModelGORMRepository) GetByID(ctx context.Context, id ksuid.KSUID) (*application.UserReadModel, error) {
 	var user UserReadModelGORM
-	
+
 	result := r.db.WithContext(ctx).First(&user, "id = ?", id.String())
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
@@ -69,14 +69,14 @@ func (r *UserReadModelGORMRepository) GetByID(ctx context.Context, id uuid.UUID)
 		}
 		return nil, fmt.Errorf("failed to get user by ID: %w", result.Error)
 	}
-	
+
 	return user.ToApplication(), nil
 }
 
 // GetByEmail retrieves a user read model by email
 func (r *UserReadModelGORMRepository) GetByEmail(ctx context.Context, email string) (*application.UserReadModel, error) {
 	var user UserReadModelGORM
-	
+
 	result := r.db.WithContext(ctx).First(&user, "email = ?", email)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
@@ -84,7 +84,7 @@ func (r *UserReadModelGORMRepository) GetByEmail(ctx context.Context, email stri
 		}
 		return nil, fmt.Errorf("failed to get user by email: %w", result.Error)
 	}
-	
+
 	return user.ToApplication(), nil
 }
 
@@ -92,38 +92,38 @@ func (r *UserReadModelGORMRepository) GetByEmail(ctx context.Context, email stri
 func (r *UserReadModelGORMRepository) List(ctx context.Context, page, pageSize int, active *bool) ([]application.UserReadModel, int, error) {
 	var users []UserReadModelGORM
 	var total int64
-	
+
 	// Build query with optional active filter
 	query := r.db.WithContext(ctx).Model(&UserReadModelGORM{})
 	if active != nil {
 		query = query.Where("is_active = ?", *active)
 	}
-	
+
 	// Get total count
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("failed to count users: %w", err)
 	}
-	
+
 	// Calculate offset
 	offset := (page - 1) * pageSize
-	
+
 	// Get paginated results
 	result := query.
 		Offset(offset).
 		Limit(pageSize).
 		Order("created_at DESC").
 		Find(&users)
-	
+
 	if result.Error != nil {
 		return nil, 0, fmt.Errorf("failed to list users: %w", result.Error)
 	}
-	
+
 	// Convert to application models
 	appUsers := make([]application.UserReadModel, len(users))
 	for i, user := range users {
 		appUsers[i] = *user.ToApplication()
 	}
-	
+
 	return appUsers, int(total), nil
 }
 
@@ -131,40 +131,40 @@ func (r *UserReadModelGORMRepository) List(ctx context.Context, page, pageSize i
 func (r *UserReadModelGORMRepository) Save(ctx context.Context, user *application.UserReadModel) error {
 	var gormUser UserReadModelGORM
 	gormUser.FromApplication(user)
-	
+
 	// Use GORM's Save method which handles both insert and update
 	result := r.db.WithContext(ctx).Save(&gormUser)
 	if result.Error != nil {
 		return fmt.Errorf("failed to save user: %w", result.Error)
 	}
-	
+
 	return nil
 }
 
 // Delete removes a user read model
-func (r *UserReadModelGORMRepository) Delete(ctx context.Context, id uuid.UUID) error {
+func (r *UserReadModelGORMRepository) Delete(ctx context.Context, id ksuid.KSUID) error {
 	result := r.db.WithContext(ctx).Delete(&UserReadModelGORM{}, "id = ?", id.String())
 	if result.Error != nil {
 		return fmt.Errorf("failed to delete user: %w", result.Error)
 	}
-	
+
 	return nil
 }
 
 // Count returns the total number of users with optional active filter
 func (r *UserReadModelGORMRepository) Count(ctx context.Context, active *bool) (int, error) {
 	var count int64
-	
+
 	query := r.db.WithContext(ctx).Model(&UserReadModelGORM{})
 	if active != nil {
 		query = query.Where("is_active = ?", *active)
 	}
-	
+
 	result := query.Count(&count)
 	if result.Error != nil {
 		return 0, fmt.Errorf("failed to count users: %w", result.Error)
 	}
-	
+
 	return int(count), nil
 }
 

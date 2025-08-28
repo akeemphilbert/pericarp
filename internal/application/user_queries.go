@@ -4,12 +4,12 @@ import (
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/application"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // GetUserQuery represents a query to get a single user by ID
 type GetUserQuery struct {
-	ID uuid.UUID `json:"id"`
+	ID ksuid.KSUID `json:"id"`
 }
 
 // QueryType returns the query type identifier
@@ -19,7 +19,7 @@ func (q GetUserQuery) QueryType() string {
 
 // Validate validates the get user query
 func (q GetUserQuery) Validate() error {
-	if q.ID == uuid.Nil {
+	if q.ID == ksuid.Nil {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 	return nil
@@ -74,12 +74,12 @@ func (q ListUsersQuery) Validate() error {
 
 // UserDTO represents a user data transfer object for queries
 type UserDTO struct {
-	ID        uuid.UUID `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	IsActive  bool      `json:"is_active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        ksuid.KSUID `json:"id"`
+	Email     string      `json:"email"`
+	Name      string      `json:"name"`
+	IsActive  bool        `json:"is_active"`
+	CreatedAt time.Time   `json:"created_at"`
+	UpdatedAt time.Time   `json:"updated_at"`
 }
 
 // ListUsersResult represents the result of a list users query

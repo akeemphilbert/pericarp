@@ -5,14 +5,14 @@ import (
 	"strings"
 
 	"github.com/akeemphilbert/pericarp/pkg/application"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // CreateUserCommand represents a command to create a new user
 type CreateUserCommand struct {
-	ID    uuid.UUID `json:"id"`
-	Email string    `json:"email"`
-	Name  string    `json:"name"`
+	ID    ksuid.KSUID `json:"id"`
+	Email string      `json:"email"`
+	Name  string      `json:"name"`
 }
 
 // CommandType returns the command type identifier
@@ -22,7 +22,7 @@ func (c CreateUserCommand) CommandType() string {
 
 // Validate validates the create user command
 func (c CreateUserCommand) Validate() error {
-	if c.ID == uuid.Nil {
+	if c.ID == ksuid.Nil {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 
@@ -39,8 +39,8 @@ func (c CreateUserCommand) Validate() error {
 
 // UpdateUserEmailCommand represents a command to update a user's email
 type UpdateUserEmailCommand struct {
-	ID       uuid.UUID `json:"id"`
-	NewEmail string    `json:"new_email"`
+	ID       ksuid.KSUID `json:"id"`
+	NewEmail string      `json:"new_email"`
 }
 
 // CommandType returns the command type identifier
@@ -50,7 +50,7 @@ func (c UpdateUserEmailCommand) CommandType() string {
 
 // Validate validates the update user email command
 func (c UpdateUserEmailCommand) Validate() error {
-	if c.ID == uuid.Nil {
+	if c.ID == ksuid.Nil {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 
@@ -63,8 +63,8 @@ func (c UpdateUserEmailCommand) Validate() error {
 
 // UpdateUserNameCommand represents a command to update a user's name
 type UpdateUserNameCommand struct {
-	ID      uuid.UUID `json:"id"`
-	NewName string    `json:"new_name"`
+	ID      ksuid.KSUID `json:"id"`
+	NewName string      `json:"new_name"`
 }
 
 // CommandType returns the command type identifier
@@ -74,7 +74,7 @@ func (c UpdateUserNameCommand) CommandType() string {
 
 // Validate validates the update user name command
 func (c UpdateUserNameCommand) Validate() error {
-	if c.ID == uuid.Nil {
+	if c.ID == ksuid.Nil {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 
@@ -87,7 +87,7 @@ func (c UpdateUserNameCommand) Validate() error {
 
 // DeactivateUserCommand represents a command to deactivate a user
 type DeactivateUserCommand struct {
-	ID uuid.UUID `json:"id"`
+	ID ksuid.KSUID `json:"id"`
 }
 
 // CommandType returns the command type identifier
@@ -97,7 +97,7 @@ func (c DeactivateUserCommand) CommandType() string {
 
 // Validate validates the deactivate user command
 func (c DeactivateUserCommand) Validate() error {
-	if c.ID == uuid.Nil {
+	if c.ID == ksuid.Nil {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 	return nil
@@ -105,7 +105,7 @@ func (c DeactivateUserCommand) Validate() error {
 
 // ActivateUserCommand represents a command to activate a user
 type ActivateUserCommand struct {
-	ID uuid.UUID `json:"id"`
+	ID ksuid.KSUID `json:"id"`
 }
 
 // CommandType returns the command type identifier
@@ -115,7 +115,7 @@ func (c ActivateUserCommand) CommandType() string {
 
 // Validate validates the activate user command
 func (c ActivateUserCommand) Validate() error {
-	if c.ID == uuid.Nil {
+	if c.ID == ksuid.Nil {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 	return nil

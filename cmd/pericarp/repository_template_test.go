@@ -43,9 +43,9 @@ func TestRepositoryInterfaceTemplate_Generation(t *testing.T) {
 				"package domain",
 				"type UserRepository interface",
 				"Save(ctx context.Context, user *User) error",
-				"Load(ctx context.Context, id uuid.UUID) (*User, error)",
-				"Delete(ctx context.Context, id uuid.UUID) error",
-				"Exists(ctx context.Context, id uuid.UUID) (bool, error)",
+				"Load(ctx context.Context, id string) (*User, error)",
+				"Delete(ctx context.Context, id string) error",
+				"Exists(ctx context.Context, id string) (bool, error)",
 				"FindByEmail(ctx context.Context, email string) ([]*User, error)",
 				"FindByName(ctx context.Context, name string) ([]*User, error)",
 				"FindAll(ctx context.Context, limit, offset int) ([]*User, error)",
@@ -78,9 +78,9 @@ func TestRepositoryInterfaceTemplate_Generation(t *testing.T) {
 				"package domain",
 				"type OrderRepository interface",
 				"Save(ctx context.Context, order *Order) error",
-				"Load(ctx context.Context, id uuid.UUID) (*Order, error)",
-				"Delete(ctx context.Context, id uuid.UUID) error",
-				"Exists(ctx context.Context, id uuid.UUID) (bool, error)",
+				"Load(ctx context.Context, id string) (*Order, error)",
+				"Delete(ctx context.Context, id string) error",
+				"Exists(ctx context.Context, id string) (bool, error)",
 				"FindAll(ctx context.Context, limit, offset int) ([]*Order, error)",
 				"Count(ctx context.Context) (int64, error)",
 			},
@@ -161,14 +161,14 @@ func TestRepositoryImplementationTemplate_Generation(t *testing.T) {
 		"product.MarkEventsAsCommitted()",
 
 		// Load method
-		"func (r *ProductEventSourcingRepository) Load(ctx context.Context, id uuid.UUID) (*appDomain.Product, error)",
+		"func (r *ProductEventSourcingRepository) Load(ctx context.Context, id string) (*appDomain.Product, error)",
 		"events, err := r.eventStore.GetEvents(ctx, id.String())",
 		"product := &appDomain.Product{}",
 		"product.LoadFromHistory(events)",
 
 		// Other methods
-		"func (r *ProductEventSourcingRepository) Delete(ctx context.Context, id uuid.UUID) error",
-		"func (r *ProductEventSourcingRepository) Exists(ctx context.Context, id uuid.UUID) (bool, error)",
+		"func (r *ProductEventSourcingRepository) Delete(ctx context.Context, id ksuid.KSUID) error",
+		"func (r *ProductEventSourcingRepository) Exists(ctx context.Context, id ksuid.KSUID) (bool, error)",
 		"func (r *ProductEventSourcingRepository) FindByName(ctx context.Context, name string) ([]*appDomain.Product, error)",
 		"func (r *ProductEventSourcingRepository) FindAll(ctx context.Context, limit, offset int) ([]*appDomain.Product, error)",
 		"func (r *ProductEventSourcingRepository) Count(ctx context.Context) (int64, error)",
@@ -274,9 +274,9 @@ func TestRepositoryTemplate_ContextUsage(t *testing.T) {
 	contextPatterns := []string{
 		// Interface methods with context
 		"Save(ctx context.Context, document *Document) error",
-		"Load(ctx context.Context, id uuid.UUID) (*Document, error)",
-		"Delete(ctx context.Context, id uuid.UUID) error",
-		"Exists(ctx context.Context, id uuid.UUID) (bool, error)",
+		"Load(ctx context.Context, id string) (*Document, error)",
+		"Delete(ctx context.Context, id string) error",
+		"Exists(ctx context.Context, id string) (bool, error)",
 		"FindAll(ctx context.Context, limit, offset int) ([]*Document, error)",
 		"Count(ctx context.Context) (int64, error)",
 	}
@@ -332,17 +332,17 @@ func TestRepositoryTemplate_CRUDOperations(t *testing.T) {
 		"Save(ctx context.Context, task *Task) error",
 
 		// Read operations
-		"Load(ctx context.Context, id uuid.UUID) (*Task, error)",
+		"Load(ctx context.Context, id string) (*Task, error)",
 		"FindByTitle(ctx context.Context, title string) ([]*Task, error)",
 		"FindByStatus(ctx context.Context, status string) ([]*Task, error)",
 		"FindAll(ctx context.Context, limit, offset int) ([]*Task, error)",
 		"Count(ctx context.Context) (int64, error)",
 
 		// Delete
-		"Delete(ctx context.Context, id uuid.UUID) error",
+		"Delete(ctx context.Context, id ksuid.KSUID) error",
 
 		// Utility
-		"Exists(ctx context.Context, id uuid.UUID) (bool, error)",
+		"Exists(ctx context.Context, id ksuid.KSUID) (bool, error)",
 	}
 
 	for _, pattern := range crudPatterns {

@@ -319,7 +319,7 @@ func (p *OpenAPIParser) convertProperty(name string, schemaRef *openapi3.SchemaR
 func (p *OpenAPIParser) mapStringType(schema *openapi3.Schema) string {
 	switch schema.Format {
 	case "uuid":
-		return "uuid.UUID"
+		return "ksuid.KSUID"
 	case "date":
 		return "time.Time"
 	case "date-time":

@@ -3,12 +3,12 @@ package domain
 import (
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // UserCreatedEvent represents the event when a user is created
 type UserCreatedEvent struct {
-	UserID      uuid.UUID
+	UserID      ksuid.KSUID
 	Email       string
 	Name        string
 	aggregateID string
@@ -17,7 +17,7 @@ type UserCreatedEvent struct {
 }
 
 // NewUserCreatedEvent creates a new UserCreatedEvent
-func NewUserCreatedEvent(userID uuid.UUID, email, name string, aggregateID string, version int) UserCreatedEvent {
+func NewUserCreatedEvent(userID ksuid.KSUID, email, name string, aggregateID string, version int) UserCreatedEvent {
 	return UserCreatedEvent{
 		UserID:      userID,
 		Email:       email,
@@ -50,7 +50,7 @@ func (e UserCreatedEvent) OccurredAt() time.Time {
 
 // UserEmailUpdatedEvent represents the event when a user's email is updated
 type UserEmailUpdatedEvent struct {
-	UserID      uuid.UUID
+	UserID      ksuid.KSUID
 	OldEmail    string
 	NewEmail    string
 	aggregateID string
@@ -59,7 +59,7 @@ type UserEmailUpdatedEvent struct {
 }
 
 // NewUserEmailUpdatedEvent creates a new UserEmailUpdatedEvent
-func NewUserEmailUpdatedEvent(userID uuid.UUID, oldEmail, newEmail string, aggregateID string, version int) UserEmailUpdatedEvent {
+func NewUserEmailUpdatedEvent(userID ksuid.KSUID, oldEmail, newEmail string, aggregateID string, version int) UserEmailUpdatedEvent {
 	return UserEmailUpdatedEvent{
 		UserID:      userID,
 		OldEmail:    oldEmail,
@@ -92,7 +92,7 @@ func (e UserEmailUpdatedEvent) OccurredAt() time.Time {
 
 // UserNameUpdatedEvent represents the event when a user's name is updated
 type UserNameUpdatedEvent struct {
-	UserID      uuid.UUID
+	UserID      ksuid.KSUID
 	OldName     string
 	NewName     string
 	aggregateID string
@@ -101,7 +101,7 @@ type UserNameUpdatedEvent struct {
 }
 
 // NewUserNameUpdatedEvent creates a new UserNameUpdatedEvent
-func NewUserNameUpdatedEvent(userID uuid.UUID, oldName, newName string, aggregateID string, version int) UserNameUpdatedEvent {
+func NewUserNameUpdatedEvent(userID ksuid.KSUID, oldName, newName string, aggregateID string, version int) UserNameUpdatedEvent {
 	return UserNameUpdatedEvent{
 		UserID:      userID,
 		OldName:     oldName,
@@ -134,14 +134,14 @@ func (e UserNameUpdatedEvent) OccurredAt() time.Time {
 
 // UserDeactivatedEvent represents the event when a user is deactivated
 type UserDeactivatedEvent struct {
-	UserID      uuid.UUID
+	UserID      ksuid.KSUID
 	aggregateID string
 	version     int
 	occurredAt  time.Time
 }
 
 // NewUserDeactivatedEvent creates a new UserDeactivatedEvent
-func NewUserDeactivatedEvent(userID uuid.UUID, aggregateID string, version int) UserDeactivatedEvent {
+func NewUserDeactivatedEvent(userID ksuid.KSUID, aggregateID string, version int) UserDeactivatedEvent {
 	return UserDeactivatedEvent{
 		UserID:      userID,
 		aggregateID: aggregateID,
@@ -172,14 +172,14 @@ func (e UserDeactivatedEvent) OccurredAt() time.Time {
 
 // UserActivatedEvent represents the event when a user is activated
 type UserActivatedEvent struct {
-	UserID      uuid.UUID
+	UserID      ksuid.KSUID
 	aggregateID string
 	version     int
 	occurredAt  time.Time
 }
 
 // NewUserActivatedEvent creates a new UserActivatedEvent
-func NewUserActivatedEvent(userID uuid.UUID, aggregateID string, version int) UserActivatedEvent {
+func NewUserActivatedEvent(userID ksuid.KSUID, aggregateID string, version int) UserActivatedEvent {
 	return UserActivatedEvent{
 		UserID:      userID,
 		aggregateID: aggregateID,

@@ -5,7 +5,7 @@ import (
 
 	"github.com/akeemphilbert/pericarp/internal/application"
 	"github.com/akeemphilbert/pericarp/internal/domain"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // UserRepositoryComposite combines event sourcing repository with read model queries
@@ -32,12 +32,12 @@ func (r *UserRepositoryComposite) Save(user *domain.User) error {
 }
 
 // FindByID loads a user aggregate by reconstructing it from events
-func (r *UserRepositoryComposite) FindByID(id uuid.UUID) (*domain.User, error) {
+func (r *UserRepositoryComposite) FindByID(id ksuid.KSUID) (*domain.User, error) {
 	return r.eventSourcingRepo.FindByID(id)
 }
 
 // LoadFromVersion loads a user aggregate from a specific version
-func (r *UserRepositoryComposite) LoadFromVersion(id uuid.UUID, version int) (*domain.User, error) {
+func (r *UserRepositoryComposite) LoadFromVersion(id ksuid.KSUID, version int) (*domain.User, error) {
 	return r.eventSourcingRepo.LoadFromVersion(id, version)
 }
 
@@ -58,6 +58,6 @@ func (r *UserRepositoryComposite) FindByEmail(email string) (*domain.User, error
 }
 
 // Delete removes a user
-func (r *UserRepositoryComposite) Delete(id uuid.UUID) error {
+func (r *UserRepositoryComposite) Delete(id ksuid.KSUID) error {
 	return r.eventSourcingRepo.Delete(id)
 }

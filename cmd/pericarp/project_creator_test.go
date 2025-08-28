@@ -441,7 +441,7 @@ func TestCodeGenerator_generateEntityComponents(t *testing.T) {
 	entity := Entity{
 		Name: "TestEntity",
 		Properties: []Property{
-			{Name: "id", Type: "uuid.UUID", Required: true},
+			{Name: "id", Type: "ksuid.KSUID", Required: true},
 			{Name: "name", Type: "string", Required: true},
 		},
 	}
@@ -474,7 +474,7 @@ func TestCodeGenerator_generateEntityComponents_VerboseLogging(t *testing.T) {
 	entity := Entity{
 		Name: "VerboseTestEntity",
 		Properties: []Property{
-			{Name: "id", Type: "uuid.UUID", Required: true},
+			{Name: "id", Type: "ksuid.KSUID", Required: true},
 		},
 	}
 

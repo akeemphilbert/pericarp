@@ -41,10 +41,10 @@ func TestEntityTemplate_Generation(t *testing.T) {
 			},
 			expected: []string{
 				"type User struct",
-				"Id uuid.UUID",
+				"Id ksuid.KSUID",
 				"Email string",
 				"Name string",
-				"func NewUser(id uuid.UUID, email string) (*User, error)",
+				"func NewUser(id ksuid.KSUID, email string) (*User, error)",
 				"func (u *User) ID() string",
 				"func (u *User) Version() int",
 				"func (u *User) UncommittedEvents() []domain.Event",
@@ -86,11 +86,11 @@ func TestEntityTemplate_Generation(t *testing.T) {
 			},
 			expected: []string{
 				"type Product struct",
-				"Id uuid.UUID",
+				"Id ksuid.KSUID",
 				"Name string `json:\"name\" validate:\"required,min=1,max=100\"`",
 				"Price float64 `json:\"price\" validate:\"required,min=0\"`",
 				"Description string `json:\"description,omitempty\"`",
-				"func NewProduct(id uuid.UUID, name string, price float64) (*Product, error)",
+				"func NewProduct(id ksuid.KSUID, name string, price float64) (*Product, error)",
 				"func (p *Product) SetDescription(description string)",
 			},
 		},
@@ -128,7 +128,7 @@ func TestEntityTemplate_Generation(t *testing.T) {
 			},
 			expected: []string{
 				"type Order struct",
-				"func NewOrder(id uuid.UUID, status string) (*Order, error)",
+				"func NewOrder(id ksuid.KSUID, status string) (*Order, error)",
 				"func (o *Order) Complete(completedAt time.Time) error",
 				"func (o *Order) Cancel() error",
 				"// TODO: Implement Complete method",
@@ -250,7 +250,7 @@ func TestEntityTemplate_ValidationTags(t *testing.T) {
 
 	// Test validation tags (Requirement 8.2)
 	validationTests := []string{
-		"Id uuid.UUID `json:\"id\"`",
+		"Id ksuid.KSUID `json:\"id\"`",
 		"Username string `json:\"username\" validate:\"required,min=3,max=50\"`",
 		"Email string `json:\"email\" validate:\"required,email\"`",
 		"Bio string `json:\"bio,omitempty\"`",
@@ -402,8 +402,8 @@ func TestEntityTemplate_ConstructorValidation(t *testing.T) {
 
 	// Test constructor validation
 	constructorPatterns := []string{
-		"func NewDocument(id uuid.UUID, title string, content string) (*Document, error)",
-		"if id == uuid.UUID{} {",
+		"func NewDocument(id ksuid.KSUID, title string, content string) (*Document, error)",
+		"if id == ksuid.KSUID{} {",
 		"return nil, errors.New(\"id cannot be empty\")",
 		"if title == \"\" {",
 		"return nil, errors.New(\"title cannot be empty\")",
@@ -453,14 +453,14 @@ func TestEntityEventsTemplate_Generation(t *testing.T) {
 		// Created event
 		"type TaskCreatedEvent struct",
 		"domain.StandardEvent",
-		"Id uuid.UUID `json:\"id\"`",
+		"Id ksuid.KSUID `json:\"id\"`",
 		"Title string `json:\"title\"`",
-		"func NewTaskCreatedEvent(aggregateID uuid.UUID, id uuid.UUID, title string) *TaskCreatedEvent",
+		"func NewTaskCreatedEvent(aggregateID ksuid.KSUID, id ksuid.KSUID, title string) *TaskCreatedEvent",
 
 		// Update events for optional fields
 		"type TaskCompletedUpdatedEvent struct",
 		"Completed bool `json:\"completed\"`",
-		"func NewTaskCompletedUpdatedEvent(aggregateID uuid.UUID, completed bool) *TaskCompletedUpdatedEvent",
+		"func NewTaskCompletedUpdatedEvent(aggregateID ksuid.KSUID, completed bool) *TaskCompletedUpdatedEvent",
 	}
 
 	for _, pattern := range eventPatterns {
@@ -504,11 +504,11 @@ func TestEntityTemplate_ComplexTypes(t *testing.T) {
 
 	// Test complex type handling
 	typePatterns := []string{
-		"Id uuid.UUID",
+		"Id ksuid.KSUID",
 		"Createdat time.Time",
 		"Metadata map[string]interface{} `json:\"metadata,omitempty\"`",
 		"Tags []string `json:\"tags,omitempty\"`",
-		"func NewProfile(id uuid.UUID, createdAt time.Time) (*Profile, error)",
+		"func NewProfile(id ksuid.KSUID, createdAt time.Time) (*Profile, error)",
 		"if createdAt == time.Time{} {",
 		"Metadata: nil,",
 		"Tags: nil,",

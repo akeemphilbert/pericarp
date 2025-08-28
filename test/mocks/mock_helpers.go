@@ -2,16 +2,41 @@ package mocks
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	internalapp "github.com/akeemphilbert/pericarp/internal/application"
 	internalappmocks "github.com/akeemphilbert/pericarp/internal/application/mocks"
 	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
-	internaldomainmocks "github.com/akeemphilbert/pericarp/in
+	internaldomainmocks "github.com/akeemphilbert/pericarp/internal/domain/mocks"
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
 	pkgdomainmocks "github.com/akeemphilbert/pericarp/pkg/domain/mocks"
-p
+	"github.com/segmentio/ksuid"
 )
+
+// TestEnvelope is a test implementation of the Envelope interface
+type TestEnvelope struct {
+	event     pkgdomain.Event
+	eventID   string
+	timestamp time.Time
+	metadata  map[string]interface{}
+}
+
+func (e *TestEnvelope) Event() pkgdomain.Event {
+	return e.event
+}
+
+func (e *TestEnvelope) EventID() string {
+	return e.eventID
+}
+
+func (e *TestEnvelope) Timestamp() time.Time {
+	return e.timestamp
+}
+
+func (e *TestEnvelope) Metadata() map[string]interface{} {
+	return e.metadata
+}
 
 // MockConfiguration provides utilities for configuring mocks in tests
 type MockConfiguration struct {
@@ -40,7 +65,7 @@ func (m *MockConfiguration) ConfigureSuccessfulEventStore() {
 		for i, event := range events {
 			envelopes[i] = &TestEnvelope{
 				event:     event,
-				eventID:   uuid.New().String(),
+				eventID:   ksuid.New().String(),
 				timestamp: time.Now(),
 				metadata: map[string]interface{}{
 					"aggregate_id": event.AggregateID(),
@@ -85,7 +110,7 @@ func (m *MockConfiguration) ConfigureSuccessfulUnitOfWork() {
 		for i, event := range registeredEvents {
 			envelopes[i] = &TestEnvelope{
 				event:     event,
-				eventID:   uuid.New().String(),
+				eventID:   ksuid.New().String(),
 				timestamp: time.Now(),
 				metadata: map[string]interface{}{
 					"aggregate_id": event.AggregateID(),
@@ -106,14 +131,14 @@ func (m *MockConfiguration) ConfigureSuccessfulUnitOfWork() {
 
 // ConfigureSuccessfulUserRepository configures the user repository mock for successful operations
 func (m *MockConfiguration) ConfigureSuccessfulUserRepository() {
-	users := make(map[uuid.UUID]*internaldomain.User)
+	users := make(map[string]*internaldomain.User)
 
 	m.UserRepository.SaveFunc = func(user *internaldomain.User) error {
-		users[user.UserID()] = user
+		users[user.ID()] = user
 		return nil
 	}
 
-	m.UserRepository.FindByIDFunc = func(id uuid.UUID) (*internaldomain.User, error) {
+	m.UserRepository.FindByIDFunc = func(id string) (*internaldomain.User, error) {
 		if user, exists := users[id]; exists {
 			return user, nil
 		}
@@ -129,12 +154,12 @@ func (m *MockConfiguration) ConfigureSuccessfulUserRepository() {
 		return nil, &internalapp.ApplicationError{Code: "USER_NOT_FOUND", Message: "User not found"}
 	}
 
-	m.UserRepository.DeleteFunc = func(id uuid.UUID) error {
+	m.UserRepository.DeleteFunc = func(id string) error {
 		delete(users, id)
 		return nil
 	}
 
-	m.UserRepository.LoadFromVersionFunc = func(id uuid.UUID, version int) (*internaldomain.User, error) {
+	m.UserRepository.LoadFromVersionFunc = func(id string, version int) (*internaldomain.User, error) {
 		if user, exists := users[id]; exists {
 			return user, nil
 		}
@@ -144,9 +169,9 @@ func (m *MockConfiguration) ConfigureSuccessfulUserRepository() {
 
 // ConfigureSuccessfulUserReadModelRepository configures the user read model repository mock for successful operations
 func (m *MockConfiguration) ConfigureSuccessfulUserReadModelRepository() {
-	users := make(map[uuid.UUID]*internalapp.UserReadModel)
+	users := make(map[ksuid.KSUID]*internalapp.UserReadModel)
 
-	m.UserReadModelRepository.GetByIDFunc = func(ctx context.Context, id uuid.UUID) (*internalapp.UserReadModel, error) {
+	m.UserReadModelRepository.GetByIDFunc = func(ctx context.Context, id ksuid.KSUID) (*internalapp.UserReadModel, error) {
 		if user, exists := users[id]; exists {
 			return user, nil
 		}
@@ -190,7 +215,7 @@ func (m *MockConfiguration) ConfigureSuccessfulUserReadModelRepository() {
 		return nil
 	}
 
-	m.UserReadModelRepository.DeleteFunc = func(ctx context.Context, id uuid.UUID) error {
+	m.UserReadModelRepository.DeleteFunc = func(ctx context.Context, id ksuid.KSUID) error {
 		delete(users, id)
 		return nil
 	}

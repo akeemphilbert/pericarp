@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 func TestNewUser(t *testing.T) {
@@ -433,7 +433,7 @@ func TestUser_Activate(t *testing.T) {
 
 func TestUser_LoadFromHistory(t *testing.T) {
 	t.Run("reconstruct user from events", func(t *testing.T) {
-		userID := uuid.New()
+		userID := ksuid.New()
 
 		// Create events that represent user lifecycle
 		events := []pkgdomain.Event{

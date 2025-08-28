@@ -1,4 +1,4 @@
-module {{.ProjectName}}
+module test-gosec-project
 
 go 1.21
 

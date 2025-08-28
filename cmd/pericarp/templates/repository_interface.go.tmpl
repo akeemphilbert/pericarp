@@ -3,7 +3,7 @@ package domain
 import (
 	"context"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // {{.Name}}Repository defines the repository interface for {{.Name | lower}}s
@@ -13,13 +13,13 @@ type {{.Name}}Repository interface {
 	Save(ctx context.Context, {{.Name | camelCase}} *{{.Name}}) error
 	
 	// Load retrieves a {{.Name | lower}} by ID
-	Load(ctx context.Context, id uuid.UUID) (*{{.Name}}, error)
+	Load(ctx context.Context, id ksuid.KSUID) (*{{.Name}}, error)
 	
 	// Delete removes a {{.Name | lower}} by ID
-	Delete(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, id ksuid.KSUID) error
 	
 	// Exists checks if a {{.Name | lower}} exists by ID
-	Exists(ctx context.Context, id uuid.UUID) (bool, error)
+	Exists(ctx context.Context, id ksuid.KSUID) (bool, error)
 	
 	{{range .Properties}}{{if eq (.Type | goType) "string"}}// FindBy{{.Name | pascalCase}} finds {{$.Name | lower}}s by {{.Name | lower}}
 	FindBy{{.Name | pascalCase}}(ctx context.Context, {{.Name | camelCase}} {{.Type | goType}}) ([]*{{$.Name}}, error)

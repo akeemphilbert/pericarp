@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 
+	"github.com/segmentio/ksuid"
 	"github.com/spf13/cobra"
 	"{{.ProjectName}}/internal/application"
 	"{{.ProjectName}}/internal/infrastructure"
@@ -21,7 +25,76 @@ var (
 var (
 	verbose    bool
 	configFile string
+	outputJSON bool
 )
+
+{{range .Entities}}
+// Helper function to initialize {{.Name}} service dependencies
+func initialize{{.Name}}Service() (*application.{{.Name}}Service, func(), error) {
+	logger := infrastructure.NewLogger()
+	if verbose {
+		logger.SetLevel("debug")
+	}
+
+	config, err := infrastructure.LoadConfig(configFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	db, err := infrastructure.NewDatabase(config.Database)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize database: %w", err)
+	}
+
+	eventStore, err := infrastructure.NewEventStore(db, logger)
+	if err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("failed to initialize event store: %w", err)
+	}
+
+	repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
+	service := application.New{{.Name}}Service(repository, logger)
+
+	cleanup := func() {
+		db.Close()
+	}
+
+	return service, cleanup, nil
+}
+{{end}}
+
+// Helper function to output results
+func outputResult(data interface{}, err error) error {
+	if err != nil {
+		return err
+	}
+
+	if outputJSON {
+		jsonData, err := json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal JSON: %w", err)
+		}
+		fmt.Println(string(jsonData))
+	} else {
+		// Pretty print for human readable output
+		switch v := data.(type) {
+		{{range .Entities}}case *application.{{.Name}}Response:
+			fmt.Printf("{{.Name}} ID: %s\n", v.{{.Name}}.Id)
+			{{range .Properties}}{{if ne .Name "Id"}}fmt.Printf("{{.Name}}: %v\n", v.{{$.Name}}.{{.Name}})
+			{{end}}{{end}}
+		case *application.List{{.Name}}Response:
+			fmt.Printf("Found %d {{.Name | lower}}s (showing %d, offset %d):\n", v.Total, len(v.{{.Name}}s), v.Offset)
+			for i, {{.Name | lower}} := range v.{{.Name}}s {
+				fmt.Printf("\n%d. {{.Name}} ID: %s\n", i+1, {{.Name | lower}}.Id)
+				{{range .Properties}}{{if ne .Name "Id"}}fmt.Printf("   {{.Name}}: %v\n", {{$.Name | lower}}.{{.Name}})
+				{{end}}{{end}}
+			}
+		{{end}}default:
+			fmt.Printf("%+v\n", data)
+		}
+	}
+	return nil
+}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -45,37 +118,38 @@ var {{.Name | lower}}Cmd = &cobra.Command{
 	Long:  `Commands for managing {{.Name | lower}}s in the system.`,
 }
 
+// Command flags for {{.Name | lower}}
+var (
+	{{range .Properties}}{{if ne .Name "Id"}}{{.Name | lower}}Flag {{if eq .Type "string"}}string{{else if eq .Type "int"}}int{{else if eq .Type "bool"}}bool{{else}}string{{end}}
+	{{end}}{{end}}limitFlag  int
+	offsetFlag int
+)
+
 // create{{.Name}}Cmd represents the create {{.Name | lower}} command
 var create{{.Name}}Cmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new {{.Name | lower}}",
 	Long:  `Create a new {{.Name | lower}} in the system.`,
+	Example: `  # Create a {{.Name | lower}}
+  {{$.ProjectName}} {{.Name | lower}} create{{range .Properties}}{{if and .Required (ne .Name "Id")}} --{{.Name | lower}} "{{if eq .Type "string"}}example{{else if eq .Type "int"}}123{{else}}value{{end}}"{{end}}{{end}}`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize dependencies
-		logger := infrastructure.NewLogger()
-		config, err := infrastructure.LoadConfig(configFile)
+		service, cleanup, err := initialize{{.Name}}Service()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
+			return err
+		}
+		defer cleanup()
+
+		// Build create request
+		req := &application.Create{{.Name}}Request{
+			{{range .Properties}}{{if ne .Name "Id"}}{{.Name}}: {{.Name | lower}}Flag,
+			{{end}}{{end}}
 		}
 
-		db, err := infrastructure.NewDatabase(config.Database)
-		if err != nil {
-			return fmt.Errorf("failed to initialize database: %w", err)
-		}
-		defer db.Close()
-
-		eventStore, err := infrastructure.NewEventStore(db, logger)
-		if err != nil {
-			return fmt.Errorf("failed to initialize event store: %w", err)
-		}
-
-		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
-		service := application.New{{.Name}}Service(repository, logger)
-
-		// TODO: Get input from flags or interactive prompts
-		// For now, this is a placeholder
-		fmt.Println("Create {{.Name | lower}} command executed")
-		return nil
+		// Call service
+		ctx := context.Background()
+		result, err := service.Create(ctx, req)
+		
+		return outputResult(result, err)
 	},
 }
 
@@ -85,32 +159,26 @@ var get{{.Name}}Cmd = &cobra.Command{
 	Short: "Get a {{.Name | lower}} by ID",
 	Long:  `Retrieve a {{.Name | lower}} by its unique identifier.`,
 	Args:  cobra.ExactArgs(1),
+	Example: `  # Get a {{.Name | lower}} by ID
+  {{$.ProjectName}} {{.Name | lower}} get 2SwDCUuFQXNvVmoGBVJbUzSRHwd`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize dependencies
-		logger := infrastructure.NewLogger()
-		config, err := infrastructure.LoadConfig(configFile)
+		service, cleanup, err := initialize{{.Name}}Service()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
+			return err
+		}
+		defer cleanup()
+
+		// Parse ID
+		id, err := ksuid.Parse(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid KSUID format: %w", err)
 		}
 
-		db, err := infrastructure.NewDatabase(config.Database)
-		if err != nil {
-			return fmt.Errorf("failed to initialize database: %w", err)
-		}
-		defer db.Close()
-
-		eventStore, err := infrastructure.NewEventStore(db, logger)
-		if err != nil {
-			return fmt.Errorf("failed to initialize event store: %w", err)
-		}
-
-		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
-		service := application.New{{.Name}}Service(repository, logger)
-
-		// TODO: Parse ID and call service
-		id := args[0]
-		fmt.Printf("Get {{.Name | lower}} command executed with ID: %s\n", id)
-		return nil
+		// Call service
+		ctx := context.Background()
+		result, err := service.GetById(ctx, id)
+		
+		return outputResult(result, err)
 	},
 }
 
@@ -118,32 +186,30 @@ var get{{.Name}}Cmd = &cobra.Command{
 var list{{.Name}}Cmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all {{.Name | lower}}s",
-	Long:  `Retrieve a list of all {{.Name | lower}}s in the system.`,
+	Long:  `Retrieve a list of all {{.Name | lower}}s in the system with pagination support.`,
+	Example: `  # List all {{.Name | lower}}s
+  {{$.ProjectName}} {{.Name | lower}} list
+
+  # List with pagination
+  {{$.ProjectName}} {{.Name | lower}} list --limit 20 --offset 10`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize dependencies
-		logger := infrastructure.NewLogger()
-		config, err := infrastructure.LoadConfig(configFile)
+		service, cleanup, err := initialize{{.Name}}Service()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
+			return err
+		}
+		defer cleanup()
+
+		// Build list request
+		req := &application.List{{.Name}}Request{
+			Limit:  limitFlag,
+			Offset: offsetFlag,
 		}
 
-		db, err := infrastructure.NewDatabase(config.Database)
-		if err != nil {
-			return fmt.Errorf("failed to initialize database: %w", err)
-		}
-		defer db.Close()
-
-		eventStore, err := infrastructure.NewEventStore(db, logger)
-		if err != nil {
-			return fmt.Errorf("failed to initialize event store: %w", err)
-		}
-
-		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
-		service := application.New{{.Name}}Service(repository, logger)
-
-		// TODO: Call service to list {{.Name | lower}}s
-		fmt.Println("List {{.Name | lower}}s command executed")
-		return nil
+		// Call service
+		ctx := context.Background()
+		result, err := service.List(ctx, req)
+		
+		return outputResult(result, err)
 	},
 }
 
@@ -153,32 +219,33 @@ var update{{.Name}}Cmd = &cobra.Command{
 	Short: "Update a {{.Name | lower}}",
 	Long:  `Update an existing {{.Name | lower}} by its unique identifier.`,
 	Args:  cobra.ExactArgs(1),
+	Example: `  # Update a {{.Name | lower}}
+  {{$.ProjectName}} {{.Name | lower}} update 2SwDCUuFQXNvVmoGBVJbUzSRHwd{{range .Properties}}{{if ne .Name "Id"}} --{{.Name | lower}} "{{if eq .Type "string"}}new value{{else if eq .Type "int"}}456{{else}}new value{{end}}"{{end}}{{end}}`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize dependencies
-		logger := infrastructure.NewLogger()
-		config, err := infrastructure.LoadConfig(configFile)
+		service, cleanup, err := initialize{{.Name}}Service()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
+			return err
+		}
+		defer cleanup()
+
+		// Parse ID
+		id, err := ksuid.Parse(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid KSUID format: %w", err)
 		}
 
-		db, err := infrastructure.NewDatabase(config.Database)
-		if err != nil {
-			return fmt.Errorf("failed to initialize database: %w", err)
+		// Build update request (only include fields that were explicitly set)
+		req := &application.Update{{.Name}}Request{}
+		{{range .Properties}}{{if ne .Name "Id"}}if cmd.Flags().Changed("{{.Name | lower}}") {
+			{{if eq .Type "string"}}req.{{.Name}} = &{{.Name | lower}}Flag{{else if eq .Type "int"}}req.{{.Name}} = &{{.Name | lower}}Flag{{else if eq .Type "bool"}}req.{{.Name}} = &{{.Name | lower}}Flag{{else}}req.{{.Name}} = &{{.Name | lower}}Flag{{end}}
 		}
-		defer db.Close()
+		{{end}}{{end}}
 
-		eventStore, err := infrastructure.NewEventStore(db, logger)
-		if err != nil {
-			return fmt.Errorf("failed to initialize event store: %w", err)
-		}
-
-		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
-		service := application.New{{.Name}}Service(repository, logger)
-
-		// TODO: Parse ID and get update data from flags
-		id := args[0]
-		fmt.Printf("Update {{.Name | lower}} command executed with ID: %s\n", id)
-		return nil
+		// Call service
+		ctx := context.Background()
+		result, err := service.Update(ctx, id, req)
+		
+		return outputResult(result, err)
 	},
 }
 
@@ -188,31 +255,35 @@ var delete{{.Name}}Cmd = &cobra.Command{
 	Short: "Delete a {{.Name | lower}}",
 	Long:  `Delete an existing {{.Name | lower}} by its unique identifier.`,
 	Args:  cobra.ExactArgs(1),
+	Example: `  # Delete a {{.Name | lower}}
+  {{$.ProjectName}} {{.Name | lower}} delete 2SwDCUuFQXNvVmoGBVJbUzSRHwd`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Initialize dependencies
-		logger := infrastructure.NewLogger()
-		config, err := infrastructure.LoadConfig(configFile)
+		service, cleanup, err := initialize{{.Name}}Service()
 		if err != nil {
-			return fmt.Errorf("failed to load config: %w", err)
+			return err
+		}
+		defer cleanup()
+
+		// Parse ID
+		id, err := ksuid.Parse(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid KSUID format: %w", err)
 		}
 
-		db, err := infrastructure.NewDatabase(config.Database)
+		// Call service
+		ctx := context.Background()
+		err = service.Delete(ctx, id)
+		
 		if err != nil {
-			return fmt.Errorf("failed to initialize database: %w", err)
-		}
-		defer db.Close()
-
-		eventStore, err := infrastructure.NewEventStore(db, logger)
-		if err != nil {
-			return fmt.Errorf("failed to initialize event store: %w", err)
+			return err
 		}
 
-		repository := infrastructure.New{{.Name}}Repository(eventStore, logger)
-		service := application.New{{.Name}}Service(repository, logger)
-
-		// TODO: Parse ID and call service
-		id := args[0]
-		fmt.Printf("Delete {{.Name | lower}} command executed with ID: %s\n", id)
+		if outputJSON {
+			fmt.Println(`{"success": true, "message": "{{.Name | lower}} deleted successfully"}`)
+		} else {
+			fmt.Printf("{{.Name}} deleted successfully\n")
+		}
+		
 		return nil
 	},
 }
@@ -236,11 +307,25 @@ func init() {
 	// Add global flags
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose output")
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "config file (default is ./config.yaml)")
+	rootCmd.PersistentFlags().BoolVar(&outputJSON, "json", false, "output results in JSON format")
 
 	// Add version command
 	rootCmd.AddCommand(versionCmd)
 
 	{{range .Entities}}
+	// Add flags for {{.Name | lower}} create command
+	{{range .Properties}}{{if ne .Name "Id"}}create{{$.Name}}Cmd.Flags().{{if eq .Type "string"}}StringVar{{else if eq .Type "int"}}IntVar{{else if eq .Type "bool"}}BoolVar{{else}}StringVar{{end}}(&{{.Name | lower}}Flag, "{{.Name | lower}}", {{if eq .Type "string"}}"{{.DefaultValue}}"{{else if eq .Type "int"}}{{.DefaultValue | default "0"}}{{else if eq .Type "bool"}}{{.DefaultValue | default "false"}}{{else}}"{{.DefaultValue}}"{{end}}, "{{.Description | default (.Name | lower)}}")
+	{{if .Required}}create{{$.Name}}Cmd.MarkFlagRequired("{{.Name | lower}}")
+	{{end}}{{end}}{{end}}
+
+	// Add flags for {{.Name | lower}} update command
+	{{range .Properties}}{{if ne .Name "Id"}}update{{$.Name}}Cmd.Flags().{{if eq .Type "string"}}StringVar{{else if eq .Type "int"}}IntVar{{else if eq .Type "bool"}}BoolVar{{else}}StringVar{{end}}(&{{.Name | lower}}Flag, "{{.Name | lower}}", {{if eq .Type "string"}}"{{.DefaultValue}}"{{else if eq .Type "int"}}{{.DefaultValue | default "0"}}{{else if eq .Type "bool"}}{{.DefaultValue | default "false"}}{{else}}"{{.DefaultValue}}"{{end}}, "{{.Description | default (.Name | lower)}}")
+	{{end}}{{end}}
+
+	// Add flags for {{.Name | lower}} list command
+	list{{.Name}}Cmd.Flags().IntVar(&limitFlag, "limit", 10, "maximum number of {{.Name | lower}}s to return")
+	list{{.Name}}Cmd.Flags().IntVar(&offsetFlag, "offset", 0, "number of {{.Name | lower}}s to skip")
+
 	// Add {{.Name | lower}} subcommands
 	{{.Name | lower}}Cmd.AddCommand(create{{.Name}}Cmd)
 	{{.Name | lower}}Cmd.AddCommand(get{{.Name}}Cmd)

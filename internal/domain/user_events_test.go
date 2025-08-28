@@ -5,11 +5,11 @@ import (
 	"time"
 
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 func TestUserCreatedEvent(t *testing.T) {
-	userID := uuid.New()
+	userID := ksuid.New()
 	email := "john@example.com"
 	name := "John Doe"
 	aggregateID := userID.String()
@@ -53,7 +53,7 @@ func TestUserCreatedEvent(t *testing.T) {
 }
 
 func TestUserEmailUpdatedEvent(t *testing.T) {
-	userID := uuid.New()
+	userID := ksuid.New()
 	oldEmail := "john@example.com"
 	newEmail := "john.doe@example.com"
 	aggregateID := userID.String()
@@ -93,7 +93,7 @@ func TestUserEmailUpdatedEvent(t *testing.T) {
 }
 
 func TestUserNameUpdatedEvent(t *testing.T) {
-	userID := uuid.New()
+	userID := ksuid.New()
 	oldName := "John Doe"
 	newName := "John Smith"
 	aggregateID := userID.String()
@@ -133,7 +133,7 @@ func TestUserNameUpdatedEvent(t *testing.T) {
 }
 
 func TestUserDeactivatedEvent(t *testing.T) {
-	userID := uuid.New()
+	userID := ksuid.New()
 	aggregateID := userID.String()
 	version := 4
 
@@ -163,7 +163,7 @@ func TestUserDeactivatedEvent(t *testing.T) {
 }
 
 func TestUserActivatedEvent(t *testing.T) {
-	userID := uuid.New()
+	userID := ksuid.New()
 	aggregateID := userID.String()
 	version := 5
 
@@ -193,7 +193,7 @@ func TestUserActivatedEvent(t *testing.T) {
 }
 
 func TestEventVersioning(t *testing.T) {
-	userID := uuid.New()
+	userID := ksuid.New()
 	aggregateID := userID.String()
 
 	tests := []struct {
@@ -249,7 +249,7 @@ func TestEventVersioning(t *testing.T) {
 }
 
 func TestEventAggregateIDConsistency(t *testing.T) {
-	userID := uuid.New()
+	userID := ksuid.New()
 	aggregateID := userID.String()
 
 	events := []pkgdomain.Event{

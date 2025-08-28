@@ -6,7 +6,7 @@ import (
 
 	"github.com/akeemphilbert/pericarp/internal/domain"
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 )
 
 // UserEventSourcingRepository implements UserRepository using event sourcing
@@ -50,9 +50,9 @@ func (r *UserEventSourcingRepository) Save(user *domain.User) error {
 }
 
 // FindByID loads a user aggregate by reconstructing it from events
-func (r *UserEventSourcingRepository) FindByID(id uuid.UUID) (*domain.User, error) {
+func (r *UserEventSourcingRepository) FindByID(id ksuid.KSUID) (*domain.User, error) {
 	ctx := context.Background()
-	aggregateID := id.String()
+	aggregateID := id.String() // ✅ Correct conversion
 
 	r.logger.Debug("Loading user from events", "user_id", aggregateID)
 
@@ -100,19 +100,20 @@ func (r *UserEventSourcingRepository) FindByEmail(email string) (*domain.User, e
 }
 
 // Delete removes a user (in event sourcing, this would typically be a "soft delete" event)
-func (r *UserEventSourcingRepository) Delete(id uuid.UUID) error {
+func (r *UserEventSourcingRepository) Delete(id ksuid.KSUID) error {
 	// In event sourcing, deletion is typically handled by emitting a "deleted" event
 	// rather than actually removing data. For this demo, we'll return an error
 	// indicating this should be handled through domain methods
 
-	r.logger.Warn("Delete operation should be handled through domain methods (e.g., Deactivate)", "user_id", id)
+	aggregateID := id.String() // ✅ Correct conversion
+	r.logger.Warn("Delete operation should be handled through domain methods (e.g., Deactivate)", "user_id", aggregateID)
 	return fmt.Errorf("delete operation should be handled through domain methods - use Deactivate instead")
 }
 
 // LoadFromVersion loads a user aggregate from a specific version (implements domain.UserRepository)
-func (r *UserEventSourcingRepository) LoadFromVersion(id uuid.UUID, version int) (*domain.User, error) {
+func (r *UserEventSourcingRepository) LoadFromVersion(id ksuid.KSUID, version int) (*domain.User, error) {
 	ctx := context.Background()
-	aggregateID := id.String()
+	aggregateID := id.String() // ✅ Correct conversion
 
 	r.logger.Debug("Loading user from specific version", "user_id", aggregateID, "version", version)
 

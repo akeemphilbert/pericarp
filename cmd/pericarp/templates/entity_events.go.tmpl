@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
@@ -15,10 +15,10 @@ type {{.Name}}CreatedEvent struct {
 }
 
 // New{{.Name}}CreatedEvent creates a new {{.Name}}CreatedEvent
-func New{{.Name}}CreatedEvent(aggregateID uuid.UUID{{range filterRequired .Properties}}, {{.Name | camelCase}} {{.Type | goType}}{{end}}) *{{.Name}}CreatedEvent {
+func New{{.Name}}CreatedEvent(aggregateID ksuid.KSUID{{range filterRequired .Properties}}, {{.Name | camelCase}} {{.Type | goType}}{{end}}) *{{.Name}}CreatedEvent {
 	return &{{.Name}}CreatedEvent{
 		StandardEvent: domain.NewStandardEvent(
-			uuid.New(),
+			ksuid.New(),
 			"{{.Name}}Created",
 			aggregateID,
 			1,
@@ -41,10 +41,10 @@ type {{$.Name}}{{.Name | pascalCase}}UpdatedEvent struct {
 }
 
 // New{{$.Name}}{{.Name | pascalCase}}UpdatedEvent creates a new {{$.Name}}{{.Name | pascalCase}}UpdatedEvent
-func New{{$.Name}}{{.Name | pascalCase}}UpdatedEvent(aggregateID uuid.UUID, {{.Name | camelCase}} {{.Type | goType}}) *{{$.Name}}{{.Name | pascalCase}}UpdatedEvent {
+func New{{$.Name}}{{.Name | pascalCase}}UpdatedEvent(aggregateID ksuid.KSUID, {{.Name | camelCase}} {{.Type | goType}}) *{{$.Name}}{{.Name | pascalCase}}UpdatedEvent {
 	return &{{$.Name}}{{.Name | pascalCase}}UpdatedEvent{
 		StandardEvent: domain.NewStandardEvent(
-			uuid.New(),
+			ksuid.New(),
 			"{{$.Name}}{{.Name | pascalCase}}Updated",
 			aggregateID,
 			1,

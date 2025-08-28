@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 	"{{.ProjectName}}/internal/domain"
 )
@@ -35,7 +35,7 @@ func (s *{{.Entity.Name}}Service) Create(ctx context.Context, req *Create{{.Enti
 
 	// Create new {{.Entity.Name}} entity
 	{{.Entity.Name | lower}} := &domain.{{.Entity.Name}}{
-		Id: uuid.New(),
+		Id: ksuid.New(),
 		{{range .Entity.Properties}}{{if ne .Name "Id"}}{{.Name}}: req.{{.Name}},
 		{{end}}{{end}}
 	}
@@ -54,7 +54,7 @@ func (s *{{.Entity.Name}}Service) Create(ctx context.Context, req *Create{{.Enti
 }
 
 // GetById retrieves a {{.Entity.Name}} by ID
-func (s *{{.Entity.Name}}Service) GetById(ctx context.Context, id uuid.UUID) (*{{.Entity.Name}}Response, error) {
+func (s *{{.Entity.Name}}Service) GetById(ctx context.Context, id ksuid.KSUID) (*{{.Entity.Name}}Response, error) {
 	s.logger.Debug("Getting {{.Entity.Name | lower}} by ID", "id", id)
 
 	{{.Entity.Name | lower}}, err := s.repository.GetById(ctx, id)
@@ -74,7 +74,7 @@ func (s *{{.Entity.Name}}Service) GetById(ctx context.Context, id uuid.UUID) (*{
 }
 
 // Update updates an existing {{.Entity.Name}}
-func (s *{{.Entity.Name}}Service) Update(ctx context.Context, id uuid.UUID, req *Update{{.Entity.Name}}Request) (*{{.Entity.Name}}Response, error) {
+func (s *{{.Entity.Name}}Service) Update(ctx context.Context, id ksuid.KSUID, req *Update{{.Entity.Name}}Request) (*{{.Entity.Name}}Response, error) {
 	s.logger.Debug("Updating {{.Entity.Name | lower}}", "id", id, "request", req)
 
 	// Validate request
@@ -115,7 +115,7 @@ func (s *{{.Entity.Name}}Service) Update(ctx context.Context, id uuid.UUID, req 
 }
 
 // Delete deletes a {{.Entity.Name}} by ID
-func (s *{{.Entity.Name}}Service) Delete(ctx context.Context, id uuid.UUID) error {
+func (s *{{.Entity.Name}}Service) Delete(ctx context.Context, id string) error {
 	s.logger.Debug("Deleting {{.Entity.Name | lower}}", "id", id)
 
 	// Check if {{.Entity.Name}} exists

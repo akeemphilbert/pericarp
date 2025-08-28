@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 	
 	appDomain "{{.ProjectName}}/internal/domain"
@@ -37,7 +37,7 @@ func (r *{{.Name}}EventSourcingRepository) Save(ctx context.Context, {{.Name | c
 	}
 
 	// Store events
-	if err := r.eventStore.SaveEvents(ctx, {{.Name | camelCase}}.ID(), events, {{.Name | camelCase}}.Version()-len(events)); err != nil {
+	if _, err := r.eventStore.Save(ctx, events); err != nil {
 		return fmt.Errorf("failed to save events for {{.Name | lower}} %s: %w", {{.Name | camelCase}}.ID(), err)
 	}
 
@@ -49,26 +49,33 @@ func (r *{{.Name}}EventSourcingRepository) Save(ctx context.Context, {{.Name | c
 }
 
 // Load retrieves a {{.Name | lower}} by ID by replaying its events
-func (r *{{.Name}}EventSourcingRepository) Load(ctx context.Context, id uuid.UUID) (*appDomain.{{.Name}}, error) {
-	events, err := r.eventStore.GetEvents(ctx, id.String())
+func (r *{{.Name}}EventSourcingRepository) Load(ctx context.Context, id ksuid.KSUID) (*appDomain.{{.Name}}, error) {
+	aggregateID := id.String() // ✅ Correct conversion
+	envelopes, err := r.eventStore.Load(ctx, aggregateID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load events for {{.Name | lower}} %s: %w", id.String(), err)
+		return nil, fmt.Errorf("failed to load events for {{.Name | lower}} %s: %w", aggregateID, err)
 	}
 
-	if len(events) == 0 {
-		return nil, fmt.Errorf("{{.Name | lower}} not found: %s", id.String())
+	if len(envelopes) == 0 {
+		return nil, fmt.Errorf("{{.Name | lower}} not found: %s", aggregateID)
+	}
+
+	// Extract events from envelopes
+	events := make([]domain.Event, len(envelopes))
+	for i, envelope := range envelopes {
+		events[i] = envelope.Event()
 	}
 
 	// Create empty aggregate and load from history
 	{{.Name | camelCase}} := &appDomain.{{.Name}}{}
 	{{.Name | camelCase}}.LoadFromHistory(events)
 
-	r.logger.Debug("Loaded {{.Name | lower}} %s from %d events", id.String(), len(events))
+	r.logger.Debug("Loaded {{.Name | lower}} %s from %d events", aggregateID, len(events))
 	return {{.Name | camelCase}}, nil
 }
 
 // Delete removes a {{.Name | lower}} by ID (soft delete via event)
-func (r *{{.Name}}EventSourcingRepository) Delete(ctx context.Context, id uuid.UUID) error {
+func (r *{{.Name}}EventSourcingRepository) Delete(ctx context.Context, id ksuid.KSUID) error {
 	// Load the aggregate first
 	{{.Name | camelCase}}, err := r.Load(ctx, id)
 	if err != nil {
@@ -81,13 +88,14 @@ func (r *{{.Name}}EventSourcingRepository) Delete(ctx context.Context, id uuid.U
 }
 
 // Exists checks if a {{.Name | lower}} exists by ID
-func (r *{{.Name}}EventSourcingRepository) Exists(ctx context.Context, id uuid.UUID) (bool, error) {
-	events, err := r.eventStore.GetEvents(ctx, id.String())
+func (r *{{.Name}}EventSourcingRepository) Exists(ctx context.Context, id ksuid.KSUID) (bool, error) {
+	aggregateID := id.String() // ✅ Correct conversion
+	envelopes, err := r.eventStore.Load(ctx, aggregateID)
 	if err != nil {
-		return false, fmt.Errorf("failed to check existence of {{.Name | lower}} %s: %w", id.String(), err)
+		return false, fmt.Errorf("failed to check existence of {{.Name | lower}} %s: %w", aggregateID, err)
 	}
 
-	return len(events) > 0, nil
+	return len(envelopes) > 0, nil
 }
 
 {{range .Properties}}{{if eq (.Type | goType) "string"}}

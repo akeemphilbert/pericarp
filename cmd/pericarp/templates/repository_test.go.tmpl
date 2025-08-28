@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 example.com/project/internal/domain
@@ -23,7 +23,7 @@ func Test{{$entityName}}Repository_Save(t *testing.T) {
 	// ctx := context.Background()
 	
 	// Create test {{$entityLower}}
-	// {{$entityLower}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
+	// {{$entityLower}}, err := domain.New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
 	// require.NoError(t, err)
 	
 	// Save {{$entityLower}}
@@ -41,7 +41,7 @@ func Test{{$entityName}}Repository_Load(t *testing.T) {
 	// ctx := context.Background()
 	
 	// Test loading existing {{$entityLower}}
-	// id := uuid.New()
+	// id := ksuid.New()
 	// {{$entityLower}}, err := repo.Load(ctx, id)
 	// assert.NoError(t, err)
 	// assert.NotNil(t, {{$entityLower}})
@@ -58,7 +58,7 @@ func Test{{$entityName}}Repository_Load_NotFound(t *testing.T) {
 	// ctx := context.Background()
 	
 	// Test loading non-existent {{$entityLower}}
-	// nonExistentID := uuid.New()
+	// nonExistentID := ksuid.New()
 	// {{$entityLower}}, err := repo.Load(ctx, nonExistentID)
 	// assert.Error(t, err)
 	// assert.Nil(t, {{$entityLower}})

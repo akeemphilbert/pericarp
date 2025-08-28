@@ -41,7 +41,10 @@ Examples:
   # Create a new project from existing repository
   pericarp new my-service --repo https://github.com/user/repo.git
 
-  # Generate code from OpenAPI specification
+  # Create a new project and generate code from OpenAPI spec in one step
+  pericarp new my-service --openapi api.yaml
+
+  # Generate code from OpenAPI specification (existing project)
   pericarp generate --openapi api.yaml
 
   # List supported input formats
@@ -89,6 +92,12 @@ and adding Pericarp capabilities to it.`,
   # Create a new project from existing repository
   pericarp new my-service --repo https://github.com/user/repo.git
 
+  # Create a new project and generate code from OpenAPI spec
+  pericarp new my-service --openapi api.yaml
+
+  # Create from repository with OpenAPI generation
+  pericarp new my-service --repo https://github.com/user/repo.git --openapi api.yaml
+
   # Preview what would be created without actually creating files
   pericarp new my-service --dry-run
 
@@ -102,6 +111,7 @@ and adding Pericarp capabilities to it.`,
 		repoURL, _ := cmd.Flags().GetString("repo")
 		destination, _ := cmd.Flags().GetString("destination")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		openAPIFile, _ := cmd.Flags().GetString("openapi")
 
 		// Validate project name (Requirement 10.1)
 		validator := NewValidator()
@@ -116,9 +126,16 @@ and adding Pericarp capabilities to it.`,
 			}
 		}
 
+		// Validate OpenAPI file if provided
+		if openAPIFile != "" {
+			if err := validator.ValidateInputFile(openAPIFile); err != nil {
+				return err
+			}
+		}
+
 		// Create project
 		creator := NewProjectCreator(logger)
-		return creator.CreateProject(projectName, repoURL, destination, dryRun)
+		return creator.CreateProject(projectName, repoURL, destination, dryRun, openAPIFile)
 	},
 }
 
@@ -289,6 +306,7 @@ func init() {
 	newCmd.Flags().StringP("repo", "r", "", "Git repository URL to clone from")
 	newCmd.Flags().StringP("destination", "d", "", "destination directory (defaults to project name)")
 	newCmd.Flags().Bool("dry-run", false, "preview what would be created without actually creating files")
+	newCmd.Flags().String("openapi", "", "OpenAPI specification file to generate code from during project creation")
 
 	// Add flags to generate command (Requirement 3, 9)
 	generateCmd.Flags().String("erd", "", "ERD specification file (YAML format)")

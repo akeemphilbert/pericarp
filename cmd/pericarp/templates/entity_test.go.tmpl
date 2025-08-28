@@ -3,7 +3,7 @@ package domain
 import (
 	"testing"
 
-	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +20,7 @@ func TestNew{{$entityName}}(t *testing.T) {
 	}{
 		{
 			name: "valid {{$entityLower}}",
-			{{range filterRequired .Properties}}{{.Name | camelCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
+			{{range filterRequired .Properties}}{{.Name | camelCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
 			{{end}}
 			wantErr: false,
 		},
@@ -28,7 +28,7 @@ func TestNew{{$entityName}}(t *testing.T) {
 		{
 			name: "invalid {{$entityLower}} - empty {{.Name | lower}}",
 			{{range filterRequired $.Properties}}{{if eq .Name $.Name}}{{.Name | camelCase}}: {{.Type | goType | zeroValue}},
-			{{else}}{{.Name | camelCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
+			{{else}}{{.Name | camelCase}}: {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}},
 			{{end}}{{end}}
 			wantErr: true,
 		},
@@ -69,14 +69,14 @@ func TestNew{{$entityName}}(t *testing.T) {
 {{range .Properties}}{{if not .Required}}
 func Test{{$entityName}}_Set{{.Name | pascalCase}}(t *testing.T) {
 	// Create a valid {{$entityLower}}
-	{{$entityLower}}, err := New{{$entityName}}({{range $i, $prop := (filterRequired $.Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
+	{{$entityLower}}, err := New{{$entityName}}({{range $i, $prop := (filterRequired $.Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
 	require.NoError(t, err)
 
 	// Clear uncommitted events
 	{{$entityLower}}.MarkEventsAsCommitted()
 
 	// Set new value
-	newValue := {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}}
+	newValue := {{if eq (.Type | goType) "string"}}"updated-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}456{{else if eq (.Type | goType) "bool"}}false{{else}}{{.Type | goType | zeroValue}}{{end}}
 	{{$entityLower}}.Set{{.Name | pascalCase}}(newValue)
 
 	// Verify the value was updated
@@ -95,9 +95,9 @@ func Test{{$entityName}}_Set{{.Name | pascalCase}}(t *testing.T) {
 
 func Test{{$entityName}}_LoadFromHistory(t *testing.T) {
 	// Create test events
-	aggregateID := uuid.New()
+	aggregateID := ksuid.New()
 	events := []Event{
-		New{{$entityName}}CreatedEvent(aggregateID{{range filterRequired .Properties}}, {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}}),
+		New{{$entityName}}CreatedEvent(aggregateID{{range filterRequired .Properties}}, {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}}),
 	}
 
 	// Create empty {{$entityLower}} and load from history
@@ -106,14 +106,14 @@ func Test{{$entityName}}_LoadFromHistory(t *testing.T) {
 
 	// Verify the {{$entityLower}} was reconstructed correctly
 	assert.Equal(t, aggregateID, {{$entityLower}}.Id)
-	{{range filterRequired .Properties}}assert.Equal(t, {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}, {{$entityLower}}.{{.Name | pascalCase}})
+	{{range filterRequired .Properties}}assert.Equal(t, {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}, {{$entityLower}}.{{.Name | pascalCase}})
 	{{end}}
 	assert.Equal(t, 1, {{$entityLower}}.Version())
 }
 
 func Test{{$entityName}}_MarkEventsAsCommitted(t *testing.T) {
 	// Create a valid {{$entityLower}}
-	{{$entityLower}}, err := New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "uuid.UUID"}}uuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
+	{{$entityLower}}, err := New{{$entityName}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, {{end}}{{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}{{end}})
 	require.NoError(t, err)
 
 	// Verify there are uncommitted events
