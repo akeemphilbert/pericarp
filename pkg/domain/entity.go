@@ -51,7 +51,7 @@ import (
 //	}
 type Entity struct {
 	id         string
-	sequenceNo int
+	sequenceNo int64
 	events     []Event
 	errors     []error
 	mu         sync.RWMutex // Protects concurrent access to entity state
@@ -103,13 +103,13 @@ func (e *Entity) ID() string {
 func (e *Entity) Version() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.sequenceNo
+	return int(e.sequenceNo)
 }
 
 // SequenceNo returns the current sequence number of the entity.
 // The sequence number is incremented each time an event is added and can be used
 // for ordering events within the same aggregate or for optimistic concurrency control.
-func (e *Entity) SequenceNo() int {
+func (e *Entity) SequenceNo() int64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.sequenceNo
@@ -168,7 +168,7 @@ func (e *Entity) LoadFromHistory(events []Event) {
 	defer e.mu.Unlock()
 
 	// Update sequence number based on events
-	e.sequenceNo = len(events)
+	e.sequenceNo = int64(len(events))
 
 	// Clear any uncommitted events and errors during reconstruction
 	e.events = e.events[:0]

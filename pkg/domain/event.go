@@ -36,16 +36,17 @@ import (
 // Example implementation:
 //
 //	type UserCreatedEvent struct {
-//	    UserID    string    `json:"user_id"`
-//	    Email     string    `json:"email"`
-//	    Name      string    `json:"name"`
-//	    CreatedAt time.Time `json:"created_at"`
+//	    UserID     string    `json:"user_id"`
+//	    Email      string    `json:"email"`
+//	    Name       string    `json:"name"`
+//	    CreatedAt  time.Time `json:"created_at"`
+//	    SequenceNo int64     `json:"sequence_no"`
 //	}
 //
 //	func (e UserCreatedEvent) EventType() string { return "UserCreated" }
 //	func (e UserCreatedEvent) AggregateID() string { return e.UserID }
-//	func (e UserCreatedEvent) Version() int { return 1 }
-//	func (e UserCreatedEvent) OccurredAt() time.Time { return e.CreatedAt }
+//	func (e UserCreatedEvent) SequenceNo() int64 { return e.SequenceNo }
+//	func (e UserCreatedEvent) CreatedAt() time.Time { return e.CreatedAt }
 type Event interface {
 	// EventType returns the type identifier for this event.
 	// This should be a stable string that uniquely identifies the event type
@@ -56,13 +57,25 @@ type Event interface {
 	// This is used to group events by aggregate for event sourcing.
 	AggregateID() string
 
-	// Version returns the version of the aggregate when this event occurred.
+	// SequenceNo returns the sequence number of the aggregate when this event occurred.
 	// This is used for optimistic concurrency control and event ordering.
-	Version() int
+	SequenceNo() int64
 
-	// OccurredAt returns the timestamp when this event occurred in the domain.
+	// CreatedAt returns the timestamp when this event was created in the domain.
 	// This should represent the business time, not the technical persistence time.
-	OccurredAt() time.Time
+	CreatedAt() time.Time
+
+	// User returns the user ID associated with this event.
+	// This is useful for auditing and tracking which user performed the action.
+	User() string
+
+	// Account returns the account ID associated with this event.
+	// This is useful for multi-tenant systems to track which account the event belongs to.
+	Account() string
+
+	// Payload returns the event-specific data payload.
+	// This contains the actual business data associated with the event.
+	Payload() any
 }
 
 // Envelope wraps domain events with additional metadata for transport and processing.
@@ -128,12 +141,12 @@ type EventStore interface {
 	// correct aggregate reconstruction.
 	Load(ctx context.Context, aggregateID string) ([]Envelope, error)
 
-	// LoadFromVersion retrieves events for an aggregate starting from a specific version.
+	// LoadFromSequence retrieves events for an aggregate starting from a specific sequence number.
 	// This is useful for incremental updates or when you already have a snapshot
-	// of the aggregate at a certain version.
+	// of the aggregate at a certain sequence number.
 	//
-	// The version parameter is inclusive - events with version >= version will be returned.
-	LoadFromVersion(ctx context.Context, aggregateID string, version int) ([]Envelope, error)
+	// The sequenceNo parameter is inclusive - events with sequenceNo >= sequenceNo will be returned.
+	LoadFromSequence(ctx context.Context, aggregateID string, sequenceNo int64) ([]Envelope, error)
 }
 
 // EventDispatcher handles the distribution of events to registered handlers,
@@ -275,4 +288,102 @@ type UnitOfWork interface {
 	//
 	// After rollback, the unit of work can be reused for new operations.
 	Rollback() error
+}
+
+// EntityEvent provides a basic implementation of the Event interface that can be
+// embedded in concrete event types. It handles common event concerns like
+// entity type, event type, sequence numbers, and metadata.
+//
+// The EventType() method returns a concatenation of EntityType and Type
+// in the format "entitytype.eventtype" (e.g., "user.created", "order.shipped").
+//
+// Example usage:
+//
+//	type UserCreatedEvent struct {
+//	    EntityEvent
+//	    Email string `json:"email"`
+//	    Name  string `json:"name"`
+//	}
+//
+//	func NewUserCreatedEvent(userID, email, name, userID, accountID string) UserCreatedEvent {
+//	    return UserCreatedEvent{
+//	        EntityEvent: NewEntityEvent("user", "created", userID, userID, accountID),
+//	        Email:       email,
+//	        Name:        name,
+//	    }
+//	}
+type EntityEvent struct {
+	EntityType  string    `json:"entity_type"`
+	Type        string    `json:"type"`
+	AggregateId string    `json:"aggregate_id"`
+	SequenceNum int64     `json:"sequence_no"`
+	CreatedTime time.Time `json:"created_at"`
+	UserId      string    `json:"user_id"`
+	AccountId   string    `json:"account_id"`
+	Data        any       `json:"payload"`
+}
+
+// NewEntityEvent creates a new EntityEvent with the specified parameters.
+// The entityType and eventType are combined to form the full event type.
+//
+// Parameters:
+//   - entityType: The type of entity (e.g., "user", "order", "product")
+//   - eventType: The type of event (e.g., "created", "updated", "deleted")
+//   - aggregateID: The ID of the aggregate that generated this event
+//   - userID: The ID of the user who triggered this event
+//   - accountID: The ID of the account this event belongs to
+//   - payload: The event-specific data payload
+//
+// Example:
+//
+//	payload := map[string]interface{}{"email": "user@example.com", "name": "John Doe"}
+//	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", payload)
+//	// event.EventType() returns "user.created"
+func NewEntityEvent(entityType, eventType, aggregateID, userID, accountID string, payload any) EntityEvent {
+	return EntityEvent{
+		EntityType:  entityType,
+		Type:        eventType,
+		AggregateId: aggregateID,
+		SequenceNum: 0, // Will be set by the entity when the event is added
+		CreatedTime: time.Now(),
+		UserId:      userID,
+		AccountId:   accountID,
+		Data:        payload,
+	}
+}
+
+// EventType returns the full event type as a concatenation of EntityType and Type.
+// Format: "entitytype.eventtype" (e.g., "user.created", "order.shipped")
+func (e EntityEvent) EventType() string {
+	return e.EntityType + "." + e.Type
+}
+
+// AggregateID returns the ID of the aggregate that generated this event.
+func (e EntityEvent) AggregateID() string {
+	return e.AggregateId
+}
+
+// SequenceNo returns the sequence number of this event.
+func (e EntityEvent) SequenceNo() int64 {
+	return e.SequenceNum
+}
+
+// CreatedAt returns the timestamp when this event was created.
+func (e EntityEvent) CreatedAt() time.Time {
+	return e.CreatedTime
+}
+
+// User returns the user ID associated with this event.
+func (e EntityEvent) User() string {
+	return e.UserId
+}
+
+// Account returns the account ID associated with this event.
+func (e EntityEvent) Account() string {
+	return e.AccountId
+}
+
+// Payload returns the event-specific data payload.
+func (e EntityEvent) Payload() any {
+	return e.Data
 }
