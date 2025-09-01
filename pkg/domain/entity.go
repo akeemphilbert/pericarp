@@ -51,21 +51,42 @@ import (
 //	}
 type Entity struct {
 	id         string
-	version    int
 	sequenceNo int
 	events     []Event
+	errors     []error
 	mu         sync.RWMutex // Protects concurrent access to entity state
 }
 
 // NewEntity creates a new entity with the given ID.
-// The entity starts with version 0 and sequence number 0.
+// The entity starts with sequence number 0.
 func NewEntity(id string) Entity {
 	return Entity{
 		id:         id,
-		version:    0,
 		sequenceNo: 0,
-		events:     make([]Event, 0, 5), // Pre-allocate with small capacity
+		events:     []Event{},
+		errors:     []error{},
 	}
+}
+
+// WithID sets the ID of the entity and returns a pointer to the entity.
+// This allows for fluent initialization: new(Entity).WithID("some-id")
+//
+// Example usage:
+//
+//	entity := new(Entity).WithID("user-123")
+//	// or
+//	var entity Entity
+//	entity.WithID("user-123")
+func (e *Entity) WithID(id string) *Entity {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.id = id
+	e.sequenceNo = 0
+	e.events = []Event{}
+	e.errors = []error{}
+
+	return e
 }
 
 // ID returns the unique identifier of the entity.
@@ -76,13 +97,13 @@ func (e *Entity) ID() string {
 	return e.id
 }
 
-// Version returns the current version of the entity.
-// The version represents the number of events that have been applied to this entity.
-// This implements the AggregateRoot interface.
+// Version returns the current sequence number of the entity.
+// This maintains compatibility with the AggregateRoot interface.
+// The sequence number represents the number of events that have been applied to this entity.
 func (e *Entity) Version() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.version
+	return e.sequenceNo
 }
 
 // SequenceNo returns the current sequence number of the entity.
@@ -123,7 +144,7 @@ func (e *Entity) MarkEventsAsCommitted() {
 // apply historical events during aggregate reconstruction.
 // This implements the AggregateRoot interface.
 //
-// Note: This method only updates the version and sequence number.
+// Note: This method only updates the sequence number.
 // Concrete aggregates should override this method to apply domain-specific
 // event handling while calling this base implementation.
 //
@@ -139,23 +160,23 @@ func (e *Entity) MarkEventsAsCommitted() {
 //	            u.email = e.NewEmail
 //	        }
 //	    }
-//	    // Call base implementation to update version and sequence
+//	    // Call base implementation to update sequence number
 //	    u.Entity.LoadFromHistory(events)
 //	}
 func (e *Entity) LoadFromHistory(events []Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Update version and sequence number based on events
-	e.version = len(events)
+	// Update sequence number based on events
 	e.sequenceNo = len(events)
 
-	// Clear any uncommitted events during reconstruction
+	// Clear any uncommitted events and errors during reconstruction
 	e.events = e.events[:0]
+	e.errors = e.errors[:0]
 }
 
 // AddEvent adds a new event to the entity's uncommitted events list.
-// This method automatically increments the version and sequence number.
+// This method automatically increments the sequence number.
 //
 // This method is thread-safe and can be called concurrently.
 //
@@ -186,8 +207,7 @@ func (e *Entity) AddEvent(event Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Increment version and sequence number
-	e.version++
+	// Increment sequence number
 	e.sequenceNo++
 
 	// Add the event to uncommitted events
@@ -210,22 +230,59 @@ func (e *Entity) UncommittedEventCount() int {
 	return len(e.events)
 }
 
+// AddError adds an error to the entity's error collection.
+// This is useful for collecting validation errors or business rule violations.
+//
+// Example usage:
+//
+//	func (u *User) ChangeEmail(newEmail string) error {
+//	    if newEmail == "" {
+//	        err := errors.New("email cannot be empty")
+//	        u.AddError(err)
+//	        return err
+//	    }
+//	    // ... rest of the logic
+//	}
+func (e *Entity) AddError(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.errors = append(e.errors, err)
+}
+
+// Errors returns a copy of all errors collected by the entity.
+// This prevents external modification of the internal errors slice.
+func (e *Entity) Errors() []error {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	errors := make([]error, len(e.errors))
+	copy(errors, e.errors)
+	return errors
+}
+
+// IsValid returns true if the entity has no errors.
+func (e *Entity) IsValid() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.errors) == 0
+}
+
 // Reset resets the entity to its initial state.
 // This is primarily useful for testing or when reusing entity instances.
 //
-// Warning: This method clears all state including uncommitted events.
+// Warning: This method clears all state including uncommitted events and errors.
 // Use with caution in production code.
 func (e *Entity) Reset() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.version = 0
 	e.sequenceNo = 0
 	e.events = e.events[:0]
+	e.errors = e.errors[:0]
 }
 
-// Clone creates a deep copy of the entity's metadata (ID, version, sequence).
-// The events slice is also copied to prevent shared state.
+// Clone creates a deep copy of the entity's metadata (ID, sequence).
+// The events and errors slices are also copied to prevent shared state.
 //
 // Note: This only clones the Entity struct itself. Concrete aggregates
 // that embed Entity should implement their own Clone method if needed.
@@ -236,11 +293,14 @@ func (e *Entity) Clone() Entity {
 	events := make([]Event, len(e.events))
 	copy(events, e.events)
 
+	errors := make([]error, len(e.errors))
+	copy(errors, e.errors)
+
 	return Entity{
 		id:         e.id,
-		version:    e.version,
 		sequenceNo: e.sequenceNo,
 		events:     events,
+		errors:     errors,
 	}
 }
 
@@ -249,6 +309,6 @@ func (e *Entity) String() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	return fmt.Sprintf("Entity{ID: %s, Version: %d, SequenceNo: %d, UncommittedEvents: %d}",
-		e.id, e.version, e.sequenceNo, len(e.events))
+	return fmt.Sprintf("Entity{ID: %s, SequenceNo: %d, UncommittedEvents: %d, Errors: %d}",
+		e.id, e.sequenceNo, len(e.events), len(e.errors))
 }

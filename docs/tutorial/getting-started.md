@@ -31,7 +31,7 @@ go mod init my-pericarp-app
 Add Pericarp to your project:
 
 ```bash
-go get github.com/your-org/pericarp
+go get github.com/akeemphilbert/pericarp
 ```
 
 ## Step 3: Create Basic Configuration
