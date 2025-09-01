@@ -165,6 +165,8 @@ type Query interface {
 // The handler signature includes:
 //   - Context for cancellation and timeouts
 //   - Logger for structured logging
+//   - EventStore for persisting and loading events
+//   - EventDispatcher for publishing events
 //   - Payload wrapper with request data and metadata
 //   - Response wrapper with result data and metadata
 //
@@ -173,6 +175,8 @@ type Query interface {
 //	func (h *CreateUserHandler) Handle(
 //	    ctx context.Context,
 //	    log domain.Logger,
+//	    eventStore domain.EventStore,
+//	    eventDispatcher domain.EventDispatcher,
 //	    p Payload[CreateUserCommand],
 //	) (Response[struct{}], error) {
 //	    log.Info("Creating user", "email", p.Data.Email)
@@ -182,9 +186,19 @@ type Query interface {
 //	        return Response[struct{}]{Error: err}, err
 //	    }
 //
-//	    if err := h.userRepo.Save(ctx, user); err != nil {
+//	    // Save events to event store
+//	    events := user.UncommittedEvents()
+//	    envelopes, err := eventStore.Save(ctx, events)
+//	    if err != nil {
 //	        return Response[struct{}]{Error: err}, err
 //	    }
+//
+//	    // Dispatch events
+//	    if err := eventDispatcher.Dispatch(ctx, envelopes); err != nil {
+//	        log.Error("Failed to dispatch events", "error", err)
+//	    }
+//
+//	    user.MarkEventsAsCommitted()
 //
 //	    return Response[struct{}]{
 //	        Data: struct{}{},
@@ -197,14 +211,25 @@ type Query interface {
 //	func (h *GetUserHandler) Handle(
 //	    ctx context.Context,
 //	    log domain.Logger,
+//	    eventStore domain.EventStore,
+//	    eventDispatcher domain.EventDispatcher,
 //	    p Payload[GetUserQuery],
 //	) (Response[UserView], error) {
 //	    log.Debug("Getting user", "userId", p.Data.UserID)
 //
-//	    user, err := h.userRepo.Load(ctx, p.Data.UserID)
+//	    // Load events from event store
+//	    envelopes, err := eventStore.Load(ctx, p.Data.UserID)
 //	    if err != nil {
 //	        return Response[UserView]{Error: err}, err
 //	    }
+//
+//	    // Reconstruct user from events
+//	    user := domain.NewUser("", "")
+//	    events := make([]domain.Event, len(envelopes))
+//	    for i, env := range envelopes {
+//	        events[i] = env.Event()
+//	    }
+//	    user.LoadFromHistory(events)
 //
 //	    view := UserView{ID: user.ID(), Email: user.Email()}
 //	    return Response[UserView]{
@@ -212,7 +237,7 @@ type Query interface {
 //	        Metadata: map[string]any{"version": user.Version()},
 //	    }, nil
 //	}
-type Handler[Req any, Res any] func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error)
+type Handler[Req any, Res any] func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error)
 
 // EventHandler processes events (projectors/sagas)
 // This interface is defined here for application layer event handling
@@ -233,12 +258,12 @@ type QueryHandlerFunc Handler[Query, any]
 
 // CommandBus with unified middleware support
 type CommandBus interface {
-	Handle(ctx context.Context, logger domain.Logger, cmd Command) error
+	Handle(ctx context.Context, logger domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, cmd Command) error
 	Register(cmdType string, handler Handler[Command, struct{}], middleware ...Middleware[Command, struct{}])
 }
 
 // QueryBus with unified middleware support
 type QueryBus interface {
-	Handle(ctx context.Context, logger domain.Logger, query Query) (any, error)
+	Handle(ctx context.Context, logger domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, query Query) (any, error)
 	Register(queryType string, handler Handler[Query, any], middleware ...Middleware[Query, any])
 }
