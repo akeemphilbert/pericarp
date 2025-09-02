@@ -253,17 +253,23 @@ type EventHandler interface {
 type Middleware[Req any, Res any] func(next Handler[Req, Res]) Handler[Req, Res]
 
 // Handler function types for bus registration
-type CommandHandlerFunc Handler[Command, struct{}]
+type CommandHandlerFunc Handler[Command, any]
 type QueryHandlerFunc Handler[Query, any]
 
 // CommandBus with unified middleware support
 type CommandBus interface {
 	Handle(ctx context.Context, logger domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, cmd Command) error
-	Register(cmdType string, handler Handler[Command, struct{}], middleware ...Middleware[Command, struct{}])
+	Register(cmdType string, handler Handler[Command, any], middleware ...Middleware[Command, any])
 }
 
 // QueryBus with unified middleware support
 type QueryBus interface {
 	Handle(ctx context.Context, logger domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, query Query) (any, error)
 	Register(queryType string, handler Handler[Query, any], middleware ...Middleware[Query, any])
+}
+
+type CommandResponse struct {
+	Code    int
+	Message string
+	Payload any
 }

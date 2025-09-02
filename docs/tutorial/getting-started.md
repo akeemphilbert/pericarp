@@ -127,8 +127,8 @@ import (
     "context"
     "my-pericarp-app/domain"
     
-    "github.com/your-org/pericarp/pkg/application"
-    pericarpdomain "github.com/your-org/pericarp/pkg/domain"
+    "github.com/akeemphilbert/pericarp/pkg/application"
+    pericarpdomain "github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // CreateGreetingCommand represents a command to create a greeting

@@ -76,6 +76,11 @@ type Event interface {
 	// Payload returns the event-specific data payload.
 	// This contains the actual business data associated with the event.
 	Payload() any
+
+	// SetSequenceNo sets the sequence number for this event.
+	// This is typically called by the aggregate when the event is added
+	// to ensure proper ordering and concurrency control.
+	SetSequenceNo(sequenceNo int64)
 }
 
 // Envelope wraps domain events with additional metadata for transport and processing.
@@ -147,6 +152,14 @@ type EventStore interface {
 	//
 	// The sequenceNo parameter is inclusive - events with sequenceNo >= sequenceNo will be returned.
 	LoadFromSequence(ctx context.Context, aggregateID string, sequenceNo int64) ([]Envelope, error)
+
+	// NewUnitOfWork creates a new unit of work for managing transactional boundaries.
+	// This allows the event store to provide unit of work instances that are properly
+	// configured with the necessary dependencies (event store and dispatcher).
+	//
+	// The returned unit of work can be used to register events from multiple aggregates
+	// and commit them atomically.
+	NewUnitOfWork() UnitOfWork
 }
 
 // EventDispatcher handles the distribution of events to registered handlers,
@@ -339,8 +352,8 @@ type EntityEvent struct {
 //	payload := map[string]interface{}{"email": "user@example.com", "name": "John Doe"}
 //	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", payload)
 //	// event.EventType() returns "user.created"
-func NewEntityEvent(entityType, eventType, aggregateID, userID, accountID string, payload any) EntityEvent {
-	return EntityEvent{
+func NewEntityEvent(entityType, eventType, aggregateID, userID, accountID string, payload any) *EntityEvent {
+	return &EntityEvent{
 		EntityType:  entityType,
 		Type:        eventType,
 		AggregateId: aggregateID,
@@ -386,4 +399,11 @@ func (e EntityEvent) Account() string {
 // Payload returns the event-specific data payload.
 func (e EntityEvent) Payload() any {
 	return e.Data
+}
+
+// SetSequenceNo sets the sequence number for this event.
+// This method modifies the event, so it should be called before the event
+// is considered immutable (typically when it's added to an aggregate).
+func (e *EntityEvent) SetSequenceNo(sequenceNo int64) {
+	e.SequenceNum = sequenceNo
 }

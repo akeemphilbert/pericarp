@@ -26,21 +26,24 @@ func TestNewUser(t *testing.T) {
 			email:       "",
 			userName:    "John Doe",
 			expectError: true,
-			errorMsg:    "email cannot be empty",
+			errorMsg:    "must specify valid email address",
 		},
 		{
 			name:        "empty name should fail",
 			email:       "john@example.com",
 			userName:    "",
 			expectError: true,
-			errorMsg:    "name cannot be empty",
+			errorMsg:    "must specify user name",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			user, err := NewUser(tt.email, tt.userName)
-
+			user := new(User).WithEmail(tt.email, tt.userName)
+			var err error
+			if len(user.Errors()) > 0 {
+				err = user.Errors()[0]
+			}
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got none")
@@ -58,23 +61,19 @@ func TestNewUser(t *testing.T) {
 			}
 
 			// Verify user properties
-			if user.Email() != tt.email {
-				t.Errorf("expected email '%s', got '%s'", tt.email, user.Email())
+			if user.Email != tt.email {
+				t.Errorf("expected email '%s', got '%s'", tt.email, user.Email)
 			}
 
-			if user.Name() != tt.userName {
-				t.Errorf("expected name '%s', got '%s'", tt.userName, user.Name())
+			if user.Name != tt.userName {
+				t.Errorf("expected name '%s', got '%s'", tt.userName, user.Name)
 			}
 
-			if !user.IsActive() {
-				t.Errorf("expected new user to be active")
+			if user.SequenceNo() != 1 {
+				t.Errorf("expected version 1, got %d", user.SequenceNo())
 			}
 
-			if user.Version() != 1 {
-				t.Errorf("expected version 1, got %d", user.Version())
-			}
-
-			// Verify UserCreated event was generated
+			// Verify User.created event was generated
 			events := user.UncommittedEvents()
 			if len(events) != 1 {
 				t.Errorf("expected 1 uncommitted event, got %d", len(events))
@@ -82,16 +81,16 @@ func TestNewUser(t *testing.T) {
 			}
 
 			event := events[0]
-			if event.EventType() != "UserCreated" {
-				t.Errorf("expected UserCreated event, got %s", event.EventType())
+			if event.EventType() != "User.created" {
+				t.Errorf("expected User.created event, got %s", event.EventType())
 			}
 
 			if event.AggregateID() != user.ID() {
 				t.Errorf("expected aggregate ID '%s', got '%s'", user.ID(), event.AggregateID())
 			}
 
-			if event.Version() != 1 {
-				t.Errorf("expected event version 1, got %d", event.Version())
+			if event.SequenceNo() != 1 {
+				t.Errorf("expected event sequence 1, got %d", event.SequenceNo())
 			}
 		})
 	}
@@ -118,21 +117,26 @@ func TestUser_UpdateEmail(t *testing.T) {
 			initialEmail: "john@example.com",
 			newEmail:     "",
 			expectError:  true,
-			errorMsg:     "email cannot be empty",
+			errorMsg:     "invalid email address provided",
 			expectEvent:  false,
 		},
 		{
-			name:         "same email should not generate event",
+			name:         "same email should generate error",
 			initialEmail: "john@example.com",
 			newEmail:     "john@example.com",
-			expectError:  false,
+			expectError:  true,
+			errorMsg:     "no change provided",
 			expectEvent:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			user, err := NewUser(tt.initialEmail, "John Doe")
+			user := new(User).WithEmail(tt.initialEmail, "John Doe")
+			var err error
+			if len(user.Errors()) > 0 {
+				err = user.Errors()[0]
+			}
 			if err != nil {
 				t.Fatalf("failed to create user: %v", err)
 			}
@@ -140,7 +144,10 @@ func TestUser_UpdateEmail(t *testing.T) {
 			// Clear initial events
 			user.MarkEventsAsCommitted()
 
-			err = user.UpdateEmail(tt.newEmail)
+			user.UpdateEmail(tt.newEmail)
+			if len(user.Errors()) > 0 {
+				err = user.Errors()[len(user.Errors())-1] // Get the latest error
+			}
 
 			if tt.expectError {
 				if err == nil {
@@ -160,116 +167,12 @@ func TestUser_UpdateEmail(t *testing.T) {
 
 			// Verify email was updated (if different)
 			if tt.newEmail != tt.initialEmail {
-				if user.Email() != tt.newEmail {
-					t.Errorf("expected email '%s', got '%s'", tt.newEmail, user.Email())
+				if user.Email != tt.newEmail {
+					t.Errorf("expected email '%s', got '%s'", tt.newEmail, user.Email)
 				}
 
-				if user.Version() != 2 {
-					t.Errorf("expected version 2, got %d", user.Version())
-				}
-			}
-
-			// Verify event generation
-			events := user.UncommittedEvents()
-			if tt.expectEvent {
-				if len(events) != 1 {
-					t.Errorf("expected 1 uncommitted event, got %d", len(events))
-					return
-				}
-
-				event := events[0]
-				if event.EventType() != "UserEmailUpdated" {
-					t.Errorf("expected UserEmailUpdated event, got %s", event.EventType())
-				}
-
-				if userEmailEvent, ok := event.(UserEmailUpdatedEvent); ok {
-					if userEmailEvent.OldEmail != tt.initialEmail {
-						t.Errorf("expected old email '%s', got '%s'", tt.initialEmail, userEmailEvent.OldEmail)
-					}
-					if userEmailEvent.NewEmail != tt.newEmail {
-						t.Errorf("expected new email '%s', got '%s'", tt.newEmail, userEmailEvent.NewEmail)
-					}
-				} else {
-					t.Errorf("event is not UserEmailUpdatedEvent")
-				}
-			} else {
-				if len(events) != 0 {
-					t.Errorf("expected no uncommitted events, got %d", len(events))
-				}
-			}
-		})
-	}
-}
-
-func TestUser_UpdateName(t *testing.T) {
-	tests := []struct {
-		name        string
-		initialName string
-		newName     string
-		expectError bool
-		errorMsg    string
-		expectEvent bool
-	}{
-		{
-			name:        "valid name update",
-			initialName: "John Doe",
-			newName:     "John Smith",
-			expectError: false,
-			expectEvent: true,
-		},
-		{
-			name:        "empty name should fail",
-			initialName: "John Doe",
-			newName:     "",
-			expectError: true,
-			errorMsg:    "name cannot be empty",
-			expectEvent: false,
-		},
-		{
-			name:        "same name should not generate event",
-			initialName: "John Doe",
-			newName:     "John Doe",
-			expectError: false,
-			expectEvent: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			user, err := NewUser("john@example.com", tt.initialName)
-			if err != nil {
-				t.Fatalf("failed to create user: %v", err)
-			}
-
-			// Clear initial events
-			user.MarkEventsAsCommitted()
-
-			err = user.UpdateName(tt.newName)
-
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error but got none")
-					return
-				}
-				if err.Error() != tt.errorMsg {
-					t.Errorf("expected error message '%s', got '%s'", tt.errorMsg, err.Error())
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-				return
-			}
-
-			// Verify name was updated (if different)
-			if tt.newName != tt.initialName {
-				if user.Name() != tt.newName {
-					t.Errorf("expected name '%s', got '%s'", tt.newName, user.Name())
-				}
-
-				if user.Version() != 2 {
-					t.Errorf("expected version 2, got %d", user.Version())
+				if user.SequenceNo() != 2 {
+					t.Errorf("expected version 2, got %d", user.SequenceNo())
 				}
 			}
 
@@ -282,19 +185,12 @@ func TestUser_UpdateName(t *testing.T) {
 				}
 
 				event := events[0]
-				if event.EventType() != "UserNameUpdated" {
-					t.Errorf("expected UserNameUpdated event, got %s", event.EventType())
+				if event.EventType() != "User.updated" {
+					t.Errorf("expected User.updated event, got %s", event.EventType())
 				}
 
-				if userNameEvent, ok := event.(UserNameUpdatedEvent); ok {
-					if userNameEvent.OldName != tt.initialName {
-						t.Errorf("expected old name '%s', got '%s'", tt.initialName, userNameEvent.OldName)
-					}
-					if userNameEvent.NewName != tt.newName {
-						t.Errorf("expected new name '%s', got '%s'", tt.newName, userNameEvent.NewName)
-					}
-				} else {
-					t.Errorf("event is not UserNameUpdatedEvent")
+				if event.AggregateID() != user.ID() {
+					t.Errorf("expected aggregate ID '%s', got '%s'", user.ID(), event.AggregateID())
 				}
 			} else {
 				if len(events) != 0 {
@@ -304,10 +200,14 @@ func TestUser_UpdateName(t *testing.T) {
 		})
 	}
 }
-
 func TestUser_Deactivate(t *testing.T) {
 	t.Run("deactivate active user", func(t *testing.T) {
-		user, err := NewUser("john@example.com", "John Doe")
+		user := new(User).WithEmail("john@example.com", "John Doe")
+		user.Active = true // Set user as active initially
+		var err error
+		if len(user.Errors()) > 0 {
+			err = user.Errors()[0]
+		}
 		if err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
@@ -315,19 +215,20 @@ func TestUser_Deactivate(t *testing.T) {
 		// Clear initial events
 		user.MarkEventsAsCommitted()
 
-		err = user.Deactivate()
-		if err != nil {
+		user.Deactivate()
+		if len(user.Errors()) > 0 {
+			err = user.Errors()[0]
 			t.Errorf("unexpected error: %v", err)
 			return
 		}
 
 		// Verify user is deactivated
-		if user.IsActive() {
+		if user.Active {
 			t.Errorf("expected user to be deactivated")
 		}
 
-		if user.Version() != 2 {
-			t.Errorf("expected version 2, got %d", user.Version())
+		if user.SequenceNo() != 2 {
+			t.Errorf("expected version 2, got %d", user.SequenceNo())
 		}
 
 		// Verify event generation
@@ -338,26 +239,30 @@ func TestUser_Deactivate(t *testing.T) {
 		}
 
 		event := events[0]
-		if event.EventType() != "UserDeactivated" {
-			t.Errorf("expected UserDeactivated event, got %s", event.EventType())
+		if event.EventType() != "User.updated" {
+			t.Errorf("expected User.updated event, got %s", event.EventType())
 		}
 	})
 
 	t.Run("deactivate already inactive user", func(t *testing.T) {
-		user, err := NewUser("john@example.com", "John Doe")
-		if err != nil {
-			t.Fatalf("failed to create user: %v", err)
-		}
+		user := new(User).WithEmail("john@example.com", "John Doe")
+		user.Active = false // Set user as inactive initially
 
-		// Deactivate first time
-		user.Deactivate()
+		// Clear initial events
 		user.MarkEventsAsCommitted()
 
 		// Try to deactivate again
-		err = user.Deactivate()
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+		user.Deactivate()
+
+		// Should generate error
+		if len(user.Errors()) == 0 {
+			t.Errorf("expected error for deactivating already inactive user")
 			return
+		}
+
+		err := user.Errors()[0]
+		if err.Error() != "user already deactivated" {
+			t.Errorf("expected 'user already deactivated' error, got '%s'", err.Error())
 		}
 
 		// Should not generate new event
@@ -370,28 +275,33 @@ func TestUser_Deactivate(t *testing.T) {
 
 func TestUser_Activate(t *testing.T) {
 	t.Run("activate inactive user", func(t *testing.T) {
-		user, err := NewUser("john@example.com", "John Doe")
+		user := new(User).WithEmail("john@example.com", "John Doe")
+		user.Active = false // Set user as inactive initially
+		var err error
+		if len(user.Errors()) > 0 {
+			err = user.Errors()[0]
+		}
 		if err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
 
-		// Deactivate first
-		user.Deactivate()
+		// Clear initial events
 		user.MarkEventsAsCommitted()
 
-		err = user.Activate()
-		if err != nil {
+		user.Activate()
+		if len(user.Errors()) > 0 {
+			err = user.Errors()[0]
 			t.Errorf("unexpected error: %v", err)
 			return
 		}
 
 		// Verify user is activated
-		if !user.IsActive() {
+		if !user.Active {
 			t.Errorf("expected user to be activated")
 		}
 
-		if user.Version() != 3 {
-			t.Errorf("expected version 3, got %d", user.Version())
+		if user.SequenceNo() != 2 {
+			t.Errorf("expected version 2, got %d", user.SequenceNo())
 		}
 
 		// Verify event generation
@@ -402,25 +312,30 @@ func TestUser_Activate(t *testing.T) {
 		}
 
 		event := events[0]
-		if event.EventType() != "UserActivated" {
-			t.Errorf("expected UserActivated event, got %s", event.EventType())
+		if event.EventType() != "User.updated" {
+			t.Errorf("expected User.updated event, got %s", event.EventType())
 		}
 	})
 
 	t.Run("activate already active user", func(t *testing.T) {
-		user, err := NewUser("john@example.com", "John Doe")
-		if err != nil {
-			t.Fatalf("failed to create user: %v", err)
-		}
+		user := new(User).WithEmail("john@example.com", "John Doe")
+		user.Active = true // Set user as active initially
 
 		// Clear initial events
 		user.MarkEventsAsCommitted()
 
 		// Try to activate already active user
-		err = user.Activate()
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+		user.Activate()
+
+		// Should generate error
+		if len(user.Errors()) == 0 {
+			t.Errorf("expected error for activating already active user")
 			return
+		}
+
+		err := user.Errors()[0]
+		if err.Error() != "user already activated" {
+			t.Errorf("expected 'user already activated' error, got '%s'", err.Error())
 		}
 
 		// Should not generate new event
@@ -433,39 +348,46 @@ func TestUser_Activate(t *testing.T) {
 
 func TestUser_LoadFromHistory(t *testing.T) {
 	t.Run("reconstruct user from events", func(t *testing.T) {
-		userID := ksuid.New()
+		userID := ksuid.New().String()
+
+		// Create test user data for events
+		userData1 := &User{Email: "john@example.com", Name: "John Doe", Active: true}
+		userData2 := &User{Email: "john.doe@example.com", Name: "John Doe", Active: true}
+		userData3 := &User{Email: "john.doe@example.com", Name: "John Smith", Active: true}
+		userData4 := &User{Email: "john.doe@example.com", Name: "John Smith", Active: false}
 
 		// Create events that represent user lifecycle
 		events := []pkgdomain.Event{
-			NewUserCreatedEvent(userID, "john@example.com", "John Doe", userID.String(), 1),
-			NewUserEmailUpdatedEvent(userID, "john@example.com", "john.doe@example.com", userID.String(), 2),
-			NewUserNameUpdatedEvent(userID, "John Doe", "John Smith", userID.String(), 3),
-			NewUserDeactivatedEvent(userID, userID.String(), 4),
+			pkgdomain.NewEntityEvent("User", "created", userID, "", "", userData1),
+			pkgdomain.NewEntityEvent("User", "updated", userID, "", "", userData2),
+			pkgdomain.NewEntityEvent("User", "updated", userID, "", "", userData3),
+			pkgdomain.NewEntityEvent("User", "updated", userID, "", "", userData4),
 		}
 
 		// Create empty user and load from history
 		user := &User{}
+		user.Entity = new(pkgdomain.Entity).WithID(userID)
 		user.LoadFromHistory(events)
 
 		// Verify final state
-		if user.UserID() != userID {
-			t.Errorf("expected user ID '%s', got '%s'", userID, user.UserID())
+		if user.ID() != userID {
+			t.Errorf("expected user ID '%s', got '%s'", userID, user.ID())
 		}
 
-		if user.Email() != "john.doe@example.com" {
-			t.Errorf("expected email 'john.doe@example.com', got '%s'", user.Email())
+		if user.Email != "john.doe@example.com" {
+			t.Errorf("expected email 'john.doe@example.com', got '%s'", user.Email)
 		}
 
-		if user.Name() != "John Smith" {
-			t.Errorf("expected name 'John Smith', got '%s'", user.Name())
+		if user.Name != "John Smith" {
+			t.Errorf("expected name 'John Smith', got '%s'", user.Name)
 		}
 
-		if user.IsActive() {
+		if user.Active {
 			t.Errorf("expected user to be inactive")
 		}
 
-		if user.Version() != 4 {
-			t.Errorf("expected version 4, got %d", user.Version())
+		if user.SequenceNo() != 4 {
+			t.Errorf("expected version 4, got %d", user.SequenceNo())
 		}
 
 		// Should have no uncommitted events after loading from history
@@ -476,7 +398,11 @@ func TestUser_LoadFromHistory(t *testing.T) {
 }
 
 func TestUser_MarkEventsAsCommitted(t *testing.T) {
-	user, err := NewUser("john@example.com", "John Doe")
+	user := new(User).WithEmail("john@example.com", "John Doe")
+	var err error
+	if len(user.Errors()) > 0 {
+		err = user.Errors()[0]
+	}
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
@@ -496,7 +422,11 @@ func TestUser_MarkEventsAsCommitted(t *testing.T) {
 }
 
 func TestUser_AggregateRootInterface(t *testing.T) {
-	user, err := NewUser("john@example.com", "John Doe")
+	user := new(User).WithEmail("john@example.com", "John Doe")
+	var err error
+	if len(user.Errors()) > 0 {
+		err = user.Errors()[0]
+	}
 	if err != nil {
 		t.Fatalf("failed to create user: %v", err)
 	}
@@ -506,13 +436,9 @@ func TestUser_AggregateRootInterface(t *testing.T) {
 		t.Errorf("expected non-empty ID")
 	}
 
-	if user.ID() != user.UserID().String() {
-		t.Errorf("ID() should return string representation of UserID()")
-	}
-
 	// Test Version() method
-	if user.Version() != 1 {
-		t.Errorf("expected version 1, got %d", user.Version())
+	if user.SequenceNo() != 1 {
+		t.Errorf("expected version 1, got %d", user.SequenceNo())
 	}
 
 	// Test UncommittedEvents() method
@@ -530,69 +456,76 @@ func TestUser_AggregateRootInterface(t *testing.T) {
 
 func TestUser_BusinessInvariants(t *testing.T) {
 	t.Run("user ID should be immutable", func(t *testing.T) {
-		user, err := NewUser("john@example.com", "John Doe")
+		user := new(User).WithEmail("john@example.com", "John Doe")
+		user.Active = true
+		var err error
+		if len(user.Errors()) > 0 {
+			err = user.Errors()[0]
+		}
 		if err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
 
-		originalID := user.UserID()
+		originalID := user.ID()
 
 		// Perform various operations
 		user.UpdateEmail("new@example.com")
-		user.UpdateName("New Name")
 		user.Deactivate()
 		user.Activate()
 
 		// ID should remain the same
-		if user.UserID() != originalID {
-			t.Errorf("user ID changed from %s to %s", originalID, user.UserID())
+		if user.ID() != originalID {
+			t.Errorf("user ID changed from %s to %s", originalID, user.ID())
 		}
 	})
 
 	t.Run("version should increment with each operation", func(t *testing.T) {
-		user, err := NewUser("john@example.com", "John Doe")
+		user := new(User).WithEmail("john@example.com", "John Doe")
+		user.Active = true
+		var err error
+		if len(user.Errors()) > 0 {
+			err = user.Errors()[0]
+		}
 		if err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
 
 		expectedVersion := 1
-		if user.Version() != expectedVersion {
-			t.Errorf("expected version %d, got %d", expectedVersion, user.Version())
+		if user.SequenceNo() != int64(expectedVersion) {
+			t.Errorf("expected version %d, got %d", expectedVersion, user.SequenceNo())
 		}
 
 		user.UpdateEmail("new@example.com")
 		expectedVersion++
-		if user.Version() != expectedVersion {
-			t.Errorf("expected version %d after email update, got %d", expectedVersion, user.Version())
-		}
-
-		user.UpdateName("New Name")
-		expectedVersion++
-		if user.Version() != expectedVersion {
-			t.Errorf("expected version %d after name update, got %d", expectedVersion, user.Version())
+		if user.SequenceNo() != int64(expectedVersion) {
+			t.Errorf("expected version %d after email update, got %d", expectedVersion, user.SequenceNo())
 		}
 
 		user.Deactivate()
 		expectedVersion++
-		if user.Version() != expectedVersion {
-			t.Errorf("expected version %d after deactivation, got %d", expectedVersion, user.Version())
+		if user.SequenceNo() != int64(expectedVersion) {
+			t.Errorf("expected version %d after deactivation, got %d", expectedVersion, user.SequenceNo())
 		}
 
 		user.Activate()
 		expectedVersion++
-		if user.Version() != expectedVersion {
-			t.Errorf("expected version %d after activation, got %d", expectedVersion, user.Version())
+		if user.SequenceNo() != int64(expectedVersion) {
+			t.Errorf("expected version %d after activation, got %d", expectedVersion, user.SequenceNo())
 		}
 	})
 
-	t.Run("events should have correct aggregate ID and version", func(t *testing.T) {
-		user, err := NewUser("john@example.com", "John Doe")
+	t.Run("events should have correct aggregate ID and sequence", func(t *testing.T) {
+		user := new(User).WithEmail("john@example.com", "John Doe")
+		user.Active = true
+		var err error
+		if len(user.Errors()) > 0 {
+			err = user.Errors()[0]
+		}
 		if err != nil {
 			t.Fatalf("failed to create user: %v", err)
 		}
 
 		user.UpdateEmail("new@example.com")
-		user.UpdateName("New Name")
 
 		events := user.UncommittedEvents()
 		for _, event := range events {
@@ -600,8 +533,8 @@ func TestUser_BusinessInvariants(t *testing.T) {
 				t.Errorf("event aggregate ID '%s' does not match user ID '%s'", event.AggregateID(), user.ID())
 			}
 
-			if event.Version() < 1 || event.Version() > user.Version() {
-				t.Errorf("event version %d is not within valid range [1, %d]", event.Version(), user.Version())
+			if event.SequenceNo() < 1 || event.SequenceNo() > user.SequenceNo() {
+				t.Errorf("event sequence %d is not within valid range [1, %d]", event.SequenceNo(), user.SequenceNo())
 			}
 		}
 	})

@@ -28,8 +28,8 @@ func DatabaseProvider(config *Config) (*Database, error) {
 }
 
 // EventStoreProvider creates a GORM-based event store
-func EventStoreProvider(db *Database) (domain.EventStore, error) {
-	return NewGormEventStore(db.DB)
+func EventStoreProvider(db *Database, dispatcher domain.EventDispatcher) (domain.EventStore, error) {
+	return NewGormEventStore(db.DB, dispatcher)
 }
 
 // EventDispatcherProvider creates a Watermill-based event dispatcher

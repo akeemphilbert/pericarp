@@ -20,27 +20,10 @@ func (c CreateUserCommand) CommandType() string {
 	return "CreateUser"
 }
 
-// Validate validates the create user command
-func (c CreateUserCommand) Validate() error {
-	if c.ID == ksuid.Nil {
-		return application.NewValidationError("id", "ID cannot be empty")
-	}
-
-	if err := validateEmail(c.Email); err != nil {
-		return err
-	}
-
-	if err := validateName(c.Name); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // UpdateUserEmailCommand represents a command to update a user's email
 type UpdateUserEmailCommand struct {
-	ID       ksuid.KSUID `json:"id"`
-	NewEmail string      `json:"new_email"`
+	ID       string `json:"id"`
+	NewEmail string `json:"new_email"`
 }
 
 // CommandType returns the command type identifier
@@ -50,7 +33,7 @@ func (c UpdateUserEmailCommand) CommandType() string {
 
 // Validate validates the update user email command
 func (c UpdateUserEmailCommand) Validate() error {
-	if c.ID == ksuid.Nil {
+	if c.ID == "" {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 
@@ -61,33 +44,9 @@ func (c UpdateUserEmailCommand) Validate() error {
 	return nil
 }
 
-// UpdateUserNameCommand represents a command to update a user's name
-type UpdateUserNameCommand struct {
-	ID      ksuid.KSUID `json:"id"`
-	NewName string      `json:"new_name"`
-}
-
-// CommandType returns the command type identifier
-func (c UpdateUserNameCommand) CommandType() string {
-	return "UpdateUserName"
-}
-
-// Validate validates the update user name command
-func (c UpdateUserNameCommand) Validate() error {
-	if c.ID == ksuid.Nil {
-		return application.NewValidationError("id", "ID cannot be empty")
-	}
-
-	if err := validateName(c.NewName); err != nil {
-		return application.NewValidationError("new_name", err.Error())
-	}
-
-	return nil
-}
-
 // DeactivateUserCommand represents a command to deactivate a user
 type DeactivateUserCommand struct {
-	ID ksuid.KSUID `json:"id"`
+	ID string `json:"id"`
 }
 
 // CommandType returns the command type identifier
@@ -97,7 +56,7 @@ func (c DeactivateUserCommand) CommandType() string {
 
 // Validate validates the deactivate user command
 func (c DeactivateUserCommand) Validate() error {
-	if c.ID == ksuid.Nil {
+	if c.ID == "" {
 		return application.NewValidationError("id", "ID cannot be empty")
 	}
 	return nil

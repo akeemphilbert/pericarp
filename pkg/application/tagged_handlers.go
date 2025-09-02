@@ -5,7 +5,7 @@ package application
 // TaggedCommandHandler represents a command handler with metadata for registration
 type TaggedCommandHandler struct {
 	CommandType string
-	Handler     Handler[Command, struct{}]
+	Handler     Handler[Command, any]
 }
 
 // TaggedQueryHandler represents a query handler with metadata for registration
@@ -17,7 +17,7 @@ type TaggedQueryHandler struct {
 // TaggedCommandMiddleware represents middleware with metadata
 type TaggedCommandMiddleware struct {
 	Name       string
-	Middleware Middleware[Command, struct{}]
+	Middleware Middleware[Command, any]
 }
 
 // TaggedQueryMiddleware represents query middleware with metadata
@@ -42,7 +42,7 @@ func (r *DefaultHandlerRegistrar) RegisterCommandHandlers(
 	middleware []TaggedCommandMiddleware,
 ) {
 	// Convert tagged middleware to middleware slice
-	middlewares := make([]Middleware[Command, struct{}], len(middleware))
+	middlewares := make([]Middleware[Command, any], len(middleware))
 	for i, mw := range middleware {
 		middlewares[i] = mw.Middleware
 	}

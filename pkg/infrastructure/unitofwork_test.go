@@ -49,6 +49,14 @@ func (m *mockEventStore) LoadFromVersion(ctx context.Context, aggregateID string
 	return nil, nil // Not used in UoW tests
 }
 
+func (m *mockEventStore) LoadFromSequence(ctx context.Context, aggregateID string, sequenceNo int64) ([]domain.Envelope, error) {
+	return nil, nil // Not used in UoW tests
+}
+
+func (m *mockEventStore) NewUnitOfWork() domain.UnitOfWork {
+	return NewUnitOfWork(m, &mockEventDispatcher{})
+}
+
 func (m *mockEventStore) GetSavedEvents() []domain.Event {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -106,6 +114,49 @@ func (m *mockEventDispatcher) SetDispatchError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.dispatchError = err
+}
+
+// testEvent implements domain.Event for testing
+type testEvent struct {
+	eventType   string
+	aggregateID string
+	version     int64
+	occurredAt  time.Time
+	user        string
+	account     string
+	payload     any
+}
+
+func (e *testEvent) EventType() string {
+	return e.eventType
+}
+
+func (e *testEvent) AggregateID() string {
+	return e.aggregateID
+}
+
+func (e *testEvent) SequenceNo() int64 {
+	return e.version
+}
+
+func (e *testEvent) CreatedAt() time.Time {
+	return e.occurredAt
+}
+
+func (e *testEvent) User() string {
+	return e.user
+}
+
+func (e *testEvent) Account() string {
+	return e.account
+}
+
+func (e *testEvent) Payload() any {
+	return e.payload
+}
+
+func (e *testEvent) SetSequenceNo(sequenceNo int64) {
+	e.version = sequenceNo
 }
 
 func TestUnitOfWork_RegisterAndCommit(t *testing.T) {

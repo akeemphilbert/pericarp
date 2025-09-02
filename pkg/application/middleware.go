@@ -23,7 +23,7 @@ type MetricsCollector interface {
 // LoggingMiddleware creates unified middleware that logs both command and query execution
 func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 	return func(next Handler[Req, Res]) Handler[Req, Res] {
-		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+		return func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error) {
 			start := time.Now()
 
 			// Extract request type for logging - optimize type assertion
@@ -48,7 +48,7 @@ func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 				log.Debug("Processing request", "type", requestType)
 			}
 
-			response, err := next(ctx, log, p)
+			response, err := next(ctx, log, eventStore, eventDispatcher, p)
 
 			duration := time.Since(start)
 			if err != nil {
@@ -79,11 +79,11 @@ func getTypeName(v any) string {
 // ValidationMiddleware creates unified middleware that validates both commands and queries
 func ValidationMiddleware[Req any, Res any]() Middleware[Req, Res] {
 	return func(next Handler[Req, Res]) Handler[Req, Res] {
-		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+		return func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error) {
 			// Fast path: check if validation is needed
 			validator, needsValidation := any(p.Data).(Validator)
 			if !needsValidation {
-				return next(ctx, log, p)
+				return next(ctx, log, eventStore, eventDispatcher, p)
 			}
 
 			// Validate the request
@@ -116,7 +116,7 @@ func ValidationMiddleware[Req any, Res any]() Middleware[Req, Res] {
 				}, validationErr
 			}
 
-			return next(ctx, log, p)
+			return next(ctx, log, eventStore, eventDispatcher, p)
 		}
 	}
 }
@@ -124,7 +124,7 @@ func ValidationMiddleware[Req any, Res any]() Middleware[Req, Res] {
 // MetricsMiddleware creates unified middleware that collects metrics for both commands and queries
 func MetricsMiddleware[Req any, Res any](metrics MetricsCollector) Middleware[Req, Res] {
 	return func(next Handler[Req, Res]) Handler[Req, Res] {
-		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+		return func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error) {
 			start := time.Now()
 
 			// Extract request type efficiently
@@ -138,7 +138,7 @@ func MetricsMiddleware[Req any, Res any](metrics MetricsCollector) Middleware[Re
 				requestType = getTypeName(p.Data)
 			}
 
-			response, err := next(ctx, log, p)
+			response, err := next(ctx, log, eventStore, eventDispatcher, p)
 			duration := time.Since(start)
 
 			// Record metrics (this should be fast)
@@ -161,7 +161,7 @@ func MetricsMiddleware[Req any, Res any](metrics MetricsCollector) Middleware[Re
 // ErrorHandlingMiddleware creates unified middleware that provides consistent error handling
 func ErrorHandlingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 	return func(next Handler[Req, Res]) Handler[Req, Res] {
-		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+		return func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error) {
 			var requestType string
 			if cmd, ok := any(p.Data).(Command); ok {
 				requestType = cmd.CommandType()
@@ -180,7 +180,7 @@ func ErrorHandlingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 				}
 			}()
 
-			response, err := next(ctx, log, p)
+			response, err := next(ctx, log, eventStore, eventDispatcher, p)
 			if err != nil {
 				// Wrap non-application errors
 				if _, ok := err.(ApplicationError); !ok {
@@ -214,10 +214,10 @@ type CacheProvider interface {
 // CachingMiddleware creates unified middleware that caches query results (typically used for queries only)
 func CachingMiddleware[Req any, Res any](cache CacheProvider) Middleware[Req, Res] {
 	return func(next Handler[Req, Res]) Handler[Req, Res] {
-		return func(ctx context.Context, log domain.Logger, p Payload[Req]) (Response[Res], error) {
+		return func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error) {
 			// Only cache queries, not commands
 			if _, ok := any(p.Data).(Query); !ok {
-				return next(ctx, log, p)
+				return next(ctx, log, eventStore, eventDispatcher, p)
 			}
 
 			// Create cache key based on query type and content
@@ -234,7 +234,7 @@ func CachingMiddleware[Req any, Res any](cache CacheProvider) Middleware[Req, Re
 			}
 
 			// Execute query
-			response, err := next(ctx, log, p)
+			response, err := next(ctx, log, eventStore, eventDispatcher, p)
 			if err != nil {
 				return response, err
 			}

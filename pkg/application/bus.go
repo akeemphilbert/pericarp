@@ -19,7 +19,7 @@ func NewCommandBus() CommandBus {
 }
 
 // Handle processes a command through the registered handler with its middleware chain
-func (b *commandBus) Handle(ctx context.Context, logger domain.Logger, cmd Command) error {
+func (b *commandBus) Handle(ctx context.Context, logger domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, cmd Command) error {
 	handlerFunc, exists := b.handlers[cmd.CommandType()]
 	if !exists {
 		return NewHandlerNotFoundError(cmd.CommandType(), "command")
@@ -33,7 +33,7 @@ func (b *commandBus) Handle(ctx context.Context, logger domain.Logger, cmd Comma
 		UserID:   "", // Could be extracted from context
 	}
 
-	response, err := handlerFunc(ctx, logger, payload)
+	response, err := handlerFunc(ctx, logger, eventStore, eventDispatcher, payload)
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func (b *commandBus) Handle(ctx context.Context, logger domain.Logger, cmd Comma
 }
 
 // Register associates a command type with its handler and applies middleware in the order provided
-func (b *commandBus) Register(cmdType string, handler Handler[Command, struct{}], middleware ...Middleware[Command, struct{}]) {
+func (b *commandBus) Register(cmdType string, handler Handler[Command, any], middleware ...Middleware[Command, any]) {
 	// Start with the base handler function
 	handlerFunc := handler
 
@@ -72,7 +72,7 @@ func NewQueryBus() QueryBus {
 }
 
 // Handle processes a query through the registered handler with its middleware chain
-func (q *queryBus) Handle(ctx context.Context, logger domain.Logger, query Query) (any, error) {
+func (q *queryBus) Handle(ctx context.Context, logger domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, query Query) (any, error) {
 	handlerFunc, exists := q.handlers[query.QueryType()]
 	if !exists {
 		return nil, NewHandlerNotFoundError(query.QueryType(), "query")
@@ -86,7 +86,7 @@ func (q *queryBus) Handle(ctx context.Context, logger domain.Logger, query Query
 		UserID:   "", // Could be extracted from context
 	}
 
-	response, err := handlerFunc(ctx, logger, payload)
+	response, err := handlerFunc(ctx, logger, eventStore, eventDispatcher, payload)
 	if err != nil {
 		return nil, err
 	}

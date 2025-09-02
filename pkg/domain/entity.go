@@ -97,15 +97,6 @@ func (e *Entity) ID() string {
 	return e.id
 }
 
-// Version returns the current sequence number of the entity.
-// This maintains compatibility with the AggregateRoot interface.
-// The sequence number represents the number of events that have been applied to this entity.
-func (e *Entity) Version() int {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return int(e.sequenceNo)
-}
-
 // SequenceNo returns the current sequence number of the entity.
 // The sequence number is incremented each time an event is added and can be used
 // for ordering events within the same aggregate or for optimistic concurrency control.
@@ -209,6 +200,7 @@ func (e *Entity) AddEvent(event Event) {
 
 	// Increment sequence number
 	e.sequenceNo++
+	event.SetSequenceNo(e.sequenceNo)
 
 	// Add the event to uncommitted events
 	e.events = append(e.events, event)

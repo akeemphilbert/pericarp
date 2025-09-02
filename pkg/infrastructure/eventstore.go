@@ -16,7 +16,7 @@ type EventRecord struct {
 	ID          string    `gorm:"primaryKey"`
 	AggregateID string    `gorm:"index"`
 	EventType   string    `gorm:"index"`
-	Version     int       `gorm:"index"`
+	SequenceNo  int64     `gorm:"index"`
 	Data        string    `gorm:"type:text"` // JSON serialized event
 	Metadata    string    `gorm:"type:text"` // JSON serialized metadata
 	Timestamp   time.Time `gorm:"index"`
@@ -54,12 +54,16 @@ func (e *eventEnvelope) Timestamp() time.Time {
 
 // GormEventStore implements the EventStore interface using GORM
 type GormEventStore struct {
-	db *gorm.DB
+	db              *gorm.DB
+	eventDispatcher domain.EventDispatcher
 }
 
 // NewGormEventStore creates a new GORM-based event store
-func NewGormEventStore(db *gorm.DB) (*GormEventStore, error) {
-	store := &GormEventStore{db: db}
+func NewGormEventStore(db *gorm.DB, eventDispatcher domain.EventDispatcher) (*GormEventStore, error) {
+	store := &GormEventStore{
+		db:              db,
+		eventDispatcher: eventDispatcher,
+	}
 
 	// Auto-migrate the events table
 	if err := db.AutoMigrate(&EventRecord{}); err != nil {
@@ -96,8 +100,8 @@ func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]dom
 		metadata := map[string]interface{}{
 			"aggregate_id": event.AggregateID(),
 			"event_type":   event.EventType(),
-			"version":      event.Version(),
-			"occurred_at":  event.OccurredAt(),
+			"sequenceNo":   event.SequenceNo(),
+			"created_at":   event.CreatedAt(),
 		}
 
 		// Reuse buffer for metadata JSON serialization
@@ -113,7 +117,7 @@ func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]dom
 			ID:          eventID,
 			AggregateID: event.AggregateID(),
 			EventType:   event.EventType(),
-			Version:     event.Version(),
+			SequenceNo:  event.SequenceNo(),
 			Data:        string(eventData),
 			Metadata:    string(metadataJSON),
 			Timestamp:   now,
@@ -162,12 +166,17 @@ func (s *GormEventStore) Load(ctx context.Context, aggregateID string) ([]domain
 
 // LoadFromVersion retrieves events for an aggregate starting from a specific version
 func (s *GormEventStore) LoadFromVersion(ctx context.Context, aggregateID string, version int) ([]domain.Envelope, error) {
+	return s.LoadFromSequence(ctx, aggregateID, int64(version))
+}
+
+// LoadFromSequence retrieves events for an aggregate starting from a specific sequence number
+func (s *GormEventStore) LoadFromSequence(ctx context.Context, aggregateID string, sequenceNo int64) ([]domain.Envelope, error) {
 	var records []EventRecord
 
 	// Optimize query with proper indexing hints and limit if needed
 	query := s.db.WithContext(ctx).
-		Where("aggregate_id = ? AND version > ?", aggregateID, version).
-		Order("version ASC")
+		Where("aggregate_id = ? AND sequence_no >= ?", aggregateID, sequenceNo).
+		Order("sequence_no ASC")
 
 	if err := query.Find(&records).Error; err != nil {
 		return nil, fmt.Errorf("failed to load events for aggregate %s: %w", aggregateID, err)
@@ -194,13 +203,12 @@ func (s *GormEventStore) LoadFromVersion(ctx context.Context, aggregateID string
 		}
 
 		// Create a generic event from the stored data
-		// Note: In a real implementation, you'd need a registry to reconstruct specific event types
-		genericEvent := &GenericEvent{
-			eventType:   record.EventType,
-			aggregateID: record.AggregateID,
-			version:     record.Version,
-			occurredAt:  record.Timestamp,
-			data:        record.Data,
+		genericEvent := &domain.EntityEvent{
+			Type:        record.EventType,
+			AggregateId: record.AggregateID,
+			SequenceNum: record.SequenceNo,
+			CreatedTime: record.Timestamp,
+			Data:        record.Data,
 		}
 
 		envelope := &eventEnvelope{
@@ -216,32 +224,7 @@ func (s *GormEventStore) LoadFromVersion(ctx context.Context, aggregateID string
 	return envelopes, nil
 }
 
-// GenericEvent is a basic implementation of domain.Event for deserialization
-type GenericEvent struct {
-	eventType   string
-	aggregateID string
-	version     int
-	occurredAt  time.Time
-	data        string
-}
-
-func (e *GenericEvent) EventType() string {
-	return e.eventType
-}
-
-func (e *GenericEvent) AggregateID() string {
-	return e.aggregateID
-}
-
-func (e *GenericEvent) Version() int {
-	return e.version
-}
-
-func (e *GenericEvent) OccurredAt() time.Time {
-	return e.occurredAt
-}
-
-// Data returns the raw JSON data of the event
-func (e *GenericEvent) Data() string {
-	return e.data
+// NewUnitOfWork creates a new unit of work instance configured with this event store
+func (s *GormEventStore) NewUnitOfWork() domain.UnitOfWork {
+	return NewUnitOfWork(s, s.eventDispatcher)
 }

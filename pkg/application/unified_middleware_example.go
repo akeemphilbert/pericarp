@@ -23,7 +23,7 @@ type ExampleQuery struct {
 func (q ExampleQuery) QueryType() string { return "ExampleQuery" }
 
 // Example command handler using unified Handler type
-func ExampleCommandHandler(ctx context.Context, log domain.Logger, p Payload[ExampleCommand]) (Response[struct{}], error) {
+func ExampleCommandHandler(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[ExampleCommand]) (Response[struct{}], error) {
 	log.Info("Processing example command", "message", p.Data.Message, "traceId", p.TraceID)
 
 	// Process the command...
@@ -37,7 +37,7 @@ func ExampleCommandHandler(ctx context.Context, log domain.Logger, p Payload[Exa
 }
 
 // Example query handler using unified Handler type
-func ExampleQueryHandler(ctx context.Context, log domain.Logger, p Payload[ExampleQuery]) (Response[string], error) {
+func ExampleQueryHandler(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[ExampleQuery]) (Response[string], error) {
 	log.Info("Processing example query", "id", p.Data.ID, "traceId", p.TraceID)
 
 	// Process the query...
@@ -58,7 +58,7 @@ func ExampleUnifiedMiddlewareRegistration() {
 
 	// Register command handler with unified middleware
 	commandBus.Register("ExampleCommand",
-		Handler[Command, struct{}](func(ctx context.Context, log domain.Logger, p Payload[Command]) (Response[struct{}], error) {
+		func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Command]) (Response[any], error) {
 			// Type assertion to get the specific command
 			if cmd, ok := p.Data.(ExampleCommand); ok {
 				// Create a new payload with the specific command type
@@ -68,18 +68,26 @@ func ExampleUnifiedMiddlewareRegistration() {
 					TraceID:  p.TraceID,
 					UserID:   p.UserID,
 				}
-				return ExampleCommandHandler(ctx, log, specificPayload)
+				response, err := ExampleCommandHandler(ctx, log, eventStore, eventDispatcher, specificPayload)
+				if err != nil {
+					return Response[any]{}, err
+				}
+				return Response[any]{
+					Data:     response.Data,
+					Metadata: response.Metadata,
+					Error:    response.Error,
+				}, nil
 			}
-			return Response[struct{}]{}, NewApplicationError("INVALID_COMMAND", "Invalid command type", nil)
-		}),
+			return Response[any]{}, NewApplicationError("INVALID_COMMAND", "Invalid command type", nil)
+		},
 		// Using unified Middleware type - no need for CommandMiddleware wrapper
-		LoggingMiddleware[Command, struct{}](),
-		ValidationMiddleware[Command, struct{}](),
+		LoggingMiddleware[Command, any](),
+		ValidationMiddleware[Command, any](),
 	)
 
 	// Register query handler with unified middleware
 	queryBus.Register("ExampleQuery",
-		Handler[Query, any](func(ctx context.Context, log domain.Logger, p Payload[Query]) (Response[any], error) {
+		func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Query]) (Response[any], error) {
 			// Type assertion to get the specific query
 			if query, ok := p.Data.(ExampleQuery); ok {
 				// Create a new payload with the specific query type
@@ -89,7 +97,7 @@ func ExampleUnifiedMiddlewareRegistration() {
 					TraceID:  p.TraceID,
 					UserID:   p.UserID,
 				}
-				response, err := ExampleQueryHandler(ctx, log, specificPayload)
+				response, err := ExampleQueryHandler(ctx, log, eventStore, eventDispatcher, specificPayload)
 				if err != nil {
 					return Response[any]{}, err
 				}
@@ -100,7 +108,7 @@ func ExampleUnifiedMiddlewareRegistration() {
 				}, nil
 			}
 			return Response[any]{}, NewApplicationError("INVALID_QUERY", "Invalid query type", nil)
-		}),
+		},
 		// Using unified Middleware type - no need for QueryMiddleware wrapper
 		LoggingMiddleware[Query, any](),
 		ValidationMiddleware[Query, any](),

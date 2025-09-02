@@ -10,108 +10,84 @@ import (
 
 // CreateUserHandler handles CreateUserCommand
 type CreateUserHandler struct {
-	userRepo   internaldomain.UserRepository
-	unitOfWork pkgdomain.UnitOfWork
-}
-
-// NewCreateUserHandler creates a new CreateUserHandler
-func NewCreateUserHandler(userRepo internaldomain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *CreateUserHandler {
-	return &CreateUserHandler{
-		userRepo:   userRepo,
-		unitOfWork: unitOfWork,
-	}
+	userRepo internaldomain.UserRepository
 }
 
 // Handle processes the CreateUserCommand
-func (h *CreateUserHandler) Handle(ctx context.Context, logger pkgdomain.Logger, cmd CreateUserCommand) error {
+func (h *CreateUserHandler) Handle(ctx context.Context, logger pkgdomain.Logger, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher, payload pkgapp.Payload[CreateUserCommand]) (resposne pkgapp.Response[pkgapp.CommandResponse], err error) {
+	cmd := payload.Data
 	logger.Debug("Processing CreateUserCommand", "id", cmd.ID, "email", cmd.Email, "name", cmd.Name)
 
 	// Check if user already exists by email
 	existingUser, err := h.userRepo.FindByEmail(cmd.Email)
 	if err == nil && existingUser != nil {
 		logger.Warn("User with email already exists", "email", cmd.Email)
-		return pkgapp.NewApplicationError("EMAIL_ALREADY_EXISTS", "Email is already in use", nil)
+		err = pkgapp.NewApplicationError("EMAIL_ALREADY_EXISTS", "Email is already in use", nil)
+		return
 	}
+
+	unitOfWork := eventStore.NewUnitOfWork()
 
 	// Create new user aggregate
-	user, err := internaldomain.NewUser(cmd.Email, cmd.Name)
-	if err != nil {
-		logger.Error("Failed to create user aggregate", "id", cmd.ID, "error", err)
-		return pkgapp.NewApplicationError("USER_CREATION_FAILED", "Failed to create user", err)
+	user := new(internaldomain.User).WithEmail(cmd.Email, cmd.Name)
+	if user.IsValid() {
+		// Register events with unit of work
+		unitOfWork.RegisterEvents(user.UncommittedEvents())
+		// Commit unit of work (persist and dispatch events)
+		var envelopes []pkgdomain.Envelope
+		envelopes, err = unitOfWork.Commit(ctx)
+		if err != nil {
+			logger.Error("Failed to commit unit of work", "id", cmd.ID, "error", err)
+			unitOfWork.Rollback()
+			return
+		}
+		eventDispatcher.Dispatch(ctx, envelopes)
 	}
 
-	// Register events with unit of work
-	h.unitOfWork.RegisterEvents(user.UncommittedEvents())
+	return
 
-	// Save user through repository
-	if err := h.userRepo.Save(user); err != nil {
-		logger.Error("Failed to save user", "id", cmd.ID, "error", err)
-		return pkgapp.NewApplicationError("USER_SAVE_FAILED", "Failed to save user", err)
-	}
-
-	// Commit unit of work (persist and dispatch events)
-	envelopes, err := h.unitOfWork.Commit(ctx)
-	if err != nil {
-		logger.Error("Failed to commit unit of work", "id", cmd.ID, "error", err)
-		return pkgapp.NewApplicationError("UNIT_OF_WORK_COMMIT_FAILED", "Failed to commit transaction", err)
-	}
-
-	logger.Info("User created successfully", "id", user.UserID(), "email", cmd.Email, "events_dispatched", len(envelopes))
-	return nil
 }
 
 // UpdateUserEmailHandler handles UpdateUserEmailCommand
 type UpdateUserEmailHandler struct {
-	userRepo   internaldomain.UserRepository
-	unitOfWork pkgdomain.UnitOfWork
+	userRepo internaldomain.UserRepository
 }
 
 // NewUpdateUserEmailHandler creates a new UpdateUserEmailHandler
 func NewUpdateUserEmailHandler(userRepo internaldomain.UserRepository, unitOfWork pkgdomain.UnitOfWork) *UpdateUserEmailHandler {
 	return &UpdateUserEmailHandler{
-		userRepo:   userRepo,
-		unitOfWork: unitOfWork,
+		userRepo: userRepo,
 	}
 }
 
 // Handle processes the UpdateUserEmailCommand
-func (h *UpdateUserEmailHandler) Handle(ctx context.Context, logger pkgdomain.Logger, cmd UpdateUserEmailCommand) error {
+func (h *UpdateUserEmailHandler) Handle(ctx context.Context, logger pkgdomain.Logger, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher, payload pkgapp.Payload[UpdateUserEmailCommand]) (resposne pkgapp.Response[pkgapp.CommandResponse], err error) {
+	cmd := payload.Data
 	logger.Debug("Processing UpdateUserEmailCommand", "id", cmd.ID, "new_email", cmd.NewEmail)
 
 	// Load user aggregate
-	user, err := h.userRepo.FindByID(cmd.ID)
+	var user *internaldomain.User
+	user, err = h.userRepo.FindByID(cmd.ID)
 	if err != nil {
-		logger.Error("Failed to load user", "id", cmd.ID, "error", err)
-		return pkgapp.NewApplicationError("USER_NOT_FOUND", "User not found", err)
+		return
 	}
-
 	// Check if new email is already in use by another user
 	existingUser, err := h.userRepo.FindByEmail(cmd.NewEmail)
-	if err == nil && existingUser != nil && existingUser.UserID() != cmd.ID {
-		logger.Warn("Email already in use by another user", "email", cmd.NewEmail, "existing_user_id", existingUser.UserID())
-		return pkgapp.NewApplicationError("EMAIL_ALREADY_EXISTS", "Email is already in use by another user", nil)
+	if err == nil && existingUser != nil && existingUser.ID() != cmd.ID {
+		logger.Warn("Email already in use by another user", "email", cmd.NewEmail, "existing_user_id", existingUser.ID())
+		return
 	}
-
-	// Update user email
-	if err := user.UpdateEmail(cmd.NewEmail); err != nil {
-		logger.Error("Failed to update user email", "id", cmd.ID, "new_email", cmd.NewEmail, "error", err)
-		return pkgapp.NewApplicationError("EMAIL_UPDATE_FAILED", "Failed to update user email", err)
-	}
-
-	// Register events with unit of work
-	h.unitOfWork.RegisterEvents(user.UncommittedEvents())
-
-	// Save user through repository
-	if err := h.userRepo.Save(user); err != nil {
-		logger.Error("Failed to save user", "id", cmd.ID, "error", err)
-		return pkgapp.NewApplicationError("USER_SAVE_FAILED", "Failed to save user", err)
-	}
-
-	// Commit unit of work (persist and dispatch events)
-	envelopes, err := h.unitOfWork.Commit(ctx)
-	if err != nil {
-		logger.Error("Failed to commit unit of work", "id", cmd.ID, "error", err)
-		return pkgapp.NewApplicationError("UNIT_OF_WORK_COMMIT_FAILED", "Failed to commit transaction", err)
+	user.UpdateEmail(cmd.NewEmail)
+	if user.IsValid() {
+		// Register events with unit of work
+		unitOfWork := eventStore.NewUnitOfWork()
+		// Commit unit of work (persist and dispatch events)
+		envelopes, err := unitOfWork.Commit(ctx)
+		if err != nil {
+			logger.Error("Failed to commit unit of work", "id", cmd.ID, "error", err)
+			unitOfWork.Rollback()
+		}
+		eventDispatcher.Dispatch(ctx, envelopes)
 	}
 
 	logger.Info("User email updated successfully", "id", cmd.ID, "new_email", cmd.NewEmail, "events_dispatched", len(envelopes))

@@ -4,7 +4,8 @@ package domain
 //go:generate moq -out mocks/user_repository_mock.go -pkg mocks . UserRepository
 
 import (
-	"errors"
+	"encoding/json"
+	"fmt"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 	"github.com/segmentio/ksuid"
@@ -12,184 +13,96 @@ import (
 
 // User represents a user aggregate for internal examples and testing
 type User struct {
-	id                ksuid.KSUID
-	email             string
-	name              string
-	isActive          bool
-	version           int
-	uncommittedEvents []domain.Event
+	*domain.Entity
+	Email  string `json:"email"`
+	Name   string `json:"name"`
+	Active bool   `json:"active"`
 }
 
-// NewUser creates a new user aggregate
-func NewUser(email, name string) (*User, error) {
+// WithEmail creates a new user aggregate
+func (u *User) WithEmail(email, name string) *User {
+	// Initialize Entity first
+	u.Entity = new(domain.Entity).WithID(ksuid.New().String())
+
 	if email == "" {
-		return nil, errors.New("email cannot be empty")
+		u.AddError(fmt.Errorf("must specify valid email address"))
+		return u
 	}
 	if name == "" {
-		return nil, errors.New("name cannot be empty")
+		u.AddError(fmt.Errorf("must specify user name"))
+		return u
 	}
 
-	id := ksuid.New()
-	user := &User{
-		id:                id,
-		email:             email,
-		name:              name,
-		isActive:          true,
-		version:           1,
-		uncommittedEvents: make([]domain.Event, 0),
-	}
+	u.Email = email
+	u.Name = name
+	u.Active = true
+	u.AddEvent(domain.NewEntityEvent("User", "created", u.ID(), "", "", u))
 
-	event := NewUserCreatedEvent(id, email, name, id.String(), user.version)
-	user.recordEvent(event)
-
-	return user, nil
-}
-
-// ID returns the user's ID as a string (implements AggregateRoot)
-func (u *User) ID() string {
-	return u.id.String()
-}
-
-// UserID returns the user's ID as KSUID
-func (u *User) UserID() ksuid.KSUID {
-	return u.id
-}
-
-// Version returns the current version of the aggregate
-func (u *User) Version() int {
-	return u.version
-}
-
-// UncommittedEvents returns the list of events that have been generated but not yet persisted
-func (u *User) UncommittedEvents() []domain.Event {
-	return u.uncommittedEvents
-}
-
-// MarkEventsAsCommitted clears the uncommitted events after they have been successfully persisted
-func (u *User) MarkEventsAsCommitted() {
-	u.uncommittedEvents = make([]domain.Event, 0)
+	return u
 }
 
 // LoadFromHistory reconstructs the aggregate state from a sequence of events
 func (u *User) LoadFromHistory(events []domain.Event) {
+	// Call base Entity LoadFromHistory to update sequence number
+	u.Entity.LoadFromHistory(events)
+
 	for _, event := range events {
-		u.applyEvent(event)
-		u.version = event.Version()
+		switch e := event.(type) {
+		case *domain.EntityEvent:
+			payloadRaw, err := json.Marshal(e.Payload())
+			if err != nil {
+				u.AddError(err)
+				continue
+			}
+			err = json.Unmarshal(payloadRaw, u)
+			if err != nil {
+				u.AddError(err)
+				continue
+			}
+		}
 	}
-}
-
-// recordEvent adds an event to the uncommitted events list
-func (u *User) recordEvent(event domain.Event) {
-	u.uncommittedEvents = append(u.uncommittedEvents, event)
-}
-
-// applyEvent applies an event to the aggregate state
-func (u *User) applyEvent(event domain.Event) {
-	switch e := event.(type) {
-	case UserCreatedEvent:
-		u.id = e.UserID
-		u.email = e.Email
-		u.name = e.Name
-		u.isActive = true
-	case UserEmailUpdatedEvent:
-		u.email = e.NewEmail
-	case UserNameUpdatedEvent:
-		u.name = e.NewName
-	case UserDeactivatedEvent:
-		u.isActive = false
-	case UserActivatedEvent:
-		u.isActive = true
-	}
-}
-
-// Email returns the user's email
-func (u *User) Email() string {
-	return u.email
-}
-
-// Name returns the user's name
-func (u *User) Name() string {
-	return u.name
-}
-
-// IsActive returns whether the user is active
-func (u *User) IsActive() bool {
-	return u.isActive
 }
 
 // UpdateEmail updates the user's email
-func (u *User) UpdateEmail(newEmail string) error {
+func (u *User) UpdateEmail(newEmail string) {
 	if newEmail == "" {
-		return errors.New("email cannot be empty")
+		u.AddError(fmt.Errorf("invalid email address provided"))
+		return
 	}
-	if newEmail == u.email {
-		return nil // No change needed
-	}
-
-	oldEmail := u.email
-	u.version++
-
-	event := NewUserEmailUpdatedEvent(u.id, oldEmail, newEmail, u.id.String(), u.version)
-	u.recordEvent(event)
-	u.applyEvent(event)
-
-	return nil
-}
-
-// UpdateName updates the user's name
-func (u *User) UpdateName(newName string) error {
-	if newName == "" {
-		return errors.New("name cannot be empty")
-	}
-	if newName == u.name {
-		return nil // No change needed
+	if newEmail == u.Email {
+		u.AddError(fmt.Errorf("no change provided"))
+		return
 	}
 
-	oldName := u.name
-	u.version++
-
-	event := NewUserNameUpdatedEvent(u.id, oldName, newName, u.id.String(), u.version)
-	u.recordEvent(event)
-	u.applyEvent(event)
-
-	return nil
+	u.Email = newEmail
+	u.AddEvent(domain.NewEntityEvent("User", "updated", u.ID(), "", "", u))
 }
 
 // Deactivate deactivates the user
-func (u *User) Deactivate() error {
-	if !u.isActive {
-		return nil // Already deactivated
+func (u *User) Deactivate() {
+	if !u.Active {
+		u.AddError(fmt.Errorf("user already deactivated"))
+		return
 	}
-
-	u.version++
-
-	event := NewUserDeactivatedEvent(u.id, u.id.String(), u.version)
-	u.recordEvent(event)
-	u.applyEvent(event)
-
-	return nil
+	u.Active = false
+	u.AddEvent(domain.NewEntityEvent("User", "updated", u.ID(), "", "", u))
 }
 
 // Activate activates the user
-func (u *User) Activate() error {
-	if u.isActive {
-		return nil // Already active
+func (u *User) Activate() {
+	if u.Active {
+		u.AddError(fmt.Errorf("user already activated"))
+		return
 	}
-
-	u.version++
-
-	event := NewUserActivatedEvent(u.id, u.id.String(), u.version)
-	u.recordEvent(event)
-	u.applyEvent(event)
-
-	return nil
+	u.Active = true
+	u.AddEvent(domain.NewEntityEvent("User", "updated", u.ID(), "", "", u))
 }
 
 // UserRepository defines the repository interface for users
 type UserRepository interface {
 	Save(user *User) error
-	FindByID(id ksuid.KSUID) (*User, error)
+	FindByID(id string) (*User, error)
 	FindByEmail(email string) (*User, error)
-	Delete(id ksuid.KSUID) error
-	LoadFromVersion(id ksuid.KSUID, version int) (*User, error)
+	Delete(id string) error
+	LoadFromVersion(id string, version int) (*User, error)
 }

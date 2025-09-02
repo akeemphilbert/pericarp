@@ -62,7 +62,7 @@ func HandlerRegistrarProvider() HandlerRegistrar {
 func ErrorHandlingCommandMiddlewareProvider() TaggedCommandMiddleware {
 	return TaggedCommandMiddleware{
 		Name:       "error_handling",
-		Middleware: ErrorHandlingMiddleware[Command, struct{}](),
+		Middleware: ErrorHandlingMiddleware[Command, any](),
 	}
 }
 
@@ -78,7 +78,7 @@ func ErrorHandlingQueryMiddlewareProvider() TaggedQueryMiddleware {
 func LoggingCommandMiddlewareProvider() TaggedCommandMiddleware {
 	return TaggedCommandMiddleware{
 		Name:       "logging",
-		Middleware: LoggingMiddleware[Command, struct{}](),
+		Middleware: LoggingMiddleware[Command, any](),
 	}
 }
 
@@ -94,7 +94,7 @@ func LoggingQueryMiddlewareProvider() TaggedQueryMiddleware {
 func ValidationCommandMiddlewareProvider() TaggedCommandMiddleware {
 	return TaggedCommandMiddleware{
 		Name:       "validation",
-		Middleware: ValidationMiddleware[Command, struct{}](),
+		Middleware: ValidationMiddleware[Command, any](),
 	}
 }
 
@@ -110,7 +110,7 @@ func ValidationQueryMiddlewareProvider() TaggedQueryMiddleware {
 func MetricsCommandMiddlewareProvider(metrics MetricsCollector) TaggedCommandMiddleware {
 	return TaggedCommandMiddleware{
 		Name:       "metrics",
-		Middleware: MetricsMiddleware[Command, struct{}](metrics),
+		Middleware: MetricsMiddleware[Command, any](metrics),
 	}
 }
 
