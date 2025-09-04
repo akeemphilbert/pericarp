@@ -18,17 +18,29 @@ var _ Event = &EventMock{}
 //
 //		// make and configure a mocked Event
 //		mockedEvent := &EventMock{
+//			AccountFunc: func() string {
+//				panic("mock out the Account method")
+//			},
 //			AggregateIDFunc: func() string {
 //				panic("mock out the AggregateID method")
+//			},
+//			CreatedAtFunc: func() time.Time {
+//				panic("mock out the CreatedAt method")
 //			},
 //			EventTypeFunc: func() string {
 //				panic("mock out the EventType method")
 //			},
-//			OccurredAtFunc: func() time.Time {
-//				panic("mock out the OccurredAt method")
+//			PayloadFunc: func() any {
+//				panic("mock out the Payload method")
 //			},
-//			VersionFunc: func() int {
-//				panic("mock out the Version method")
+//			SequenceNoFunc: func() int64 {
+//				panic("mock out the SequenceNo method")
+//			},
+//			SetSequenceNoFunc: func(sequenceNo int64)  {
+//				panic("mock out the SetSequenceNo method")
+//			},
+//			UserFunc: func() string {
+//				panic("mock out the User method")
 //			},
 //		}
 //
@@ -37,37 +49,94 @@ var _ Event = &EventMock{}
 //
 //	}
 type EventMock struct {
+	// AccountFunc mocks the Account method.
+	AccountFunc func() string
+
 	// AggregateIDFunc mocks the AggregateID method.
 	AggregateIDFunc func() string
+
+	// CreatedAtFunc mocks the CreatedAt method.
+	CreatedAtFunc func() time.Time
 
 	// EventTypeFunc mocks the EventType method.
 	EventTypeFunc func() string
 
-	// OccurredAtFunc mocks the OccurredAt method.
-	OccurredAtFunc func() time.Time
+	// PayloadFunc mocks the Payload method.
+	PayloadFunc func() any
 
-	// VersionFunc mocks the Version method.
-	VersionFunc func() int
+	// SequenceNoFunc mocks the SequenceNo method.
+	SequenceNoFunc func() int64
+
+	// SetSequenceNoFunc mocks the SetSequenceNo method.
+	SetSequenceNoFunc func(sequenceNo int64)
+
+	// UserFunc mocks the User method.
+	UserFunc func() string
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// Account holds details about calls to the Account method.
+		Account []struct {
+		}
 		// AggregateID holds details about calls to the AggregateID method.
 		AggregateID []struct {
+		}
+		// CreatedAt holds details about calls to the CreatedAt method.
+		CreatedAt []struct {
 		}
 		// EventType holds details about calls to the EventType method.
 		EventType []struct {
 		}
-		// OccurredAt holds details about calls to the OccurredAt method.
-		OccurredAt []struct {
+		// Payload holds details about calls to the Payload method.
+		Payload []struct {
 		}
-		// Version holds details about calls to the Version method.
-		Version []struct {
+		// SequenceNo holds details about calls to the SequenceNo method.
+		SequenceNo []struct {
+		}
+		// SetSequenceNo holds details about calls to the SetSequenceNo method.
+		SetSequenceNo []struct {
+			// SequenceNo is the sequenceNo argument value.
+			SequenceNo int64
+		}
+		// User holds details about calls to the User method.
+		User []struct {
 		}
 	}
-	lockAggregateID sync.RWMutex
-	lockEventType   sync.RWMutex
-	lockOccurredAt  sync.RWMutex
-	lockVersion     sync.RWMutex
+	lockAccount       sync.RWMutex
+	lockAggregateID   sync.RWMutex
+	lockCreatedAt     sync.RWMutex
+	lockEventType     sync.RWMutex
+	lockPayload       sync.RWMutex
+	lockSequenceNo    sync.RWMutex
+	lockSetSequenceNo sync.RWMutex
+	lockUser          sync.RWMutex
+}
+
+// Account calls AccountFunc.
+func (mock *EventMock) Account() string {
+	if mock.AccountFunc == nil {
+		panic("EventMock.AccountFunc: method is nil but Event.Account was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockAccount.Lock()
+	mock.calls.Account = append(mock.calls.Account, callInfo)
+	mock.lockAccount.Unlock()
+	return mock.AccountFunc()
+}
+
+// AccountCalls gets all the calls that were made to Account.
+// Check the length with:
+//
+//	len(mockedEvent.AccountCalls())
+func (mock *EventMock) AccountCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockAccount.RLock()
+	calls = mock.calls.Account
+	mock.lockAccount.RUnlock()
+	return calls
 }
 
 // AggregateID calls AggregateIDFunc.
@@ -94,6 +163,33 @@ func (mock *EventMock) AggregateIDCalls() []struct {
 	mock.lockAggregateID.RLock()
 	calls = mock.calls.AggregateID
 	mock.lockAggregateID.RUnlock()
+	return calls
+}
+
+// CreatedAt calls CreatedAtFunc.
+func (mock *EventMock) CreatedAt() time.Time {
+	if mock.CreatedAtFunc == nil {
+		panic("EventMock.CreatedAtFunc: method is nil but Event.CreatedAt was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockCreatedAt.Lock()
+	mock.calls.CreatedAt = append(mock.calls.CreatedAt, callInfo)
+	mock.lockCreatedAt.Unlock()
+	return mock.CreatedAtFunc()
+}
+
+// CreatedAtCalls gets all the calls that were made to CreatedAt.
+// Check the length with:
+//
+//	len(mockedEvent.CreatedAtCalls())
+func (mock *EventMock) CreatedAtCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockCreatedAt.RLock()
+	calls = mock.calls.CreatedAt
+	mock.lockCreatedAt.RUnlock()
 	return calls
 }
 
@@ -124,56 +220,115 @@ func (mock *EventMock) EventTypeCalls() []struct {
 	return calls
 }
 
-// OccurredAt calls OccurredAtFunc.
-func (mock *EventMock) OccurredAt() time.Time {
-	if mock.OccurredAtFunc == nil {
-		panic("EventMock.OccurredAtFunc: method is nil but Event.OccurredAt was just called")
+// Payload calls PayloadFunc.
+func (mock *EventMock) Payload() any {
+	if mock.PayloadFunc == nil {
+		panic("EventMock.PayloadFunc: method is nil but Event.Payload was just called")
 	}
 	callInfo := struct {
 	}{}
-	mock.lockOccurredAt.Lock()
-	mock.calls.OccurredAt = append(mock.calls.OccurredAt, callInfo)
-	mock.lockOccurredAt.Unlock()
-	return mock.OccurredAtFunc()
+	mock.lockPayload.Lock()
+	mock.calls.Payload = append(mock.calls.Payload, callInfo)
+	mock.lockPayload.Unlock()
+	return mock.PayloadFunc()
 }
 
-// OccurredAtCalls gets all the calls that were made to OccurredAt.
+// PayloadCalls gets all the calls that were made to Payload.
 // Check the length with:
 //
-//	len(mockedEvent.OccurredAtCalls())
-func (mock *EventMock) OccurredAtCalls() []struct {
+//	len(mockedEvent.PayloadCalls())
+func (mock *EventMock) PayloadCalls() []struct {
 } {
 	var calls []struct {
 	}
-	mock.lockOccurredAt.RLock()
-	calls = mock.calls.OccurredAt
-	mock.lockOccurredAt.RUnlock()
+	mock.lockPayload.RLock()
+	calls = mock.calls.Payload
+	mock.lockPayload.RUnlock()
 	return calls
 }
 
-// Version calls VersionFunc.
-func (mock *EventMock) Version() int {
-	if mock.VersionFunc == nil {
-		panic("EventMock.VersionFunc: method is nil but Event.Version was just called")
+// SequenceNo calls SequenceNoFunc.
+func (mock *EventMock) SequenceNo() int64 {
+	if mock.SequenceNoFunc == nil {
+		panic("EventMock.SequenceNoFunc: method is nil but Event.SequenceNo was just called")
 	}
 	callInfo := struct {
 	}{}
-	mock.lockVersion.Lock()
-	mock.calls.Version = append(mock.calls.Version, callInfo)
-	mock.lockVersion.Unlock()
-	return mock.VersionFunc()
+	mock.lockSequenceNo.Lock()
+	mock.calls.SequenceNo = append(mock.calls.SequenceNo, callInfo)
+	mock.lockSequenceNo.Unlock()
+	return mock.SequenceNoFunc()
 }
 
-// VersionCalls gets all the calls that were made to Version.
+// SequenceNoCalls gets all the calls that were made to SequenceNo.
 // Check the length with:
 //
-//	len(mockedEvent.VersionCalls())
-func (mock *EventMock) VersionCalls() []struct {
+//	len(mockedEvent.SequenceNoCalls())
+func (mock *EventMock) SequenceNoCalls() []struct {
 } {
 	var calls []struct {
 	}
-	mock.lockVersion.RLock()
-	calls = mock.calls.Version
-	mock.lockVersion.RUnlock()
+	mock.lockSequenceNo.RLock()
+	calls = mock.calls.SequenceNo
+	mock.lockSequenceNo.RUnlock()
+	return calls
+}
+
+// SetSequenceNo calls SetSequenceNoFunc.
+func (mock *EventMock) SetSequenceNo(sequenceNo int64) {
+	if mock.SetSequenceNoFunc == nil {
+		panic("EventMock.SetSequenceNoFunc: method is nil but Event.SetSequenceNo was just called")
+	}
+	callInfo := struct {
+		SequenceNo int64
+	}{
+		SequenceNo: sequenceNo,
+	}
+	mock.lockSetSequenceNo.Lock()
+	mock.calls.SetSequenceNo = append(mock.calls.SetSequenceNo, callInfo)
+	mock.lockSetSequenceNo.Unlock()
+	mock.SetSequenceNoFunc(sequenceNo)
+}
+
+// SetSequenceNoCalls gets all the calls that were made to SetSequenceNo.
+// Check the length with:
+//
+//	len(mockedEvent.SetSequenceNoCalls())
+func (mock *EventMock) SetSequenceNoCalls() []struct {
+	SequenceNo int64
+} {
+	var calls []struct {
+		SequenceNo int64
+	}
+	mock.lockSetSequenceNo.RLock()
+	calls = mock.calls.SetSequenceNo
+	mock.lockSetSequenceNo.RUnlock()
+	return calls
+}
+
+// User calls UserFunc.
+func (mock *EventMock) User() string {
+	if mock.UserFunc == nil {
+		panic("EventMock.UserFunc: method is nil but Event.User was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockUser.Lock()
+	mock.calls.User = append(mock.calls.User, callInfo)
+	mock.lockUser.Unlock()
+	return mock.UserFunc()
+}
+
+// UserCalls gets all the calls that were made to User.
+// Check the length with:
+//
+//	len(mockedEvent.UserCalls())
+func (mock *EventMock) UserCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockUser.RLock()
+	calls = mock.calls.User
+	mock.lockUser.RUnlock()
 	return calls
 }

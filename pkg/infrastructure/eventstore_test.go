@@ -8,30 +8,6 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
-// testEvent implements domain.Event for testing
-type testEvent struct {
-	eventType   string
-	aggregateID string
-	version     int
-	occurredAt  time.Time
-}
-
-func (e *testEvent) EventType() string {
-	return e.eventType
-}
-
-func (e *testEvent) AggregateID() string {
-	return e.aggregateID
-}
-
-func (e *testEvent) Version() int {
-	return e.version
-}
-
-func (e *testEvent) OccurredAt() time.Time {
-	return e.occurredAt
-}
-
 func TestGormEventStore_SaveAndLoad(t *testing.T) {
 	// Create in-memory SQLite database for testing
 	config := DatabaseConfig{
@@ -54,20 +30,15 @@ func TestGormEventStore_SaveAndLoad(t *testing.T) {
 	now := time.Now()
 
 	// Create test events
-	events := []domain.Event{
-		&testEvent{
-			eventType:   "TestEventCreated",
-			aggregateID: aggregateID,
-			version:     1,
-			occurredAt:  now,
-		},
-		&testEvent{
-			eventType:   "TestEventUpdated",
-			aggregateID: aggregateID,
-			version:     2,
-			occurredAt:  now.Add(time.Minute),
-		},
-	}
+	event1 := domain.NewEntityEvent("Test", "EventCreated", aggregateID, "user-1", "account-1", nil)
+	event1.SetSequenceNo(1)
+	event1.CreatedTime = now
+
+	event2 := domain.NewEntityEvent("Test", "EventUpdated", aggregateID, "user-1", "account-1", nil)
+	event2.SetSequenceNo(2)
+	event2.CreatedTime = now.Add(time.Minute)
+
+	events := []domain.Event{event1, event2}
 
 	// Save events
 	envelopes, err := store.Save(ctx, events)
@@ -110,9 +81,9 @@ func TestGormEventStore_SaveAndLoad(t *testing.T) {
 			t.Errorf("Loaded event %d has wrong aggregate ID: expected %s, got %s",
 				i, aggregateID, event.AggregateID())
 		}
-		if event.Version() != i+1 {
-			t.Errorf("Loaded event %d has wrong version: expected %d, got %d",
-				i, i+1, event.Version())
+		if event.SequenceNo() != int64(i+1) {
+			t.Errorf("Loaded event %d has wrong sequence number: expected %d, got %d",
+				i, i+1, event.SequenceNo())
 		}
 	}
 
@@ -122,12 +93,16 @@ func TestGormEventStore_SaveAndLoad(t *testing.T) {
 		t.Fatalf("Failed to load events from version: %v", err)
 	}
 
-	if len(fromVersionEnvelopes) != 1 {
-		t.Errorf("Expected 1 envelope from version 1, got %d", len(fromVersionEnvelopes))
+	if len(fromVersionEnvelopes) != 2 {
+		t.Errorf("Expected 2 envelopes from version 1, got %d", len(fromVersionEnvelopes))
 	}
 
-	if fromVersionEnvelopes[0].Event().Version() != 2 {
-		t.Errorf("Expected event version 2, got %d", fromVersionEnvelopes[0].Event().Version())
+	if fromVersionEnvelopes[0].Event().SequenceNo() != 1 {
+		t.Errorf("Expected first event sequence number 1, got %d", fromVersionEnvelopes[0].Event().SequenceNo())
+	}
+
+	if fromVersionEnvelopes[1].Event().SequenceNo() != 2 {
+		t.Errorf("Expected second event sequence number 2, got %d", fromVersionEnvelopes[1].Event().SequenceNo())
 	}
 }
 

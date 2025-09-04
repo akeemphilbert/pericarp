@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill/message"
@@ -97,8 +99,8 @@ func (d *WatermillEventDispatcher) dispatchSingle(ctx context.Context, envelope 
 		"event_id":     envelope.EventID(),
 		"event_type":   eventType,
 		"aggregate_id": event.AggregateID(),
-		"version":      event.Version(),
-		"occurred_at":  event.OccurredAt(),
+		"version":      event.SequenceNo(),
+		"occurred_at":  event.CreatedAt(),
 		"timestamp":    envelope.Timestamp(),
 		"metadata":     envelope.Metadata(),
 		"event_data":   event, // This will be JSON serialized
@@ -225,13 +227,25 @@ func (d *WatermillEventDispatcher) reconstructEnvelope(data map[string]interface
 		metadata = make(map[string]interface{})
 	}
 
+	// Parse entity type and event type from the combined event type
+	// EntityEvent combines them as "EntityType.EventType"
+	entityType := "Generic"
+	eventTypeOnly := eventType
+	if dotIndex := strings.LastIndex(eventType, "."); dotIndex != -1 {
+		entityType = eventType[:dotIndex]
+		eventTypeOnly = eventType[dotIndex+1:]
+	}
+
 	// Create a generic event (in a real implementation, you'd use an event registry)
-	event := &GenericEvent{
-		eventType:   eventType,
-		aggregateID: aggregateID,
-		version:     int(version),
-		// Note: For simplicity, we're not reconstructing the full event data here
-		// In a production system, you'd want an event registry to properly reconstruct events
+	event := &domain.EntityEvent{
+		EntityType:  entityType,
+		Type:        eventTypeOnly,
+		AggregateId: aggregateID,
+		SequenceNum: int64(version),
+		CreatedTime: time.Now(), // We don't have the original timestamp
+		UserId:      "",
+		AccountId:   "",
+		Data:        data["event_data"], // Preserve the original event data
 	}
 
 	// Create envelope

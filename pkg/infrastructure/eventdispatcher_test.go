@@ -49,28 +49,24 @@ func TestWatermillEventDispatcher_SubscribeAndDispatch(t *testing.T) {
 
 	// Create test handler
 	handler := &testEventHandler{
-		eventTypes: []string{"TestEvent"},
+		eventTypes: []string{"Test.Event"},
 	}
 
 	// Subscribe handler
-	err = dispatcher.Subscribe("TestEvent", handler)
+	err = dispatcher.Subscribe("Test.Event", handler)
 	if err != nil {
 		t.Fatalf("Failed to subscribe handler: %v", err)
 	}
 
 	// Verify handler is registered
-	handlers := dispatcher.GetHandlers("TestEvent")
+	handlers := dispatcher.GetHandlers("Test.Event")
 	if len(handlers) != 1 {
 		t.Errorf("Expected 1 handler, got %d", len(handlers))
 	}
 
 	// Create test event and envelope
-	event := &testEvent{
-		eventType:   "TestEvent",
-		aggregateID: "test-123",
-		version:     1,
-		occurredAt:  time.Now(),
-	}
+	event := domain.NewEntityEvent("Test", "Event", "test-123", "user-1", "account-1", nil)
+	event.SetSequenceNo(1)
 
 	envelope := &eventEnvelope{
 		event:     event,
@@ -118,16 +114,16 @@ func TestWatermillEventDispatcher_MultipleHandlers(t *testing.T) {
 	}()
 
 	// Create multiple handlers for the same event type
-	handler1 := &testEventHandler{eventTypes: []string{"TestEvent"}}
-	handler2 := &testEventHandler{eventTypes: []string{"TestEvent"}}
+	handler1 := &testEventHandler{eventTypes: []string{"Test.Event"}}
+	handler2 := &testEventHandler{eventTypes: []string{"Test.Event"}}
 
 	// Subscribe both handlers
-	err = dispatcher.Subscribe("TestEvent", handler1)
+	err = dispatcher.Subscribe("Test.Event", handler1)
 	if err != nil {
 		t.Fatalf("Failed to subscribe handler1: %v", err)
 	}
 
-	err = dispatcher.Subscribe("TestEvent", handler2)
+	err = dispatcher.Subscribe("Test.Event", handler2)
 	if err != nil {
 		t.Fatalf("Failed to subscribe handler2: %v", err)
 	}
@@ -136,18 +132,14 @@ func TestWatermillEventDispatcher_MultipleHandlers(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify both handlers are registered
-	handlers := dispatcher.GetHandlers("TestEvent")
+	handlers := dispatcher.GetHandlers("Test.Event")
 	if len(handlers) != 2 {
 		t.Errorf("Expected 2 handlers, got %d", len(handlers))
 	}
 
 	// Create and dispatch test event
-	event := &testEvent{
-		eventType:   "TestEvent",
-		aggregateID: "test-456",
-		version:     1,
-		occurredAt:  time.Now(),
-	}
+	event := domain.NewEntityEvent("Test", "Event", "test-456", "user-1", "account-1", nil)
+	event.SetSequenceNo(1)
 
 	envelope := &eventEnvelope{
 		event:     event,
@@ -190,16 +182,16 @@ func TestWatermillEventDispatcher_DifferentEventTypes(t *testing.T) {
 	}()
 
 	// Create handlers for different event types
-	handler1 := &testEventHandler{eventTypes: []string{"EventType1"}}
-	handler2 := &testEventHandler{eventTypes: []string{"EventType2"}}
+	handler1 := &testEventHandler{eventTypes: []string{"Test.EventType1"}}
+	handler2 := &testEventHandler{eventTypes: []string{"Test.EventType2"}}
 
 	// Subscribe handlers
-	err = dispatcher.Subscribe("EventType1", handler1)
+	err = dispatcher.Subscribe("Test.EventType1", handler1)
 	if err != nil {
 		t.Fatalf("Failed to subscribe handler1: %v", err)
 	}
 
-	err = dispatcher.Subscribe("EventType2", handler2)
+	err = dispatcher.Subscribe("Test.EventType2", handler2)
 	if err != nil {
 		t.Fatalf("Failed to subscribe handler2: %v", err)
 	}
@@ -208,8 +200,10 @@ func TestWatermillEventDispatcher_DifferentEventTypes(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Create events of different types
-	event1 := &testEvent{eventType: "EventType1", aggregateID: "test-1", version: 1, occurredAt: time.Now()}
-	event2 := &testEvent{eventType: "EventType2", aggregateID: "test-2", version: 1, occurredAt: time.Now()}
+	event1 := domain.NewEntityEvent("Test", "EventType1", "test-1", "user-1", "account-1", nil)
+	event1.SetSequenceNo(1)
+	event2 := domain.NewEntityEvent("Test", "EventType2", "test-2", "user-1", "account-1", nil)
+	event2.SetSequenceNo(1)
 
 	envelope1 := &eventEnvelope{event: event1, eventID: "env-1", timestamp: time.Now(), metadata: map[string]interface{}{}}
 	envelope2 := &eventEnvelope{event: event2, eventID: "env-2", timestamp: time.Now(), metadata: map[string]interface{}{}}
@@ -222,7 +216,7 @@ func TestWatermillEventDispatcher_DifferentEventTypes(t *testing.T) {
 	}
 
 	// Wait for async processing
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	// Verify each handler only received its event type
 	handler1Events := handler1.GetHandledEvents()
@@ -236,11 +230,11 @@ func TestWatermillEventDispatcher_DifferentEventTypes(t *testing.T) {
 		t.Errorf("Expected handler2 to receive 1 event, got %d", len(handler2Events))
 	}
 
-	if len(handler1Events) > 0 && handler1Events[0].Event().EventType() != "EventType1" {
+	if len(handler1Events) > 0 && handler1Events[0].Event().EventType() != "Test.EventType1" {
 		t.Errorf("Handler1 received wrong event type: %s", handler1Events[0].Event().EventType())
 	}
 
-	if len(handler2Events) > 0 && handler2Events[0].Event().EventType() != "EventType2" {
+	if len(handler2Events) > 0 && handler2Events[0].Event().EventType() != "Test.EventType2" {
 		t.Errorf("Handler2 received wrong event type: %s", handler2Events[0].Event().EventType())
 	}
 }

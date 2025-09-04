@@ -5,7 +5,6 @@ package mocks
 
 import (
 	"github.com/akeemphilbert/pericarp/internal/domain"
-	"github.com/segmentio/ksuid"
 	"sync"
 )
 
@@ -19,16 +18,16 @@ var _ domain.UserRepository = &UserRepositoryMock{}
 //
 //		// make and configure a mocked domain.UserRepository
 //		mockedUserRepository := &UserRepositoryMock{
-//			DeleteFunc: func(id ksuid.KSUID) error {
+//			DeleteFunc: func(id string) error {
 //				panic("mock out the Delete method")
 //			},
 //			FindByEmailFunc: func(email string) (*domain.User, error) {
 //				panic("mock out the FindByEmail method")
 //			},
-//			FindByIDFunc: func(id ksuid.KSUID) (*domain.User, error) {
+//			FindByIDFunc: func(id string) (*domain.User, error) {
 //				panic("mock out the FindByID method")
 //			},
-//			LoadFromVersionFunc: func(id ksuid.KSUID, version int) (*domain.User, error) {
+//			LoadFromVersionFunc: func(id string, version int) (*domain.User, error) {
 //				panic("mock out the LoadFromVersion method")
 //			},
 //			SaveFunc: func(user *domain.User) error {
@@ -42,16 +41,16 @@ var _ domain.UserRepository = &UserRepositoryMock{}
 //	}
 type UserRepositoryMock struct {
 	// DeleteFunc mocks the Delete method.
-	DeleteFunc func(id ksuid.KSUID) error
+	DeleteFunc func(id string) error
 
 	// FindByEmailFunc mocks the FindByEmail method.
 	FindByEmailFunc func(email string) (*domain.User, error)
 
 	// FindByIDFunc mocks the FindByID method.
-	FindByIDFunc func(id ksuid.KSUID) (*domain.User, error)
+	FindByIDFunc func(id string) (*domain.User, error)
 
 	// LoadFromVersionFunc mocks the LoadFromVersion method.
-	LoadFromVersionFunc func(id ksuid.KSUID, version int) (*domain.User, error)
+	LoadFromVersionFunc func(id string, version int) (*domain.User, error)
 
 	// SaveFunc mocks the Save method.
 	SaveFunc func(user *domain.User) error
@@ -61,7 +60,7 @@ type UserRepositoryMock struct {
 		// Delete holds details about calls to the Delete method.
 		Delete []struct {
 			// ID is the id argument value.
-			ID ksuid.KSUID
+			ID string
 		}
 		// FindByEmail holds details about calls to the FindByEmail method.
 		FindByEmail []struct {
@@ -71,12 +70,12 @@ type UserRepositoryMock struct {
 		// FindByID holds details about calls to the FindByID method.
 		FindByID []struct {
 			// ID is the id argument value.
-			ID ksuid.KSUID
+			ID string
 		}
 		// LoadFromVersion holds details about calls to the LoadFromVersion method.
 		LoadFromVersion []struct {
 			// ID is the id argument value.
-			ID ksuid.KSUID
+			ID string
 			// Version is the version argument value.
 			Version int
 		}
@@ -94,12 +93,12 @@ type UserRepositoryMock struct {
 }
 
 // Delete calls DeleteFunc.
-func (mock *UserRepositoryMock) Delete(id ksuid.KSUID) error {
+func (mock *UserRepositoryMock) Delete(id string) error {
 	if mock.DeleteFunc == nil {
 		panic("UserRepositoryMock.DeleteFunc: method is nil but UserRepository.Delete was just called")
 	}
 	callInfo := struct {
-		ID ksuid.KSUID
+		ID string
 	}{
 		ID: id,
 	}
@@ -114,10 +113,10 @@ func (mock *UserRepositoryMock) Delete(id ksuid.KSUID) error {
 //
 //	len(mockedUserRepository.DeleteCalls())
 func (mock *UserRepositoryMock) DeleteCalls() []struct {
-	ID ksuid.KSUID
+	ID string
 } {
 	var calls []struct {
-		ID ksuid.KSUID
+		ID string
 	}
 	mock.lockDelete.RLock()
 	calls = mock.calls.Delete
@@ -158,12 +157,12 @@ func (mock *UserRepositoryMock) FindByEmailCalls() []struct {
 }
 
 // FindByID calls FindByIDFunc.
-func (mock *UserRepositoryMock) FindByID(id ksuid.KSUID) (*domain.User, error) {
+func (mock *UserRepositoryMock) FindByID(id string) (*domain.User, error) {
 	if mock.FindByIDFunc == nil {
 		panic("UserRepositoryMock.FindByIDFunc: method is nil but UserRepository.FindByID was just called")
 	}
 	callInfo := struct {
-		ID ksuid.KSUID
+		ID string
 	}{
 		ID: id,
 	}
@@ -178,10 +177,10 @@ func (mock *UserRepositoryMock) FindByID(id ksuid.KSUID) (*domain.User, error) {
 //
 //	len(mockedUserRepository.FindByIDCalls())
 func (mock *UserRepositoryMock) FindByIDCalls() []struct {
-	ID ksuid.KSUID
+	ID string
 } {
 	var calls []struct {
-		ID ksuid.KSUID
+		ID string
 	}
 	mock.lockFindByID.RLock()
 	calls = mock.calls.FindByID
@@ -190,12 +189,12 @@ func (mock *UserRepositoryMock) FindByIDCalls() []struct {
 }
 
 // LoadFromVersion calls LoadFromVersionFunc.
-func (mock *UserRepositoryMock) LoadFromVersion(id ksuid.KSUID, version int) (*domain.User, error) {
+func (mock *UserRepositoryMock) LoadFromVersion(id string, version int) (*domain.User, error) {
 	if mock.LoadFromVersionFunc == nil {
 		panic("UserRepositoryMock.LoadFromVersionFunc: method is nil but UserRepository.LoadFromVersion was just called")
 	}
 	callInfo := struct {
-		ID      ksuid.KSUID
+		ID      string
 		Version int
 	}{
 		ID:      id,
@@ -212,11 +211,11 @@ func (mock *UserRepositoryMock) LoadFromVersion(id ksuid.KSUID, version int) (*d
 //
 //	len(mockedUserRepository.LoadFromVersionCalls())
 func (mock *UserRepositoryMock) LoadFromVersionCalls() []struct {
-	ID      ksuid.KSUID
+	ID      string
 	Version int
 } {
 	var calls []struct {
-		ID      ksuid.KSUID
+		ID      string
 		Version int
 	}
 	mock.lockLoadFromVersion.RLock()

@@ -21,8 +21,8 @@ var _ EventStore = &EventStoreMock{}
 //			LoadFunc: func(ctx context.Context, aggregateID string) ([]Envelope, error) {
 //				panic("mock out the Load method")
 //			},
-//			LoadFromVersionFunc: func(ctx context.Context, aggregateID string, version int) ([]Envelope, error) {
-//				panic("mock out the LoadFromVersion method")
+//			LoadFromSequenceFunc: func(ctx context.Context, aggregateID string, sequenceNo int64) ([]Envelope, error) {
+//				panic("mock out the LoadFromSequence method")
 //			},
 //			SaveFunc: func(ctx context.Context, events []Event) ([]Envelope, error) {
 //				panic("mock out the Save method")
@@ -37,8 +37,8 @@ type EventStoreMock struct {
 	// LoadFunc mocks the Load method.
 	LoadFunc func(ctx context.Context, aggregateID string) ([]Envelope, error)
 
-	// LoadFromVersionFunc mocks the LoadFromVersion method.
-	LoadFromVersionFunc func(ctx context.Context, aggregateID string, version int) ([]Envelope, error)
+	// LoadFromSequenceFunc mocks the LoadFromSequence method.
+	LoadFromSequenceFunc func(ctx context.Context, aggregateID string, sequenceNo int64) ([]Envelope, error)
 
 	// SaveFunc mocks the Save method.
 	SaveFunc func(ctx context.Context, events []Event) ([]Envelope, error)
@@ -52,14 +52,14 @@ type EventStoreMock struct {
 			// AggregateID is the aggregateID argument value.
 			AggregateID string
 		}
-		// LoadFromVersion holds details about calls to the LoadFromVersion method.
-		LoadFromVersion []struct {
+		// LoadFromSequence holds details about calls to the LoadFromSequence method.
+		LoadFromSequence []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 			// AggregateID is the aggregateID argument value.
 			AggregateID string
-			// Version is the version argument value.
-			Version int
+			// SequenceNo is the sequenceNo argument value.
+			SequenceNo int64
 		}
 		// Save holds details about calls to the Save method.
 		Save []struct {
@@ -69,9 +69,9 @@ type EventStoreMock struct {
 			Events []Event
 		}
 	}
-	lockLoad            sync.RWMutex
-	lockLoadFromVersion sync.RWMutex
-	lockSave            sync.RWMutex
+	lockLoad             sync.RWMutex
+	lockLoadFromSequence sync.RWMutex
+	lockSave             sync.RWMutex
 }
 
 // Load calls LoadFunc.
@@ -110,43 +110,43 @@ func (mock *EventStoreMock) LoadCalls() []struct {
 	return calls
 }
 
-// LoadFromVersion calls LoadFromVersionFunc.
-func (mock *EventStoreMock) LoadFromVersion(ctx context.Context, aggregateID string, version int) ([]Envelope, error) {
-	if mock.LoadFromVersionFunc == nil {
-		panic("EventStoreMock.LoadFromVersionFunc: method is nil but EventStore.LoadFromVersion was just called")
+// LoadFromSequence calls LoadFromSequenceFunc.
+func (mock *EventStoreMock) LoadFromSequence(ctx context.Context, aggregateID string, sequenceNo int64) ([]Envelope, error) {
+	if mock.LoadFromSequenceFunc == nil {
+		panic("EventStoreMock.LoadFromSequenceFunc: method is nil but EventStore.LoadFromSequence was just called")
 	}
 	callInfo := struct {
 		Ctx         context.Context
 		AggregateID string
-		Version     int
+		SequenceNo  int64
 	}{
 		Ctx:         ctx,
 		AggregateID: aggregateID,
-		Version:     version,
+		SequenceNo:  sequenceNo,
 	}
-	mock.lockLoadFromVersion.Lock()
-	mock.calls.LoadFromVersion = append(mock.calls.LoadFromVersion, callInfo)
-	mock.lockLoadFromVersion.Unlock()
-	return mock.LoadFromVersionFunc(ctx, aggregateID, version)
+	mock.lockLoadFromSequence.Lock()
+	mock.calls.LoadFromSequence = append(mock.calls.LoadFromSequence, callInfo)
+	mock.lockLoadFromSequence.Unlock()
+	return mock.LoadFromSequenceFunc(ctx, aggregateID, sequenceNo)
 }
 
-// LoadFromVersionCalls gets all the calls that were made to LoadFromVersion.
+// LoadFromSequenceCalls gets all the calls that were made to LoadFromSequence.
 // Check the length with:
 //
-//	len(mockedEventStore.LoadFromVersionCalls())
-func (mock *EventStoreMock) LoadFromVersionCalls() []struct {
+//	len(mockedEventStore.LoadFromSequenceCalls())
+func (mock *EventStoreMock) LoadFromSequenceCalls() []struct {
 	Ctx         context.Context
 	AggregateID string
-	Version     int
+	SequenceNo  int64
 } {
 	var calls []struct {
 		Ctx         context.Context
 		AggregateID string
-		Version     int
+		SequenceNo  int64
 	}
-	mock.lockLoadFromVersion.RLock()
-	calls = mock.calls.LoadFromVersion
-	mock.lockLoadFromVersion.RUnlock()
+	mock.lockLoadFromSequence.RLock()
+	calls = mock.calls.LoadFromSequence
+	mock.lockLoadFromSequence.RUnlock()
 	return calls
 }
 

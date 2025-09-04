@@ -54,15 +54,13 @@ func (e *eventEnvelope) Timestamp() time.Time {
 
 // GormEventStore implements the EventStore interface using GORM
 type GormEventStore struct {
-	db              *gorm.DB
-	eventDispatcher domain.EventDispatcher
+	db *gorm.DB
 }
 
 // NewGormEventStore creates a new GORM-based event store
-func NewGormEventStore(db *gorm.DB, eventDispatcher domain.EventDispatcher) (*GormEventStore, error) {
+func NewGormEventStore(db *gorm.DB) (*GormEventStore, error) {
 	store := &GormEventStore{
-		db:              db,
-		eventDispatcher: eventDispatcher,
+		db: db,
 	}
 
 	// Auto-migrate the events table
@@ -222,9 +220,4 @@ func (s *GormEventStore) LoadFromSequence(ctx context.Context, aggregateID strin
 	}
 
 	return envelopes, nil
-}
-
-// NewUnitOfWork creates a new unit of work instance configured with this event store
-func (s *GormEventStore) NewUnitOfWork() domain.UnitOfWork {
-	return NewUnitOfWork(s, s.eventDispatcher)
 }

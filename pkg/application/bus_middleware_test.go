@@ -63,10 +63,6 @@ func (m *MockEventStore) LoadFromSequence(ctx context.Context, aggregateID strin
 	return []domain.Envelope{}, nil
 }
 
-func (m *MockEventStore) NewUnitOfWork() domain.UnitOfWork {
-	return nil // Not needed for these tests
-}
-
 // Test command and handler
 type testCommand struct{}
 

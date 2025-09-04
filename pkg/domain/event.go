@@ -152,14 +152,6 @@ type EventStore interface {
 	//
 	// The sequenceNo parameter is inclusive - events with sequenceNo >= sequenceNo will be returned.
 	LoadFromSequence(ctx context.Context, aggregateID string, sequenceNo int64) ([]Envelope, error)
-
-	// NewUnitOfWork creates a new unit of work for managing transactional boundaries.
-	// This allows the event store to provide unit of work instances that are properly
-	// configured with the necessary dependencies (event store and dispatcher).
-	//
-	// The returned unit of work can be used to register events from multiple aggregates
-	// and commit them atomically.
-	NewUnitOfWork() UnitOfWork
 }
 
 // EventDispatcher handles the distribution of events to registered handlers,
