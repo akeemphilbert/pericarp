@@ -9,51 +9,45 @@ import (
 
 // {{.Name}}CreatedEvent represents the creation of a {{.Name | lower}}
 type {{.Name}}CreatedEvent struct {
-	domain.StandardEvent
-	{{range filterRequired .Properties}}{{.Name | pascalCase}} {{.Type | goType}} `json:"{{.Name | snakeCase}}"`
-	{{end}}
+	*domain.EntityEvent
 }
 
 // New{{.Name}}CreatedEvent creates a new {{.Name}}CreatedEvent
 func New{{.Name}}CreatedEvent(aggregateID ksuid.KSUID{{range filterRequired .Properties}}, {{.Name | camelCase}} {{.Type | goType}}{{end}}) *{{.Name}}CreatedEvent {
 	return &{{.Name}}CreatedEvent{
-		StandardEvent: domain.NewStandardEvent(
-			ksuid.New(),
-			"{{.Name}}Created",
-			aggregateID,
-			1,
-			time.Now(),
+		EntityEvent: domain.NewEntityEvent(
+			"{{.Name | lower}}",
+			"created",
+			aggregateID.String(),
+			"",
+			"",
 			map[string]interface{}{
 				{{range filterRequired .Properties}}"{{.Name | snakeCase}}": {{.Name | camelCase}},
 				{{end}}
 			},
 		),
-		{{range filterRequired .Properties}}{{.Name | pascalCase}}: {{.Name | camelCase}},
-		{{end}}
 	}
 }
 
 {{range .Properties}}{{if not .Required}}
 // {{$.Name}}{{.Name | pascalCase}}UpdatedEvent represents an update to {{$.Name | lower}} {{.Name | lower}}
 type {{$.Name}}{{.Name | pascalCase}}UpdatedEvent struct {
-	domain.StandardEvent
-	{{.Name | pascalCase}} {{.Type | goType}} `json:"{{.Name | snakeCase}}"`
+	*domain.EntityEvent
 }
 
 // New{{$.Name}}{{.Name | pascalCase}}UpdatedEvent creates a new {{$.Name}}{{.Name | pascalCase}}UpdatedEvent
 func New{{$.Name}}{{.Name | pascalCase}}UpdatedEvent(aggregateID ksuid.KSUID, {{.Name | camelCase}} {{.Type | goType}}) *{{$.Name}}{{.Name | pascalCase}}UpdatedEvent {
 	return &{{$.Name}}{{.Name | pascalCase}}UpdatedEvent{
-		StandardEvent: domain.NewStandardEvent(
-			ksuid.New(),
-			"{{$.Name}}{{.Name | pascalCase}}Updated",
-			aggregateID,
-			1,
-			time.Now(),
+		EntityEvent: domain.NewEntityEvent(
+			"{{$.Name | lower}}",
+			"{{.Name | snakeCase}}_updated",
+			aggregateID.String(),
+			"",
+			"",
 			map[string]interface{}{
 				"{{.Name | snakeCase}}": {{.Name | camelCase}},
 			},
 		),
-		{{.Name | pascalCase}}: {{.Name | camelCase}},
 	}
 }
 {{end}}{{end}}

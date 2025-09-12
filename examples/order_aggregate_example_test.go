@@ -1,6 +1,7 @@
 package examples
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
@@ -35,16 +36,16 @@ func TestNewOrderExample(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	standardEvent, ok := events[0].(*domain.StandardEvent)
+	entityEvent, ok := events[0].(*domain.EntityEvent)
 	if !ok {
-		t.Fatal("Expected StandardEvent")
+		t.Fatal("Expected EntityEvent")
 	}
 
-	if standardEvent.EventType() != "Order.Created" {
-		t.Errorf("Expected event type 'Order.Created', got %s", standardEvent.EventType())
+	if entityEvent.EventType() != "order.created" {
+		t.Errorf("Expected event type 'order.created', got %s", entityEvent.EventType())
 	}
 
-	if standardEvent.AggregateID() != order.ID() {
+	if entityEvent.AggregateID() != order.ID() {
 		t.Error("Event aggregate ID should match order ID")
 	}
 }
@@ -73,14 +74,14 @@ func TestOrderExample_ConfirmOrder(t *testing.T) {
 		t.Errorf("Expected 2 events, got %d", len(events))
 	}
 
-	// Check the confirmation event (StandardEvent)
-	confirmEvent, ok := events[1].(*domain.StandardEvent)
+	// Check the confirmation event (EntityEvent)
+	confirmEvent, ok := events[1].(*domain.EntityEvent)
 	if !ok {
-		t.Error("Expected StandardEvent")
+		t.Error("Expected EntityEvent")
 	}
 
-	if confirmEvent.EventType() != "Order.Confirmed" {
-		t.Errorf("Expected 'Order.Confirmed', got %s", confirmEvent.EventType())
+	if confirmEvent.EventType() != "order.confirmed" {
+		t.Errorf("Expected 'order.confirmed', got %s", confirmEvent.EventType())
 	}
 
 	if confirmEvent.AggregateID() != order.ID() {
@@ -88,8 +89,11 @@ func TestOrderExample_ConfirmOrder(t *testing.T) {
 	}
 
 	// Check event data
-	data := confirmEvent.Data()
-	if data["status"] != "confirmed" {
+	var data map[string]interface{}
+	if err := json.Unmarshal(confirmEvent.Payload(), &data); err != nil {
+		t.Fatalf("Failed to parse payload: %v", err)
+	}
+	if status, ok := data["status"].(string); !ok || status != "confirmed" {
 		t.Errorf("Expected status 'confirmed' in event data, got %v", data["status"])
 	}
 }
@@ -98,17 +102,17 @@ func TestOrderExample_LoadFromHistory(t *testing.T) {
 	// Arrange - create events that represent order history
 	orderID := "order-123"
 	events := []domain.Event{
-		domain.NewEvent(orderID, "Order", "Created", map[string]interface{}{
+		domain.NewEntityEvent("order", "created", orderID, "", "", map[string]interface{}{
 			"customer_id": "customer-456",
 			"status":      "pending",
 		}),
-		domain.NewEvent(orderID, "Order", "Confirmed", map[string]interface{}{
+		domain.NewEntityEvent("order", "confirmed", orderID, "", "", map[string]interface{}{
 			"status": "confirmed",
 		}),
 	}
 
 	// Act - reconstruct order from events
-	order := &OrderExample{Entity: domain.NewEntity(orderID)}
+	order := &OrderExample{BasicEntity: domain.NewEntity(orderID)}
 	order.LoadFromHistory(events)
 
 	// Assert
@@ -120,8 +124,8 @@ func TestOrderExample_LoadFromHistory(t *testing.T) {
 		t.Errorf("Expected status confirmed, got %v", order.Status())
 	}
 
-	if order.Version() != 2 {
-		t.Errorf("Expected version 2, got %d", order.Version())
+	if order.SequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", order.SequenceNo())
 	}
 
 	// Should have no uncommitted events after loading from history
@@ -155,18 +159,21 @@ func TestOrderExample_CancelOrder(t *testing.T) {
 	}
 
 	// Check the cancellation event
-	cancelEvent, ok := events[1].(*domain.StandardEvent)
+	cancelEvent, ok := events[1].(*domain.EntityEvent)
 	if !ok {
-		t.Error("Expected StandardEvent")
+		t.Error("Expected EntityEvent")
 	}
 
-	if cancelEvent.EventType() != "Order.Cancelled" {
-		t.Errorf("Expected 'Order.Cancelled', got %s", cancelEvent.EventType())
+	if cancelEvent.EventType() != "order.cancelled" {
+		t.Errorf("Expected 'order.cancelled', got %s", cancelEvent.EventType())
 	}
 
 	// Check event data
-	data := cancelEvent.Data()
-	if data["reason"] != "customer_requested" {
+	var data map[string]interface{}
+	if err := json.Unmarshal(cancelEvent.Payload(), &data); err != nil {
+		t.Fatalf("Failed to parse payload: %v", err)
+	}
+	if reason, ok := data["reason"].(string); !ok || reason != "customer_requested" {
 		t.Errorf("Expected reason 'customer_requested' in event data, got %v", data["reason"])
 	}
 }

@@ -132,14 +132,21 @@ func RegisterUserProjectorEventHandlers(
 func CreateUserTaggedHandlerProvider(handler *application.CreateUserHandler) pkgapp.TaggedCommandHandler {
 	return pkgapp.TaggedCommandHandler{
 		CommandType: "CreateUser",
-		Handler: func(ctx context.Context, log pkgdomain.Logger, p pkgapp.Payload[pkgapp.Command]) (pkgapp.Response[struct{}], error) {
+		Handler: func(ctx context.Context, log pkgdomain.Logger, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher, p pkgapp.Payload[pkgapp.Command]) (pkgapp.Response[any], error) {
 			cmd, ok := p.Data.(application.CreateUserCommand)
 			if !ok {
-				return pkgapp.Response[struct{}]{}, fmt.Errorf("invalid command type")
+				return pkgapp.Response[any]{}, fmt.Errorf("invalid command type")
 			}
 
-			err := handler.Handle(ctx, log, cmd)
-			return pkgapp.Response[struct{}]{Data: struct{}{}}, err
+			// Convert to the internal payload format
+			internalPayload := pkgapp.Payload[pkgapp.Command]{
+				Data:     cmd,
+				Metadata: p.Metadata,
+				TraceID:  p.TraceID,
+				UserID:   p.UserID,
+			}
+
+			return handler.Handle(ctx, log, eventStore, eventDispatcher, internalPayload)
 		},
 	}
 }
@@ -148,14 +155,21 @@ func CreateUserTaggedHandlerProvider(handler *application.CreateUserHandler) pkg
 func UpdateUserEmailTaggedHandlerProvider(handler *application.UpdateUserEmailHandler) pkgapp.TaggedCommandHandler {
 	return pkgapp.TaggedCommandHandler{
 		CommandType: "UpdateUserEmail",
-		Handler: func(ctx context.Context, log pkgdomain.Logger, p pkgapp.Payload[pkgapp.Command]) (pkgapp.Response[struct{}], error) {
+		Handler: func(ctx context.Context, log pkgdomain.Logger, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher, p pkgapp.Payload[pkgapp.Command]) (pkgapp.Response[any], error) {
 			cmd, ok := p.Data.(application.UpdateUserEmailCommand)
 			if !ok {
-				return pkgapp.Response[struct{}]{}, fmt.Errorf("invalid command type")
+				return pkgapp.Response[any]{}, fmt.Errorf("invalid command type")
 			}
 
-			err := handler.Handle(ctx, log, cmd)
-			return pkgapp.Response[struct{}]{Data: struct{}{}}, err
+			// Convert to the internal payload format
+			internalPayload := pkgapp.Payload[pkgapp.Command]{
+				Data:     cmd,
+				Metadata: p.Metadata,
+				TraceID:  p.TraceID,
+				UserID:   p.UserID,
+			}
+
+			return handler.Handle(ctx, log, eventStore, eventDispatcher, internalPayload)
 		},
 	}
 }
@@ -164,14 +178,14 @@ func UpdateUserEmailTaggedHandlerProvider(handler *application.UpdateUserEmailHa
 func GetUserTaggedHandlerProvider(handler *application.GetUserHandler) pkgapp.TaggedQueryHandler {
 	return pkgapp.TaggedQueryHandler{
 		QueryType: "GetUser",
-		Handler: func(ctx context.Context, log pkgdomain.Logger, p pkgapp.Payload[pkgapp.Query]) (pkgapp.Response[any], error) {
+		Handler: func(ctx context.Context, log pkgdomain.Logger, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher, p pkgapp.Payload[pkgapp.Query]) (pkgapp.Response[any], error) {
 			query, ok := p.Data.(application.GetUserQuery)
 			if !ok {
 				return pkgapp.Response[any]{}, fmt.Errorf("invalid query type")
 			}
 
 			result, err := handler.Handle(ctx, log, query)
-			return pkgapp.Response[any]{Data: result}, err
+			return pkgapp.Response[any]{Data: result, Metadata: p.Metadata}, err
 		},
 	}
 }
@@ -180,14 +194,14 @@ func GetUserTaggedHandlerProvider(handler *application.GetUserHandler) pkgapp.Ta
 func GetUserByEmailTaggedHandlerProvider(handler *application.GetUserByEmailHandler) pkgapp.TaggedQueryHandler {
 	return pkgapp.TaggedQueryHandler{
 		QueryType: "GetUserByEmail",
-		Handler: func(ctx context.Context, log pkgdomain.Logger, p pkgapp.Payload[pkgapp.Query]) (pkgapp.Response[any], error) {
+		Handler: func(ctx context.Context, log pkgdomain.Logger, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher, p pkgapp.Payload[pkgapp.Query]) (pkgapp.Response[any], error) {
 			query, ok := p.Data.(application.GetUserByEmailQuery)
 			if !ok {
 				return pkgapp.Response[any]{}, fmt.Errorf("invalid query type")
 			}
 
 			result, err := handler.Handle(ctx, log, query)
-			return pkgapp.Response[any]{Data: result}, err
+			return pkgapp.Response[any]{Data: result, Metadata: p.Metadata}, err
 		},
 	}
 }
@@ -196,14 +210,14 @@ func GetUserByEmailTaggedHandlerProvider(handler *application.GetUserByEmailHand
 func ListUsersTaggedHandlerProvider(handler *application.ListUsersHandler) pkgapp.TaggedQueryHandler {
 	return pkgapp.TaggedQueryHandler{
 		QueryType: "ListUsers",
-		Handler: func(ctx context.Context, log pkgdomain.Logger, p pkgapp.Payload[pkgapp.Query]) (pkgapp.Response[any], error) {
+		Handler: func(ctx context.Context, log pkgdomain.Logger, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher, p pkgapp.Payload[pkgapp.Query]) (pkgapp.Response[any], error) {
 			query, ok := p.Data.(application.ListUsersQuery)
 			if !ok {
 				return pkgapp.Response[any]{}, fmt.Errorf("invalid query type")
 			}
 
 			result, err := handler.Handle(ctx, log, query)
-			return pkgapp.Response[any]{Data: result}, err
+			return pkgapp.Response[any]{Data: result, Metadata: p.Metadata}, err
 		},
 	}
 }

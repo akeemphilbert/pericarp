@@ -29,7 +29,7 @@ func TestProjectCreator_CreateProject_ValidProject(t *testing.T) {
 	projectName := "test-project"
 	destination := filepath.Join(tempDir, projectName)
 
-	err := creator.CreateProject(projectName, "", destination, false)
+	err := creator.CreateProject(projectName, "", destination, false, "")
 
 	assert.NoError(t, err)
 	assert.DirExists(t, destination)
@@ -71,7 +71,7 @@ func TestProjectCreator_CreateProject_DryRun(t *testing.T) {
 	projectName := "dry-run-project"
 	destination := filepath.Join(tempDir, projectName)
 
-	err := creator.CreateProject(projectName, "", destination, true)
+	err := creator.CreateProject(projectName, "", destination, true, "")
 
 	assert.NoError(t, err)
 	// In dry-run mode, no directories or files should be created
@@ -114,7 +114,7 @@ func TestProjectCreator_CreateProject_InvalidProjectName(t *testing.T) {
 			tempDir := t.TempDir()
 			destination := filepath.Join(tempDir, "test")
 
-			err := creator.CreateProject(tt.projectName, "", destination, false)
+			err := creator.CreateProject(tt.projectName, "", destination, false, "")
 
 			assert.Error(t, err)
 			cliErr, ok := err.(*CliError)
@@ -135,7 +135,7 @@ func TestProjectCreator_CreateProject_InvalidDestination(t *testing.T) {
 	err := os.WriteFile(conflictFile, []byte("test"), 0644)
 	require.NoError(t, err)
 
-	err = creator.CreateProject("test-project", "", conflictFile, false)
+	err = creator.CreateProject("test-project", "", conflictFile, false, "")
 
 	assert.Error(t, err)
 	cliErr, ok := err.(*CliError)
@@ -152,7 +152,7 @@ func TestProjectCreator_CreateProject_WithRepository_DryRun_Unit(t *testing.T) {
 	destination := filepath.Join(tempDir, projectName)
 	repoURL := "https://github.com/example/repo.git"
 
-	err := creator.CreateProject(projectName, repoURL, destination, true)
+	err := creator.CreateProject(projectName, repoURL, destination, true, "")
 
 	assert.NoError(t, err)
 	// In dry-run mode, no cloning should occur
@@ -174,7 +174,7 @@ func TestProjectCreator_CreateProject_DefaultDestination(t *testing.T) {
 
 	projectName := "default-dest-project"
 
-	err = creator.CreateProject(projectName, "", "", false)
+	err = creator.CreateProject(projectName, "", "", false, "")
 
 	assert.NoError(t, err)
 	// Should create project in current directory with project name
@@ -190,7 +190,7 @@ func TestProjectCreator_CreateProject_VerboseLogging(t *testing.T) {
 	projectName := "verbose-project"
 	destination := filepath.Join(tempDir, projectName)
 
-	err := creator.CreateProject(projectName, "", destination, true)
+	err := creator.CreateProject(projectName, "", destination, true, "")
 
 	assert.NoError(t, err)
 }
@@ -495,7 +495,7 @@ func TestProjectCreator_CodeGenerator_Integration(t *testing.T) {
 	projectDir := filepath.Join(tempDir, projectName)
 
 	// First create a project
-	err := creator.CreateProject(projectName, "", projectDir, false)
+	err := creator.CreateProject(projectName, "", projectDir, false, "")
 	require.NoError(t, err)
 
 	// Then generate code into the project
@@ -516,7 +516,7 @@ func BenchmarkProjectCreator_CreateProject_DryRun(b *testing.B) {
 		projectName := "benchmark-project"
 		destination := filepath.Join(tempDir, projectName)
 
-		err := creator.CreateProject(projectName, "", destination, true)
+		err := creator.CreateProject(projectName, "", destination, true, "")
 		if err != nil {
 			b.Fatal(err)
 		}

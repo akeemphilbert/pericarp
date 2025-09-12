@@ -1,13 +1,14 @@
 package examples
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
-func TestNewUserWithStandardEvents(t *testing.T) {
-	user, err := NewUserWithStandardEvents("user-123", "john@example.com", "John Doe")
+func TestNewUserWithEntityEvents(t *testing.T) {
+	user, err := NewUserWithEntityEvents("user-123", "john@example.com", "John Doe")
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -34,22 +35,28 @@ func TestNewUserWithStandardEvents(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	standardEvent, ok := events[0].(*domain.StandardEvent)
+	entityEvent, ok := events[0].(*domain.EntityEvent)
 	if !ok {
-		t.Error("Expected StandardEvent")
+		t.Error("Expected EntityEvent")
 	}
 
-	if standardEvent.EventType() != "User.Created" {
-		t.Errorf("Expected event type 'User.Created', got %s", standardEvent.EventType())
+	if entityEvent.EventType() != "user.created" {
+		t.Errorf("Expected event type 'user.created', got %s", entityEvent.EventType())
 	}
 
-	if standardEvent.GetDataString("email") != "john@example.com" {
-		t.Errorf("Expected event email 'john@example.com', got %s", standardEvent.GetDataString("email"))
+	// Parse payload to access data
+	var data map[string]interface{}
+	if err := json.Unmarshal(entityEvent.Payload(), &data); err != nil {
+		t.Fatalf("Failed to parse payload: %v", err)
+	}
+
+	if email, ok := data["email"].(string); !ok || email != "john@example.com" {
+		t.Errorf("Expected email 'john@example.com', got %v", data["email"])
 	}
 }
 
-func TestUserWithStandardEvents_ChangeEmail(t *testing.T) {
-	user, _ := NewUserWithStandardEvents("user-123", "john@example.com", "John Doe")
+func TestUserWithEntityEvents_ChangeEmail(t *testing.T) {
+	user, _ := NewUserWithEntityEvents("user-123", "john@example.com", "John Doe")
 	user.MarkEventsAsCommitted() // Clear initial event
 
 	err := user.ChangeEmail("newemail@example.com")
@@ -66,26 +73,32 @@ func TestUserWithStandardEvents_ChangeEmail(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	standardEvent, ok := events[0].(*domain.StandardEvent)
+	entityEvent, ok := events[0].(*domain.EntityEvent)
 	if !ok {
-		t.Error("Expected StandardEvent")
+		t.Error("Expected EntityEvent")
 	}
 
-	if standardEvent.EventType() != "User.EmailUpdated" {
-		t.Errorf("Expected event type 'User.EmailUpdated', got %s", standardEvent.EventType())
+	if entityEvent.EventType() != "user.email_updated" {
+		t.Errorf("Expected event type 'user.email_updated', got %s", entityEvent.EventType())
 	}
 
-	if standardEvent.GetDataString("old_value") != "john@example.com" {
-		t.Errorf("Expected old_value 'john@example.com', got %s", standardEvent.GetDataString("old_value"))
+	// Parse payload to access data
+	var data map[string]interface{}
+	if err := json.Unmarshal(entityEvent.Payload(), &data); err != nil {
+		t.Fatalf("Failed to parse payload: %v", err)
 	}
 
-	if standardEvent.GetDataString("new_value") != "newemail@example.com" {
-		t.Errorf("Expected new_value 'newemail@example.com', got %s", standardEvent.GetDataString("new_value"))
+	if oldValue, ok := data["old_value"].(string); !ok || oldValue != "john@example.com" {
+		t.Errorf("Expected old_value 'john@example.com', got %v", data["old_value"])
+	}
+
+	if newValue, ok := data["new_value"].(string); !ok || newValue != "newemail@example.com" {
+		t.Errorf("Expected new_value 'newemail@example.com', got %v", data["new_value"])
 	}
 }
 
-func TestUserWithStandardEvents_Deactivate(t *testing.T) {
-	user, _ := NewUserWithStandardEvents("user-123", "john@example.com", "John Doe")
+func TestUserWithEntityEvents_Deactivate(t *testing.T) {
+	user, _ := NewUserWithEntityEvents("user-123", "john@example.com", "John Doe")
 	user.MarkEventsAsCommitted()
 
 	err := user.Deactivate()
@@ -102,26 +115,32 @@ func TestUserWithStandardEvents_Deactivate(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	standardEvent, ok := events[0].(*domain.StandardEvent)
+	entityEvent, ok := events[0].(*domain.EntityEvent)
 	if !ok {
-		t.Error("Expected StandardEvent")
+		t.Error("Expected EntityEvent")
 	}
 
-	if standardEvent.EventType() != "User.StatusChanged" {
-		t.Errorf("Expected event type 'User.StatusChanged', got %s", standardEvent.EventType())
+	if entityEvent.EventType() != "user.status_changed" {
+		t.Errorf("Expected event type 'user.status_changed', got %s", entityEvent.EventType())
 	}
 
-	if standardEvent.GetDataString("old_status") != "active" {
-		t.Errorf("Expected old_status 'active', got %s", standardEvent.GetDataString("old_status"))
+	// Parse payload to access data
+	var data map[string]interface{}
+	if err := json.Unmarshal(entityEvent.Payload(), &data); err != nil {
+		t.Fatalf("Failed to parse payload: %v", err)
 	}
 
-	if standardEvent.GetDataString("new_status") != "inactive" {
-		t.Errorf("Expected new_status 'inactive', got %s", standardEvent.GetDataString("new_status"))
+	if oldStatus, ok := data["old_status"].(string); !ok || oldStatus != "active" {
+		t.Errorf("Expected old_status 'active', got %v", data["old_status"])
+	}
+
+	if newStatus, ok := data["new_status"].(string); !ok || newStatus != "inactive" {
+		t.Errorf("Expected new_status 'inactive', got %v", data["new_status"])
 	}
 }
 
-func TestUserWithStandardEvents_UpdateProfile(t *testing.T) {
-	user, _ := NewUserWithStandardEvents("user-123", "john@example.com", "John Doe")
+func TestUserWithEntityEvents_UpdateProfile(t *testing.T) {
+	user, _ := NewUserWithEntityEvents("user-123", "john@example.com", "John Doe")
 	user.MarkEventsAsCommitted()
 
 	err := user.UpdateProfile("john.doe@example.com", "John Smith")
@@ -142,52 +161,58 @@ func TestUserWithStandardEvents_UpdateProfile(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	standardEvent, ok := events[0].(*domain.StandardEvent)
+	entityEvent, ok := events[0].(*domain.EntityEvent)
 	if !ok {
-		t.Error("Expected StandardEvent")
+		t.Error("Expected EntityEvent")
 	}
 
-	if standardEvent.EventType() != "User.Updated" {
-		t.Errorf("Expected event type 'User.Updated', got %s", standardEvent.EventType())
+	if entityEvent.EventType() != "user.updated" {
+		t.Errorf("Expected event type 'user.updated', got %s", entityEvent.EventType())
+	}
+
+	// Parse payload to access data
+	var data map[string]interface{}
+	if err := json.Unmarshal(entityEvent.Payload(), &data); err != nil {
+		t.Fatalf("Failed to parse payload: %v", err)
 	}
 
 	// Check that both email and name changes are captured
-	if standardEvent.GetDataString("old_email") != "john@example.com" {
-		t.Errorf("Expected old_email 'john@example.com', got %s", standardEvent.GetDataString("old_email"))
+	if oldEmail, ok := data["old_email"].(string); !ok || oldEmail != "john@example.com" {
+		t.Errorf("Expected old_email 'john@example.com', got %v", data["old_email"])
 	}
 
-	if standardEvent.GetDataString("new_email") != "john.doe@example.com" {
-		t.Errorf("Expected new_email 'john.doe@example.com', got %s", standardEvent.GetDataString("new_email"))
+	if newEmail, ok := data["new_email"].(string); !ok || newEmail != "john.doe@example.com" {
+		t.Errorf("Expected new_email 'john.doe@example.com', got %v", data["new_email"])
 	}
 
-	if standardEvent.GetDataString("old_name") != "John Doe" {
-		t.Errorf("Expected old_name 'John Doe', got %s", standardEvent.GetDataString("old_name"))
+	if oldName, ok := data["old_name"].(string); !ok || oldName != "John Doe" {
+		t.Errorf("Expected old_name 'John Doe', got %v", data["old_name"])
 	}
 
-	if standardEvent.GetDataString("new_name") != "John Smith" {
-		t.Errorf("Expected new_name 'John Smith', got %s", standardEvent.GetDataString("new_name"))
+	if newName, ok := data["new_name"].(string); !ok || newName != "John Smith" {
+		t.Errorf("Expected new_name 'John Smith', got %v", data["new_name"])
 	}
 }
 
-func TestUserWithStandardEvents_LoadFromHistory(t *testing.T) {
-	// Create events representing user history using StandardEvents
+func TestUserWithEntityEvents_LoadFromHistory(t *testing.T) {
+	// Create events representing user history using EntityEvents
 	events := []domain.Event{
-		domain.NewEvent("user-123", "User", "Created", map[string]interface{}{
+		domain.NewEntityEvent("user", "created", "user-123", "", "", map[string]interface{}{
 			"email":     "john@example.com",
 			"name":      "John Doe",
 			"is_active": true,
 		}),
-		domain.NewEvent("user-123", "User", "EmailUpdated", map[string]interface{}{
+		domain.NewEntityEvent("user", "email_updated", "user-123", "", "", map[string]interface{}{
 			"field":     "Email",
 			"old_value": "john@example.com",
 			"new_value": "john.doe@example.com",
 		}),
-		domain.NewEvent("user-123", "User", "NameUpdated", map[string]interface{}{
+		domain.NewEntityEvent("user", "name_updated", "user-123", "", "", map[string]interface{}{
 			"field":     "Name",
 			"old_value": "John Doe",
 			"new_value": "John Smith",
 		}),
-		domain.NewEvent("user-123", "User", "StatusChanged", map[string]interface{}{
+		domain.NewEntityEvent("user", "status_changed", "user-123", "", "", map[string]interface{}{
 			"old_status": "active",
 			"new_status": "inactive",
 			"reason":     "user_requested",
@@ -195,7 +220,7 @@ func TestUserWithStandardEvents_LoadFromHistory(t *testing.T) {
 	}
 
 	// Create empty user and load from history
-	user := &UserWithStandardEvents{Entity: domain.NewEntity("user-123")}
+	user := &UserWithEntityEvents{BasicEntity: domain.NewEntity("user-123")}
 	user.LoadFromHistory(events)
 
 	// Verify final state
@@ -211,13 +236,13 @@ func TestUserWithStandardEvents_LoadFromHistory(t *testing.T) {
 		t.Error("Expected user to be inactive")
 	}
 
-	if user.Version() != 4 {
-		t.Errorf("Expected version 4, got %d", user.Version())
+	if user.SequenceNo() != 4 {
+		t.Errorf("Expected sequence number 4, got %d", user.SequenceNo())
 	}
 }
 
-func TestUserWithStandardEvents_GetEventSummary(t *testing.T) {
-	user, _ := NewUserWithStandardEvents("user-123", "john@example.com", "John Doe")
+func TestUserWithEntityEvents_GetEventSummary(t *testing.T) {
+	user, _ := NewUserWithEntityEvents("user-123", "john@example.com", "John Doe")
 
 	// Perform various operations
 	user.ChangeEmail("new@example.com")
@@ -226,10 +251,10 @@ func TestUserWithStandardEvents_GetEventSummary(t *testing.T) {
 
 	summary := user.GetEventSummary()
 	expectedSummary := []string{
-		"User.Created",
-		"User.EmailUpdated",
-		"User.NameUpdated",
-		"User.StatusChanged",
+		"user.created",
+		"user.email_updated",
+		"user.name_updated",
+		"user.status_changed",
 	}
 
 	if len(summary) != len(expectedSummary) {
@@ -243,8 +268,8 @@ func TestUserWithStandardEvents_GetEventSummary(t *testing.T) {
 	}
 }
 
-func TestUserWithStandardEvents_Delete(t *testing.T) {
-	user, _ := NewUserWithStandardEvents("user-123", "john@example.com", "John Doe")
+func TestUserWithEntityEvents_Delete(t *testing.T) {
+	user, _ := NewUserWithEntityEvents("user-123", "john@example.com", "John Doe")
 	user.MarkEventsAsCommitted()
 
 	err := user.Delete("account_closure")
@@ -257,20 +282,26 @@ func TestUserWithStandardEvents_Delete(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	standardEvent, ok := events[0].(*domain.StandardEvent)
+	entityEvent, ok := events[0].(*domain.EntityEvent)
 	if !ok {
-		t.Error("Expected StandardEvent")
+		t.Error("Expected EntityEvent")
 	}
 
-	if standardEvent.EventType() != "User.Deleted" {
-		t.Errorf("Expected event type 'User.Deleted', got %s", standardEvent.EventType())
+	if entityEvent.EventType() != "user.deleted" {
+		t.Errorf("Expected event type 'user.deleted', got %s", entityEvent.EventType())
 	}
 
-	if standardEvent.GetDataString("reason") != "account_closure" {
-		t.Errorf("Expected reason 'account_closure', got %s", standardEvent.GetDataString("reason"))
+	// Parse payload to access data
+	var data map[string]interface{}
+	if err := json.Unmarshal(entityEvent.Payload(), &data); err != nil {
+		t.Fatalf("Failed to parse payload: %v", err)
 	}
 
-	if !standardEvent.GetDataBool("soft_delete") {
+	if reason, ok := data["reason"].(string); !ok || reason != "account_closure" {
+		t.Errorf("Expected reason 'account_closure', got %v", data["reason"])
+	}
+
+	if softDelete, ok := data["soft_delete"].(bool); !ok || !softDelete {
 		t.Error("Expected soft_delete to be true")
 	}
 }

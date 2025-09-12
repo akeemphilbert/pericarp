@@ -112,7 +112,7 @@ type GreetingCreatedEvent struct {
 
 func (e GreetingCreatedEvent) EventType() string { return "GreetingCreated" }
 func (e GreetingCreatedEvent) AggregateID() string { return e.GreetingID }
-func (e GreetingCreatedEvent) Version() int { return 1 }
+func (e GreetingCreatedEvent) SequenceNo() int64 { return 1 }
 func (e GreetingCreatedEvent) OccurredAt() time.Time { return e.CreatedAt }
 ```
 
@@ -148,24 +148,31 @@ func NewCreateGreetingHandler(repo GreetingRepository) *CreateGreetingHandler {
     return &CreateGreetingHandler{greetingRepo: repo}
 }
 
-func (h *CreateGreetingHandler) Handle(ctx context.Context, log pericarpdomain.Logger, p application.Payload[CreateGreetingCommand]) (application.Response[struct{}], error) {
-    log.Info("Creating greeting", "id", p.Data.ID, "message", p.Data.Message)
+func (h *CreateGreetingHandler) Handle(ctx context.Context, logger pericarpdomain.Logger, eventStore pericarpdomain.EventStore, eventDispatcher pericarpdomain.EventDispatcher, payload application.Payload[application.Command]) (application.Response[any], error) {
+    cmd, ok := payload.Data.(CreateGreetingCommand)
+    if !ok {
+        return application.Response[any]{
+            Error: application.NewApplicationError("INVALID_COMMAND", "Expected CreateGreetingCommand", nil),
+        }, nil
+    }
+    
+    logger.Info("Creating greeting", "id", cmd.ID, "message", cmd.Message)
     
     // Create domain aggregate
-    greeting := domain.NewGreeting(p.Data.ID, p.Data.Message)
+    greeting := domain.NewGreeting(cmd.ID, cmd.Message)
     
     // Save aggregate (this will persist events)
     if err := h.greetingRepo.Save(ctx, greeting); err != nil {
-        log.Error("Failed to save greeting", "error", err)
-        return application.Response[struct{}]{Error: err}, err
+        logger.Error("Failed to save greeting", "error", err)
+        return application.Response[any]{Error: err}, nil
     }
     
-    log.Info("Greeting created successfully", "id", p.Data.ID)
-    return application.Response[struct{}]{
-        Data: struct{}{},
-        Metadata: map[string]any{
-            "greeting_id": greeting.ID(),
-            "version":     greeting.Version(),
+    logger.Info("Greeting created successfully", "id", cmd.ID)
+    return application.Response[any]{
+        Data: application.CommandResponse{
+            Code:    200,
+            Message: "Greeting created successfully",
+            Payload: map[string]string{"greeting_id": greeting.ID()},
         },
     }, nil
 }
@@ -185,8 +192,8 @@ package application
 import (
     "context"
     
-    "github.com/your-org/pericarp/pkg/application"
-    "github.com/your-org/pericarp/pkg/domain"
+    "github.com/akeemphilbert/pericarp/pkg/application"
+    "github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // GetGreetingQuery represents a query to get a greeting
@@ -198,9 +205,9 @@ func (q GetGreetingQuery) QueryType() string { return "GetGreeting" }
 
 // GreetingView represents the read model for greetings
 type GreetingView struct {
-    ID      string `json:"id"`
-    Message string `json:"message"`
-    Version int    `json:"version"`
+    ID         string `json:"id"`
+    Message    string `json:"message"`
+    SequenceNo int64  `json:"sequence_no"`
 }
 
 // GetGreetingHandler handles greeting queries
@@ -212,27 +219,22 @@ func NewGetGreetingHandler(repo GreetingRepository) *GetGreetingHandler {
     return &GetGreetingHandler{greetingRepo: repo}
 }
 
-func (h *GetGreetingHandler) Handle(ctx context.Context, log domain.Logger, p application.Payload[GetGreetingQuery]) (application.Response[GreetingView], error) {
-    log.Debug("Getting greeting", "id", p.Data.ID)
+func (h *GetGreetingHandler) Handle(ctx context.Context, logger domain.Logger, query GetGreetingQuery) (GreetingView, error) {
+    logger.Debug("Getting greeting", "id", query.ID)
     
-    greeting, err := h.greetingRepo.Load(ctx, p.Data.ID)
+    greeting, err := h.greetingRepo.Load(ctx, query.ID)
     if err != nil {
-        log.Error("Failed to load greeting", "error", err)
-        return application.Response[GreetingView]{Error: err}, err
+        logger.Error("Failed to load greeting", "error", err)
+        return GreetingView{}, application.NewApplicationError("GREETING_NOT_FOUND", "Greeting not found", err)
     }
     
     view := GreetingView{
         ID:      greeting.ID(),
         Message: greeting.Message(),
-        Version: greeting.Version(),
+        SequenceNo: greeting.SequenceNo(),
     }
     
-    return application.Response[GreetingView]{
-        Data: view,
-        Metadata: map[string]any{
-            "loaded_from": "event_store",
-        },
-    }, nil
+    return view, nil
 }
 ```
 
@@ -353,23 +355,19 @@ func configureBuses(
     createHandler *application.CreateGreetingHandler,
     getHandler *application.GetGreetingHandler,
 ) {
-    // Register command handler with middleware
-    commandBus.Register("CreateGreeting", createHandler,
-        pericarpapp.LoggingMiddleware[application.CreateGreetingCommand, struct{}](),
-        pericarpapp.ValidationMiddleware[application.CreateGreetingCommand, struct{}](),
-    )
+    // Register command handler
+    commandBus.Register("CreateGreeting", createHandler)
     
-    // Register query handler with middleware
-    queryBus.Register("GetGreeting", getHandler,
-        pericarpapp.LoggingMiddleware[application.GetGreetingQuery, application.GreetingView](),
-        pericarpapp.ValidationMiddleware[application.GetGreetingQuery, application.GreetingView](),
-    )
+    // Register query handler
+    queryBus.Register("GetGreeting", getHandler)
 }
 
 func runDemo(
     commandBus pericarpapp.CommandBus,
     queryBus pericarpapp.QueryBus,
     logger pericarpdomain.Logger,
+    eventStore pericarpdomain.EventStore,
+    eventDispatcher pericarpdomain.EventDispatcher,
 ) {
     ctx := context.Background()
     
@@ -380,7 +378,11 @@ func runDemo(
     }
     
     logger.Info("Creating greeting...")
-    if err := commandBus.Handle(ctx, logger, createCmd); err != nil {
+    payload := pericarpapp.Payload[pericarpapp.Command]{
+        Data: createCmd,
+    }
+    
+    if _, err := commandBus.Handle(ctx, logger, eventStore, eventDispatcher, payload); err != nil {
         log.Fatalf("Failed to create greeting: %v", err)
     }
     
@@ -388,7 +390,7 @@ func runDemo(
     getQuery := application.GetGreetingQuery{ID: "greeting-1"}
     
     logger.Info("Querying greeting...")
-    result, err := queryBus.Handle(ctx, logger, getQuery)
+    result, err := queryBus.Handle(ctx, logger, eventStore, eventDispatcher, getQuery)
     if err != nil {
         log.Fatalf("Failed to get greeting: %v", err)
     }

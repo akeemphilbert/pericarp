@@ -72,7 +72,7 @@ type Payload[T any] struct {
 //	// Command response (no data)
 //	return Response[struct{}]{
 //	    Data: struct{}{},
-//	    Metadata: map[string]any{"version": aggregate.Version()},
+//	    Metadata: map[string]any{"sequence_no": aggregate.SequenceNo()},
 //	}, nil
 //
 //	// Query response (with data)
@@ -234,7 +234,7 @@ type Query interface {
 //	    view := UserView{ID: user.ID(), Email: user.Email()}
 //	    return Response[UserView]{
 //	        Data: view,
-//	        Metadata: map[string]any{"version": user.Version()},
+//	        Metadata: map[string]any{"sequence_no": user.SequenceNo()},
 //	    }, nil
 //	}
 type Handler[Req any, Res any] func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error)

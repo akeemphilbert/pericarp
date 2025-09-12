@@ -161,7 +161,7 @@ func TestNewProjectCommand_Integration(t *testing.T) {
 			}
 
 			// Execute project creation
-			err := creator.CreateProject(tt.projectName, repoURL, destination, dryRun)
+			err := creator.CreateProject(tt.projectName, repoURL, destination, dryRun, "")
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -178,23 +178,23 @@ func TestProjectCreator_ValidatesRequirements(t *testing.T) {
 	creator := NewProjectCreator(logger)
 
 	t.Run("validates project name (Requirement 10.1)", func(t *testing.T) {
-		err := creator.CreateProject("Invalid-Name", "", "", true)
+		err := creator.CreateProject("Invalid-Name", "", "", true, "")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "validation")
 	})
 
 	t.Run("handles custom destination (Requirement 9.3, 9.4)", func(t *testing.T) {
-		err := creator.CreateProject("test-service", "", "/tmp/test-dest", true)
+		err := creator.CreateProject("test-service", "", "/tmp/test-dest", true, "")
 		assert.NoError(t, err)
 	})
 
 	t.Run("supports dry-run mode (Requirement 9.1)", func(t *testing.T) {
-		err := creator.CreateProject("test-service", "", "", true)
+		err := creator.CreateProject("test-service", "", "", true, "")
 		assert.NoError(t, err)
 	})
 
 	t.Run("supports repository cloning (Requirement 4.1, 4.2)", func(t *testing.T) {
-		err := creator.CreateProject("test-service", "https://github.com/example/repo.git", "", true)
+		err := creator.CreateProject("test-service", "https://github.com/example/repo.git", "", true, "")
 		assert.NoError(t, err)
 	})
 }
@@ -205,7 +205,7 @@ func TestProjectCreator_ErrorHandling(t *testing.T) {
 	creator := NewProjectCreator(logger)
 
 	t.Run("empty project name", func(t *testing.T) {
-		err := creator.CreateProject("", "", "", true)
+		err := creator.CreateProject("", "", "", true, "")
 		assert.Error(t, err)
 
 		if cliErr, ok := err.(*CliError); ok {
@@ -214,7 +214,7 @@ func TestProjectCreator_ErrorHandling(t *testing.T) {
 	})
 
 	t.Run("project name with invalid characters", func(t *testing.T) {
-		err := creator.CreateProject("test@service", "", "", true)
+		err := creator.CreateProject("test@service", "", "", true, "")
 		assert.Error(t, err)
 
 		if cliErr, ok := err.(*CliError); ok {
@@ -223,7 +223,7 @@ func TestProjectCreator_ErrorHandling(t *testing.T) {
 	})
 
 	t.Run("project name starting with uppercase", func(t *testing.T) {
-		err := creator.CreateProject("TestService", "", "", true)
+		err := creator.CreateProject("TestService", "", "", true, "")
 		assert.Error(t, err)
 
 		if cliErr, ok := err.(*CliError); ok {

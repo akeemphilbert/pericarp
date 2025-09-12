@@ -2,25 +2,27 @@
 
 Welcome to the Pericarp Go library documentation. This documentation follows the [Diátaxis framework](https://diataxis.fr/) to provide you with the right information at the right time.
 
+Pericarp is a Go library that implements Domain-Driven Design (DDD), Command Query Responsibility Segregation (CQRS), and Event Sourcing patterns. It provides a clean, testable architecture for building scalable microservices and applications.
+
 ## Documentation Structure
 
 ### 📚 [Tutorial](tutorial/README.md)
 **Learning-oriented** - Start here if you're new to Pericarp or DDD/CQRS/Event Sourcing patterns.
 
 - [Getting Started](tutorial/getting-started.md) - Your first Pericarp application
-- [Building a User Management System](tutorial/user-management.md) - Complete walkthrough
+- [Building a User Management System](tutorial/user-management.md) - Complete walkthrough with CLI demo
 - [Adding Event Sourcing](tutorial/event-sourcing.md) - Implementing event sourcing
 - [Testing Your Application](tutorial/testing.md) - Writing comprehensive tests
 
 ### 🔧 [How-to Guides](how-to/README.md)
 **Problem-oriented** - Practical solutions for specific implementation challenges.
 
-- [Implementing Custom Aggregates](how-to/custom-aggregates.md)
-- [Creating Middleware](how-to/middleware.md)
-- [Database Configuration](how-to/database-setup.md)
-- [Performance Optimization](how-to/performance.md)
-- [Error Handling Patterns](how-to/error-handling.md)
-- [Testing Strategies](how-to/testing-strategies.md)
+- [Implementing Custom Aggregates](how-to/custom-aggregates.md) - Create domain aggregates with business logic
+- [Creating Middleware](how-to/middleware.md) - Add cross-cutting concerns to handlers
+- [Database Configuration](how-to/database-setup.md) - Configure SQLite and PostgreSQL
+- [Performance Optimization](how-to/performance.md) - Optimize your application for production
+- [Error Handling Patterns](how-to/error-handling.md) - Handle errors gracefully across layers
+- [Testing Strategies](how-to/testing-strategies.md) - Comprehensive testing approaches
 
 ### 📖 [Reference](reference/README.md)
 **Information-oriented** - Complete API documentation and technical specifications.
@@ -45,6 +47,7 @@ Welcome to the Pericarp Go library documentation. This documentation follows the
 ### I want to...
 
 - **Learn Pericarp from scratch** → Start with the [Tutorial](tutorial/README.md)
+- **Try the demo application** → Run `pericarp-demo` CLI commands
 - **Solve a specific problem** → Check the [How-to Guides](how-to/README.md)
 - **Look up API details** → Use the [Reference](reference/README.md)
 - **Understand the concepts** → Read the [Explanation](explanation/README.md)
@@ -54,6 +57,32 @@ Welcome to the Pericarp Go library documentation. This documentation follows the
 - **Beginner** → [Tutorial](tutorial/README.md) → [How-to Guides](how-to/README.md)
 - **Intermediate** → [How-to Guides](how-to/README.md) → [Reference](reference/README.md)
 - **Advanced** → [Reference](reference/README.md) → [Explanation](explanation/README.md)
+
+## Demo Application
+
+Pericarp includes a comprehensive CLI demo application that showcases all the library's features:
+
+```bash
+# Build and run the demo
+go build -o pericarp-demo cmd/demo/main.go
+./pericarp-demo --help
+
+# Create a user
+./pericarp-demo create-user john@example.com "John Doe"
+
+# List users
+./pericarp-demo list-users
+
+# Get user by ID
+./pericarp-demo get-user by-id <user-id>
+```
+
+The demo includes:
+- Complete user management (create, update, activate/deactivate)
+- CQRS pattern implementation
+- Event sourcing with SQLite/PostgreSQL
+- Read model projections
+- Comprehensive error handling
 
 ## Contributing to Documentation
 

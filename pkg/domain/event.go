@@ -11,15 +11,16 @@
 // clean architecture principles.
 package domain
 
-//go:generate moq -out mocks/event_store_mock.go . EventStore
-//go:generate moq -out mocks/event_dispatcher_mock.go . EventDispatcher
-//go:generate moq -out mocks/event_handler_mock.go . EventHandler
-//go:generate moq -out mocks/unit_of_work_mock.go . UnitOfWork
-//go:generate moq -out mocks/event_mock.go . Event
-//go:generate moq -out mocks/envelope_mock.go . Envelope
+//go:generate moq -out mocks/event_store_mock.go -pkg mocks . EventStore
+//go:generate moq -out mocks/event_dispatcher_mock.go -pkg mocks . EventDispatcher
+//go:generate moq -out mocks/event_handler_mock.go -pkg mocks . EventHandler
+//go:generate moq -out mocks/unit_of_work_mock.go -pkg mocks . UnitOfWork
+//go:generate moq -out mocks/event_mock.go -pkg mocks . Event
+//go:generate moq -out mocks/envelope_mock.go -pkg mocks . Envelope
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -73,9 +74,9 @@ type Event interface {
 	// This is useful for multi-tenant systems to track which account the event belongs to.
 	Account() string
 
-	// Payload returns the event-specific data payload.
+	// Payload returns the event-specific data payload as a byte slice.
 	// This contains the actual business data associated with the event.
-	Payload() any
+	Payload() []byte
 
 	// SetSequenceNo sets the sequence number for this event.
 	// This is typically called by the aggregate when the event is added
@@ -295,37 +296,34 @@ type UnitOfWork interface {
 	Rollback() error
 }
 
-// EntityEvent provides a basic implementation of the Event interface that can be
-// embedded in concrete event types. It handles common event concerns like
-// entity type, event type, sequence numbers, and metadata.
+// EntityEvent provides a flexible implementation of the Event interface that can be
+// used for all domain events. It handles common event concerns like entity type,
+// event type, sequence numbers, and metadata with a JSON payload.
 //
 // The EventType() method returns a concatenation of EntityType and Type
 // in the format "entitytype.eventtype" (e.g., "user.created", "order.shipped").
 //
 // Example usage:
 //
-//	type UserCreatedEvent struct {
-//	    EntityEvent
-//	    Email string `json:"email"`
-//	    Name  string `json:"name"`
-//	}
+//	// Create a user created event
+//	user := &User{ID: "user-123", Email: "john@example.com", Name: "John Doe"}
+//	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", user)
 //
-//	func NewUserCreatedEvent(userID, email, name, userID, accountID string) UserCreatedEvent {
-//	    return UserCreatedEvent{
-//	        EntityEvent: NewEntityEvent("user", "created", userID, userID, accountID),
-//	        Email:       email,
-//	        Name:        name,
-//	    }
-//	}
+//	// Access event data through the payload
+//	var userData User
+//	json.Unmarshal(event.Payload(), &userData)
+//	email := userData.Email
+//	name := userData.Name
 type EntityEvent struct {
-	EntityType  string    `json:"entity_type"`
-	Type        string    `json:"type"`
-	AggregateId string    `json:"aggregate_id"`
-	SequenceNum int64     `json:"sequence_no"`
-	CreatedTime time.Time `json:"created_at"`
-	UserId      string    `json:"user_id"`
-	AccountId   string    `json:"account_id"`
-	Data        any       `json:"payload"`
+	EntityType  string                 `json:"entity_type"`
+	Type        string                 `json:"type"`
+	AggregateId string                 `json:"aggregate_id"`
+	SequenceNum int64                  `json:"sequence_no"`
+	CreatedTime time.Time              `json:"created_at"`
+	UserId      string                 `json:"user_id"`
+	AccountId   string                 `json:"account_id"`
+	Metadata    map[string]interface{} `json:"metadata"`
+	PayloadData []byte                 `json:"payload"`
 }
 
 // NewEntityEvent creates a new EntityEvent with the specified parameters.
@@ -337,14 +335,20 @@ type EntityEvent struct {
 //   - aggregateID: The ID of the aggregate that generated this event
 //   - userID: The ID of the user who triggered this event
 //   - accountID: The ID of the account this event belongs to
-//   - payload: The event-specific data payload
+//   - data: Any serializable data to include as the event payload
 //
 // Example:
 //
-//	payload := map[string]interface{}{"email": "user@example.com", "name": "John Doe"}
-//	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", payload)
+//	user := &User{ID: "user-123", Email: "user@example.com", Name: "John Doe"}
+//	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", user)
 //	// event.EventType() returns "user.created"
-func NewEntityEvent(entityType, eventType, aggregateID, userID, accountID string, payload any) *EntityEvent {
+func NewEntityEvent(entityType, eventType, aggregateID, userID, accountID string, data interface{}) *EntityEvent {
+	// Marshal data to JSON bytes for the payload
+	payload, err := json.Marshal(data)
+	if err != nil {
+		payload = []byte{}
+	}
+
 	return &EntityEvent{
 		EntityType:  entityType,
 		Type:        eventType,
@@ -353,7 +357,8 @@ func NewEntityEvent(entityType, eventType, aggregateID, userID, accountID string
 		CreatedTime: time.Now(),
 		UserId:      userID,
 		AccountId:   accountID,
-		Data:        payload,
+		Metadata:    make(map[string]interface{}),
+		PayloadData: payload,
 	}
 }
 
@@ -388,9 +393,9 @@ func (e EntityEvent) Account() string {
 	return e.AccountId
 }
 
-// Payload returns the event-specific data payload.
-func (e EntityEvent) Payload() any {
-	return e.Data
+// Payload returns the event-specific data payload as a byte slice.
+func (e EntityEvent) Payload() []byte {
+	return e.PayloadData
 }
 
 // SetSequenceNo sets the sequence number for this event.
@@ -398,4 +403,266 @@ func (e EntityEvent) Payload() any {
 // is considered immutable (typically when it's added to an aggregate).
 func (e *EntityEvent) SetSequenceNo(sequenceNo int64) {
 	e.SequenceNum = sequenceNo
+}
+
+// SetMetadata sets a metadata value.
+func (e *EntityEvent) SetMetadata(key string, value interface{}) {
+	if e.Metadata == nil {
+		e.Metadata = make(map[string]interface{})
+	}
+	e.Metadata[key] = value
+}
+
+// GetMetadata returns a specific metadata value.
+func (e *EntityEvent) GetMetadata(key string) interface{} {
+	return e.Metadata[key]
+}
+
+// StandardEvent provides a generic implementation of the Event interface that can be
+// created from a map of data. This is useful for creating events from external sources
+// like API payloads, database records, or other map-based data structures.
+//
+// The StandardEvent uses a map to store all event data, making it very flexible for
+// handling various event structures without requiring specific type definitions.
+//
+// Example usage:
+//
+//	data := map[string]interface{}{
+//		"event_type": "user.created",
+//		"aggregate_id": "user-123",
+//		"user_id": "admin-456",
+//		"account_id": "account-789",
+//		"email": "john@example.com",
+//		"name": "John Doe",
+//		"created_at": time.Now(),
+//	}
+//	event := NewStandardEventFromMap(data)
+//
+//	// Access data using helper methods
+//	email, _ := event.GetString("email")
+//	name, _ := event.GetString("name")
+type StandardEvent struct {
+	data map[string]interface{}
+}
+
+// NewStandardEventFromMap creates a new StandardEvent from a map of data.
+// The map should contain at minimum the required fields for an event:
+//   - event_type: The type of the event (e.g., "user.created")
+//   - aggregate_id: The ID of the aggregate that generated this event
+//   - user_id: The ID of the user who triggered this event
+//   - account_id: The ID of the account this event belongs to
+//
+// Optional fields:
+//   - sequence_no: The sequence number (defaults to 0)
+//   - created_at: The creation timestamp (defaults to time.Now())
+//   - Any other custom fields will be stored in the event data
+//
+// The function will set default values for missing required fields and will
+// marshal the entire map as the event payload.
+func NewStandardEventFromMap(data map[string]interface{}) *StandardEvent {
+	// Ensure we have a valid map
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+
+	// Set defaults for required fields if not present
+	if _, exists := data["sequence_no"]; !exists {
+		data["sequence_no"] = int64(0)
+	}
+	if _, exists := data["created_at"]; !exists {
+		data["created_at"] = time.Now()
+	}
+
+	return &StandardEvent{
+		data: data,
+	}
+}
+
+// EventType returns the event type from the data map.
+func (e StandardEvent) EventType() string {
+	if eventType, exists := e.data["event_type"]; exists {
+		if str, ok := eventType.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// AggregateID returns the aggregate ID from the data map.
+func (e StandardEvent) AggregateID() string {
+	if aggregateID, exists := e.data["aggregate_id"]; exists {
+		if str, ok := aggregateID.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// SequenceNo returns the sequence number from the data map.
+func (e StandardEvent) SequenceNo() int64 {
+	if seqNo, exists := e.data["sequence_no"]; exists {
+		switch v := seqNo.(type) {
+		case int64:
+			return v
+		case int:
+			return int64(v)
+		case float64:
+			return int64(v)
+		}
+	}
+	return 0
+}
+
+// CreatedAt returns the creation timestamp from the data map.
+func (e StandardEvent) CreatedAt() time.Time {
+	if createdAt, exists := e.data["created_at"]; exists {
+		if t, ok := createdAt.(time.Time); ok {
+			return t
+		}
+		// Handle string timestamps
+		if str, ok := createdAt.(string); ok {
+			if t, err := time.Parse(time.RFC3339, str); err == nil {
+				return t
+			}
+		}
+	}
+	return time.Now()
+}
+
+// User returns the user ID from the data map.
+func (e StandardEvent) User() string {
+	if userID, exists := e.data["user_id"]; exists {
+		if str, ok := userID.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// Account returns the account ID from the data map.
+func (e StandardEvent) Account() string {
+	if accountID, exists := e.data["account_id"]; exists {
+		if str, ok := accountID.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// Payload returns the entire data map as JSON bytes.
+func (e StandardEvent) Payload() []byte {
+	payload, err := json.Marshal(e.data)
+	if err != nil {
+		return []byte{}
+	}
+	return payload
+}
+
+// SetSequenceNo sets the sequence number in the data map.
+func (e *StandardEvent) SetSequenceNo(sequenceNo int64) {
+	e.data["sequence_no"] = sequenceNo
+}
+
+// GetString retrieves a string value from the event data.
+// Returns the value and a boolean indicating if the key exists and is a string.
+func (e StandardEvent) GetString(key string) (string, bool) {
+	if value, exists := e.data[key]; exists {
+		if str, ok := value.(string); ok {
+			return str, true
+		}
+	}
+	return "", false
+}
+
+// GetInt retrieves an integer value from the event data.
+// Returns the value and a boolean indicating if the key exists and is an integer.
+func (e StandardEvent) GetInt(key string) (int, bool) {
+	if value, exists := e.data[key]; exists {
+		switch v := value.(type) {
+		case int:
+			return v, true
+		case int64:
+			return int(v), true
+		case float64:
+			return int(v), true
+		}
+	}
+	return 0, false
+}
+
+// GetInt64 retrieves an int64 value from the event data.
+// Returns the value and a boolean indicating if the key exists and is an int64.
+func (e StandardEvent) GetInt64(key string) (int64, bool) {
+	if value, exists := e.data[key]; exists {
+		switch v := value.(type) {
+		case int64:
+			return v, true
+		case int:
+			return int64(v), true
+		case float64:
+			return int64(v), true
+		}
+	}
+	return 0, false
+}
+
+// GetFloat64 retrieves a float64 value from the event data.
+// Returns the value and a boolean indicating if the key exists and is a float64.
+func (e StandardEvent) GetFloat64(key string) (float64, bool) {
+	if value, exists := e.data[key]; exists {
+		if f, ok := value.(float64); ok {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+// GetBool retrieves a boolean value from the event data.
+// Returns the value and a boolean indicating if the key exists and is a boolean.
+func (e StandardEvent) GetBool(key string) (bool, bool) {
+	if value, exists := e.data[key]; exists {
+		if b, ok := value.(bool); ok {
+			return b, true
+		}
+	}
+	return false, false
+}
+
+// GetTime retrieves a time.Time value from the event data.
+// Returns the value and a boolean indicating if the key exists and is a time.Time.
+func (e StandardEvent) GetTime(key string) (time.Time, bool) {
+	if value, exists := e.data[key]; exists {
+		if t, ok := value.(time.Time); ok {
+			return t, true
+		}
+		// Handle string timestamps
+		if str, ok := value.(string); ok {
+			if t, err := time.Parse(time.RFC3339, str); err == nil {
+				return t, true
+			}
+		}
+	}
+	return time.Time{}, false
+}
+
+// GetInterface retrieves any value from the event data.
+// Returns the value and a boolean indicating if the key exists.
+func (e StandardEvent) GetInterface(key string) (interface{}, bool) {
+	value, exists := e.data[key]
+	return value, exists
+}
+
+// SetData sets a value in the event data map.
+func (e *StandardEvent) SetData(key string, value interface{}) {
+	e.data[key] = value
+}
+
+// GetAllData returns a copy of the entire data map.
+func (e StandardEvent) GetAllData() map[string]interface{} {
+	// Return a copy to prevent external modification
+	result := make(map[string]interface{})
+	for k, v := range e.data {
+		result[k] = v
+	}
+	return result
 }

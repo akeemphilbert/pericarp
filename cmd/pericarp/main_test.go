@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -885,4 +886,14 @@ helping you understand which input formats can be used with the generate command
 			return nil
 		},
 	}
+}
+
+// getGoVersion returns the Go version string
+func getGoVersion() string {
+	cmd := exec.Command("go", "version")
+	output, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(output))
 }

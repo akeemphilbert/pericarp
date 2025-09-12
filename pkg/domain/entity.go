@@ -5,21 +5,38 @@ import (
 	"sync"
 )
 
-// Entity provides a concrete implementation of AggregateRoot that can be embedded
+type Entity interface {
+	ID() string
+	SequenceNo() int64
+	UncommittedEvents() []Event
+	MarkEventsAsCommitted()
+	LoadFromHistory(events []Event)
+	AddEvent(event Event)
+	HasUncommittedEvents() bool
+	UncommittedEventCount() int
+	AddError(err error)
+	Errors() []error
+	IsValid() bool
+	Reset()
+	Clone() Entity
+	String() string
+}
+
+// BasicEntity provides a concrete implementation of AggregateRoot that can be embedded
 // in other aggregate types. It handles the common concerns of event sourcing:
 // identity, versioning, event management, and sequence tracking.
 //
 // Usage example:
 //
 //	type User struct {
-//	    Entity
+//	    BasicEntity
 //	    email string
 //	    name  string
 //	}
 //
 //	func NewUser(id, email, name string) *User {
 //	    user := &User{
-//	        Entity: NewEntity(id),
+//	        BasicEntity: NewEntity(id),
 //	        email:  email,
 //	        name:   name,
 //	    }
@@ -49,7 +66,7 @@ import (
 //	    u.AddEvent(event)
 //	    return nil
 //	}
-type Entity struct {
+type BasicEntity struct {
 	id         string
 	sequenceNo int64
 	events     []Event
@@ -59,8 +76,8 @@ type Entity struct {
 
 // NewEntity creates a new entity with the given ID.
 // The entity starts with sequence number 0.
-func NewEntity(id string) Entity {
-	return Entity{
+func NewEntity(id string) BasicEntity {
+	return BasicEntity{
 		id:         id,
 		sequenceNo: 0,
 		events:     []Event{},
@@ -77,7 +94,7 @@ func NewEntity(id string) Entity {
 //	// or
 //	var entity Entity
 //	entity.WithID("user-123")
-func (e *Entity) WithID(id string) *Entity {
+func (e *BasicEntity) WithID(id string) *BasicEntity {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -91,7 +108,7 @@ func (e *Entity) WithID(id string) *Entity {
 
 // ID returns the unique identifier of the entity.
 // This implements the AggregateRoot interface.
-func (e *Entity) ID() string {
+func (e *BasicEntity) ID() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.id
@@ -100,16 +117,22 @@ func (e *Entity) ID() string {
 // SequenceNo returns the current sequence number of the entity.
 // The sequence number is incremented each time an event is added and can be used
 // for ordering events within the same aggregate or for optimistic concurrency control.
-func (e *Entity) SequenceNo() int64 {
+func (e *BasicEntity) SequenceNo() int64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.sequenceNo
 }
 
+// Version returns the current version of the entity.
+// This is an alias for SequenceNo() to implement the AggregateRoot interface.
+func (e *BasicEntity) Version() int {
+	return int(e.SequenceNo())
+}
+
 // UncommittedEvents returns a copy of the events that have been generated
 // but not yet persisted to the event store.
 // This implements the AggregateRoot interface.
-func (e *Entity) UncommittedEvents() []Event {
+func (e *BasicEntity) UncommittedEvents() []Event {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -122,7 +145,7 @@ func (e *Entity) UncommittedEvents() []Event {
 // MarkEventsAsCommitted clears the uncommitted events after they have
 // been successfully persisted to the event store.
 // This implements the AggregateRoot interface.
-func (e *Entity) MarkEventsAsCommitted() {
+func (e *BasicEntity) MarkEventsAsCommitted() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -154,7 +177,7 @@ func (e *Entity) MarkEventsAsCommitted() {
 //	    // Call base implementation to update sequence number
 //	    u.Entity.LoadFromHistory(events)
 //	}
-func (e *Entity) LoadFromHistory(events []Event) {
+func (e *BasicEntity) LoadFromHistory(events []Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -194,7 +217,7 @@ func (e *Entity) LoadFromHistory(events []Event) {
 //	    u.AddEvent(event)
 //	    return nil
 //	}
-func (e *Entity) AddEvent(event Event) {
+func (e *BasicEntity) AddEvent(event Event) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -208,7 +231,7 @@ func (e *Entity) AddEvent(event Event) {
 
 // HasUncommittedEvents returns true if the entity has events that haven't been persisted.
 // This is useful for checking if the entity needs to be saved.
-func (e *Entity) HasUncommittedEvents() bool {
+func (e *BasicEntity) HasUncommittedEvents() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.events) > 0
@@ -216,7 +239,7 @@ func (e *Entity) HasUncommittedEvents() bool {
 
 // UncommittedEventCount returns the number of uncommitted events.
 // This is useful for monitoring and debugging purposes.
-func (e *Entity) UncommittedEventCount() int {
+func (e *BasicEntity) UncommittedEventCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.events)
@@ -235,7 +258,7 @@ func (e *Entity) UncommittedEventCount() int {
 //	    }
 //	    // ... rest of the logic
 //	}
-func (e *Entity) AddError(err error) {
+func (e *BasicEntity) AddError(err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.errors = append(e.errors, err)
@@ -243,7 +266,7 @@ func (e *Entity) AddError(err error) {
 
 // Errors returns a copy of all errors collected by the entity.
 // This prevents external modification of the internal errors slice.
-func (e *Entity) Errors() []error {
+func (e *BasicEntity) Errors() []error {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -253,7 +276,7 @@ func (e *Entity) Errors() []error {
 }
 
 // IsValid returns true if the entity has no errors.
-func (e *Entity) IsValid() bool {
+func (e *BasicEntity) IsValid() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.errors) == 0
@@ -264,7 +287,7 @@ func (e *Entity) IsValid() bool {
 //
 // Warning: This method clears all state including uncommitted events and errors.
 // Use with caution in production code.
-func (e *Entity) Reset() {
+func (e *BasicEntity) Reset() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -278,7 +301,7 @@ func (e *Entity) Reset() {
 //
 // Note: This only clones the Entity struct itself. Concrete aggregates
 // that embed Entity should implement their own Clone method if needed.
-func (e *Entity) Clone() Entity {
+func (e *BasicEntity) Clone() Entity {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -288,7 +311,7 @@ func (e *Entity) Clone() Entity {
 	errors := make([]error, len(e.errors))
 	copy(errors, e.errors)
 
-	return Entity{
+	return &BasicEntity{
 		id:         e.id,
 		sequenceNo: e.sequenceNo,
 		events:     events,
@@ -297,7 +320,7 @@ func (e *Entity) Clone() Entity {
 }
 
 // String returns a string representation of the entity for debugging.
-func (e *Entity) String() string {
+func (e *BasicEntity) String() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 

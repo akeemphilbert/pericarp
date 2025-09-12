@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	internalapp "github.com/akeemphilbert/pericarp/internal/application"
-	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	"github.com/akeemphilbert/pericarp/examples"
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	"github.com/google/uuid"
 	"github.com/segmentio/ksuid"
 )
 
@@ -27,50 +27,74 @@ func NewInMemoryEventStore() *InMemoryEventStore {
 
 // Save persists events and returns envelopes with metadata
 func (s *InMemoryEventStore) Save(ctx context.Context, events []pkgdomain.Event) ([]pkgdomain.Envelope, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var envelopes []pkgdomain.Envelope
-
-	for _, event := range events {
+	envelopes := make([]pkgdomain.Envelope, len(events))
+	for i, event := range events {
 		envelope := &TestEnvelope{
 			event:     event,
 			eventID:   ksuid.New().String(),
 			timestamp: time.Now(),
-			metadata: map[string]interface{}{
-				"aggregate_id": event.AggregateID(),
-				"event_type":   event.EventType(),
-				"version":      event.Version(),
-			},
+			metadata:  make(map[string]interface{}),
 		}
-
-		s.events[event.AggregateID()] = append(s.events[event.AggregateID()], envelope)
-		envelopes = append(envelopes, envelope)
+		envelopes[i] = envelope
 	}
+
+	// Group events by aggregate ID
+	aggregateID := events[0].AggregateID()
+	s.events[aggregateID] = append(s.events[aggregateID], envelopes...)
 
 	return envelopes, nil
 }
 
-// Load retrieves all events for an aggregate
-func (s *InMemoryEventStore) Load(ctx context.Context, aggregateID string) ([]pkgdomain.Envelope, error) {
-	return s.LoadFromVersion(ctx, aggregateID, 0)
+// Save persists a single event
+func (s *InMemoryEventStore) Save(ctx context.Context, event pkgdomain.Event) error {
+	envelopes, err := s.Save(ctx, []pkgdomain.Event{event})
+	if err != nil {
+		return err
+	}
+	_ = envelopes // Ignore return value for single event
+	return nil
 }
 
-// LoadFromVersion retrieves events for an aggregate starting from a specific version
-func (s *InMemoryEventStore) LoadFromVersion(ctx context.Context, aggregateID string, version int) ([]pkgdomain.Envelope, error) {
+// GetEvents retrieves events for an aggregate
+func (s *InMemoryEventStore) GetEvents(ctx context.Context, aggregateID string, fromVersion int64) ([]pkgdomain.Event, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	allEvents := s.events[aggregateID]
-	var filteredEvents []pkgdomain.Envelope
+	envelopes, exists := s.events[aggregateID]
+	if !exists {
+		return []pkgdomain.Event{}, nil
+	}
 
-	for _, envelope := range allEvents {
-		if envelope.Event().Version() > version {
-			filteredEvents = append(filteredEvents, envelope)
+	events := make([]pkgdomain.Event, 0, len(envelopes))
+	for _, envelope := range envelopes {
+		events = append(events, envelope.Event())
+	}
+
+	return events, nil
+}
+
+// GetEventsByType retrieves events by type
+func (s *InMemoryEventStore) GetEventsByType(ctx context.Context, eventType string) ([]pkgdomain.Event, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var events []pkgdomain.Event
+	for _, envelopes := range s.events {
+		for _, envelope := range envelopes {
+			if envelope.Event().Type() == eventType {
+				events = append(events, envelope.Event())
+			}
 		}
 	}
 
-	return filteredEvents, nil
+	return events, nil
 }
 
 // Clear removes all events (useful for test cleanup)
@@ -80,7 +104,19 @@ func (s *InMemoryEventStore) Clear() {
 	s.events = make(map[string][]pkgdomain.Envelope)
 }
 
-// TestEnvelope implements pkgdomain.Envelope for testing
+// GetEventCount returns the total number of events stored
+func (s *InMemoryEventStore) GetEventCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	count := 0
+	for _, envelopes := range s.events {
+		count += len(envelopes)
+	}
+	return count
+}
+
+// TestEnvelope is a test implementation of the Envelope interface
 type TestEnvelope struct {
 	event     pkgdomain.Event
 	eventID   string
@@ -106,9 +142,8 @@ func (e *TestEnvelope) Metadata() map[string]interface{} {
 
 // InMemoryEventDispatcher provides an in-memory implementation of EventDispatcher for testing
 type InMemoryEventDispatcher struct {
-	handlers         map[string][]pkgdomain.EventHandler
-	dispatchedEvents []pkgdomain.Envelope
-	mu               sync.RWMutex
+	handlers map[string][]pkgdomain.EventHandler
+	mu       sync.RWMutex
 }
 
 // NewInMemoryEventDispatcher creates a new in-memory event dispatcher
@@ -118,206 +153,79 @@ func NewInMemoryEventDispatcher() *InMemoryEventDispatcher {
 	}
 }
 
-// Dispatch sends envelopes to registered event handlers
-func (d *InMemoryEventDispatcher) Dispatch(ctx context.Context, envelopes []pkgdomain.Envelope) error {
+// RegisterHandler registers an event handler
+func (d *InMemoryEventDispatcher) RegisterHandler(aggregateType, eventType string, handler pkgdomain.EventHandler) error {
 	d.mu.Lock()
-	d.dispatchedEvents = append(d.dispatchedEvents, envelopes...)
-	d.mu.Unlock()
+	defer d.mu.Unlock()
 
+	key := fmt.Sprintf("%s:%s", aggregateType, eventType)
+	d.handlers[key] = append(d.handlers[key], handler)
+	return nil
+}
+
+// Dispatch dispatches an event to registered handlers
+func (d *InMemoryEventDispatcher) Dispatch(ctx context.Context, event pkgdomain.Event) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	for _, envelope := range envelopes {
-		eventType := envelope.Event().EventType()
-		handlers := d.handlers[eventType]
+	key := fmt.Sprintf("%s:%s", event.AggregateType(), event.Type())
+	handlers, exists := d.handlers[key]
+	if !exists {
+		return nil // No handlers registered
+	}
 
-		for _, handler := range handlers {
-			if err := handler.Handle(ctx, envelope); err != nil {
-				return fmt.Errorf("handler failed for event %s: %w", eventType, err)
-			}
+	for _, handler := range handlers {
+		if err := handler(ctx, event); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-// Subscribe registers an event handler for specific event types
-func (d *InMemoryEventDispatcher) Subscribe(eventType string, handler pkgdomain.EventHandler) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.handlers[eventType] = append(d.handlers[eventType], handler)
-	return nil
-}
-
-// GetDispatchedEvents returns all dispatched events (useful for testing)
-func (d *InMemoryEventDispatcher) GetDispatchedEvents() []pkgdomain.Envelope {
+// GetHandlerCount returns the number of registered handlers
+func (d *InMemoryEventDispatcher) GetHandlerCount() int {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	events := make([]pkgdomain.Envelope, len(d.dispatchedEvents))
-	copy(events, d.dispatchedEvents)
-	return events
+	count := 0
+	for _, handlers := range d.handlers {
+		count += len(handlers)
+	}
+	return count
 }
 
-// Clear removes all dispatched events and handlers (useful for test cleanup)
+// Clear removes all handlers (useful for test cleanup)
 func (d *InMemoryEventDispatcher) Clear() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.handlers = make(map[string][]pkgdomain.EventHandler)
-	d.dispatchedEvents = nil
-}
-
-// InMemoryUnitOfWork provides an in-memory implementation of UnitOfWork for testing
-type InMemoryUnitOfWork struct {
-	eventStore       pkgdomain.EventStore
-	eventDispatcher  pkgdomain.EventDispatcher
-	registeredEvents []pkgdomain.Event
-	mu               sync.Mutex
-}
-
-// NewInMemoryUnitOfWork creates a new in-memory unit of work
-func NewInMemoryUnitOfWork(eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher) *InMemoryUnitOfWork {
-	return &InMemoryUnitOfWork{
-		eventStore:      eventStore,
-		eventDispatcher: eventDispatcher,
-	}
-}
-
-// RegisterEvents adds events to be persisted in the current transaction
-func (u *InMemoryUnitOfWork) RegisterEvents(events []pkgdomain.Event) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.registeredEvents = append(u.registeredEvents, events...)
-}
-
-// Commit persists all registered events and returns envelopes
-func (u *InMemoryUnitOfWork) Commit(ctx context.Context) ([]pkgdomain.Envelope, error) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	if len(u.registeredEvents) == 0 {
-		return []pkgdomain.Envelope{}, nil
-	}
-
-	// Save events
-	envelopes, err := u.eventStore.Save(ctx, u.registeredEvents)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save events: %w", err)
-	}
-
-	// Dispatch events
-	if err := u.eventDispatcher.Dispatch(ctx, envelopes); err != nil {
-		return nil, fmt.Errorf("failed to dispatch events: %w", err)
-	}
-
-	// Clear registered events
-	u.registeredEvents = nil
-
-	return envelopes, nil
-}
-
-// Rollback discards all registered events
-func (u *InMemoryUnitOfWork) Rollback() error {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.registeredEvents = nil
-	return nil
 }
 
 // InMemoryUserRepository provides an in-memory implementation of UserRepository for testing
 type InMemoryUserRepository struct {
-	users map[string]*internaldomain.User
+	users map[string]*examples.User
 	mu    sync.RWMutex
 }
 
 // NewInMemoryUserRepository creates a new in-memory user repository
 func NewInMemoryUserRepository() *InMemoryUserRepository {
 	return &InMemoryUserRepository{
-		users: make(map[string]*internaldomain.User),
+		users: make(map[string]*examples.User),
 	}
 }
 
-// Save persists a user
-func (r *InMemoryUserRepository) Save(user *internaldomain.User) error {
+// Save saves a user
+func (r *InMemoryUserRepository) Save(user *examples.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Create a copy to avoid shared state issues
-	userCopy := *user
-	r.users[user.ID()] = &userCopy
+	r.users[user.ID()] = user
 	return nil
 }
 
-// FindByID retrieves a user by ID
-func (r *InMemoryUserRepository) FindByID(id ksuid.KSUID) (*internaldomain.User, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	aggregateID := id.String() // ✅ Correct conversion
-	user, exists := r.users[aggregateID]
-	if !exists {
-		return nil, fmt.Errorf("user not found: %s", aggregateID)
-	}
-
-	// Return a copy to avoid shared state issues
-	userCopy := *user
-	return &userCopy, nil
-}
-
-// FindByEmail retrieves a user by email
-func (r *InMemoryUserRepository) FindByEmail(email string) (*internaldomain.User, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, user := range r.users {
-		if user.Email() == email {
-			// Return a copy to avoid shared state issues
-			userCopy := *user
-			return &userCopy, nil
-		}
-	}
-
-	return nil, fmt.Errorf("user not found with email: %s", email)
-}
-
-// Delete removes a user
-func (r *InMemoryUserRepository) Delete(id ksuid.KSUID) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	aggregateID := id.String() // ✅ Correct conversion
-	delete(r.users, aggregateID)
-	return nil
-}
-
-// LoadFromVersion loads a user from a specific version (not implemented for in-memory)
-func (r *InMemoryUserRepository) LoadFromVersion(id ksuid.KSUID, version int) (*internaldomain.User, error) {
-	return r.FindByID(id)
-}
-
-// Clear removes all users (useful for test cleanup)
-func (r *InMemoryUserRepository) Clear() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.users = make(map[ksuid.KSUID]*internaldomain.User)
-}
-
-// InMemoryUserReadModelRepository provides an in-memory implementation of UserReadModelRepository for testing
-type InMemoryUserReadModelRepository struct {
-	users map[ksuid.KSUID]*internalapp.UserReadModel
-	mu    sync.RWMutex
-}
-
-// NewInMemoryUserReadModelRepository creates a new in-memory user read model repository
-func NewInMemoryUserReadModelRepository() *InMemoryUserReadModelRepository {
-	return &InMemoryUserReadModelRepository{
-		users: make(map[ksuid.KSUID]*internalapp.UserReadModel),
-	}
-}
-
-// GetByID retrieves a user read model by ID
-func (r *InMemoryUserReadModelRepository) GetByID(ctx context.Context, id ksuid.KSUID) (*internalapp.UserReadModel, error) {
+// FindByID finds a user by ID
+func (r *InMemoryUserRepository) FindByID(id string) (*examples.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -326,69 +234,25 @@ func (r *InMemoryUserReadModelRepository) GetByID(ctx context.Context, id ksuid.
 		return nil, fmt.Errorf("user not found: %s", id)
 	}
 
-	// Return a copy to avoid shared state issues
-	userCopy := *user
-	return &userCopy, nil
+	return user, nil
 }
 
-// GetByEmail retrieves a user read model by email
-func (r *InMemoryUserReadModelRepository) GetByEmail(ctx context.Context, email string) (*internalapp.UserReadModel, error) {
+// FindByEmail finds a user by email
+func (r *InMemoryUserRepository) FindByEmail(email string) (*examples.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for _, user := range r.users {
-		if user.Email == email {
-			// Return a copy to avoid shared state issues
-			userCopy := *user
-			return &userCopy, nil
+		if user.Email() == email {
+			return user, nil
 		}
 	}
 
 	return nil, fmt.Errorf("user not found with email: %s", email)
 }
 
-// List retrieves a paginated list of user read models with optional active filter
-func (r *InMemoryUserReadModelRepository) List(ctx context.Context, page, pageSize int, active *bool) ([]internalapp.UserReadModel, int, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var filteredUsers []internalapp.UserReadModel
-	for _, user := range r.users {
-		if active == nil || user.IsActive == *active {
-			filteredUsers = append(filteredUsers, *user)
-		}
-	}
-
-	totalCount := len(filteredUsers)
-
-	// Apply pagination
-	start := (page - 1) * pageSize
-	end := start + pageSize
-
-	if start >= totalCount {
-		return []internalapp.UserReadModel{}, totalCount, nil
-	}
-
-	if end > totalCount {
-		end = totalCount
-	}
-
-	return filteredUsers[start:end], totalCount, nil
-}
-
-// Save saves or updates a user read model
-func (r *InMemoryUserReadModelRepository) Save(ctx context.Context, user *internalapp.UserReadModel) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Create a copy to avoid shared state issues
-	userCopy := *user
-	r.users[user.ID] = &userCopy
-	return nil
-}
-
-// Delete removes a user read model
-func (r *InMemoryUserReadModelRepository) Delete(ctx context.Context, id ksuid.KSUID) error {
+// Delete deletes a user
+func (r *InMemoryUserRepository) Delete(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -396,24 +260,141 @@ func (r *InMemoryUserReadModelRepository) Delete(ctx context.Context, id ksuid.K
 	return nil
 }
 
-// Count returns the total number of users with optional active filter
-func (r *InMemoryUserReadModelRepository) Count(ctx context.Context, active *bool) (int, error) {
+// LoadFromSequence loads a user from a specific sequence number
+func (r *InMemoryUserRepository) LoadFromSequence(id string, sequenceNo int64) (*examples.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	count := 0
-	for _, user := range r.users {
-		if active == nil || user.IsActive == *active {
-			count++
-		}
+	user, exists := r.users[id]
+	if !exists {
+		return nil, fmt.Errorf("user not found: %s", id)
 	}
 
-	return count, nil
+	// For testing purposes, we'll just return the user as-is
+	// In a real implementation, you'd reconstruct from events up to sequenceNo
+	return user, nil
 }
 
 // Clear removes all users (useful for test cleanup)
-func (r *InMemoryUserReadModelRepository) Clear() {
+func (r *InMemoryUserRepository) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.users = make(map[ksuid.KSUID]*internalapp.UserReadModel)
+	r.users = make(map[string]*examples.User)
+}
+
+// GetUserCount returns the number of users stored
+func (r *InMemoryUserRepository) GetUserCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.users)
+}
+
+// TestLogger provides a test implementation of Logger
+type TestLogger struct {
+	Logs []LogEntry
+	mu   sync.RWMutex
+}
+
+// LogEntry represents a log entry
+type LogEntry struct {
+	Level   string
+	Message string
+	Fields  map[string]interface{}
+	Time    time.Time
+}
+
+// NewTestLogger creates a new test logger
+func NewTestLogger() *TestLogger {
+	return &TestLogger{
+		Logs: make([]LogEntry, 0),
+	}
+}
+
+// Debug logs a debug message
+func (l *TestLogger) Debug(message string, fields ...interface{}) {
+	l.log("DEBUG", message, fields...)
+}
+
+// Info logs an info message
+func (l *TestLogger) Info(message string, fields ...interface{}) {
+	l.log("INFO", message, fields...)
+}
+
+// Warn logs a warning message
+func (l *TestLogger) Warn(message string, fields ...interface{}) {
+	l.log("WARN", message, fields...)
+}
+
+// Error logs an error message
+func (l *TestLogger) Error(message string, fields ...interface{}) {
+	l.log("ERROR", message, fields...)
+}
+
+// Fatal logs a fatal message
+func (l *TestLogger) Fatal(message string, fields ...interface{}) {
+	l.log("FATAL", message, fields...)
+}
+
+func (l *TestLogger) log(level, message string, fields ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	entry := LogEntry{
+		Level:   level,
+		Message: message,
+		Fields:  make(map[string]interface{}),
+		Time:    time.Now(),
+	}
+
+	// Convert fields to map
+	for i := 0; i < len(fields); i += 2 {
+		if i+1 < len(fields) {
+			if key, ok := fields[i].(string); ok {
+				entry.Fields[key] = fields[i+1]
+			}
+		}
+	}
+
+	l.Logs = append(l.Logs, entry)
+}
+
+// GetLogs returns all log entries
+func (l *TestLogger) GetLogs() []LogEntry {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return append([]LogEntry{}, l.Logs...)
+}
+
+// GetLogsByLevel returns log entries by level
+func (l *TestLogger) GetLogsByLevel(level string) []LogEntry {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	var filtered []LogEntry
+	for _, entry := range l.Logs {
+		if entry.Level == level {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+// Clear removes all log entries
+func (l *TestLogger) Clear() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.Logs = make([]LogEntry, 0)
+}
+
+// HasLogEntry checks if a log entry exists
+func (l *TestLogger) HasLogEntry(level, message string) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	for _, entry := range l.Logs {
+		if entry.Level == level && entry.Message == message {
+			return true
+		}
+	}
+	return false
 }

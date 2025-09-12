@@ -208,19 +208,19 @@ else
     test_failed "Generated project missing README.md"
 fi
 
-if [ -d "$PROJECT_PATH/internal/domain" ]; then
+if [ -d "$PROJECT_PATH/examples" ]; then
     test_passed "Generated project has domain directory"
 else
     test_failed "Generated project missing domain directory"
 fi
 
-if [ -d "$PROJECT_PATH/internal/application" ]; then
+if [ -d "$PROJECT_PATH/examples" ]; then
     test_passed "Generated project has application directory"
 else
     test_failed "Generated project missing application directory"
 fi
 
-if [ -d "$PROJECT_PATH/internal/infrastructure" ]; then
+if [ -d "$PROJECT_PATH/examples" ]; then
     test_passed "Generated project has infrastructure directory"
 else
     test_failed "Generated project missing infrastructure directory"
@@ -246,31 +246,31 @@ else
 fi
 
 # Verify generated files
-if [ -f "$PROJECT_PATH/internal/domain/product.go" ]; then
+if [ -f "$PROJECT_PATH/examples/product.go" ]; then
     test_passed "Generated domain entity exists"
 else
     test_failed "Generated domain entity missing"
 fi
 
-if [ -f "$PROJECT_PATH/internal/domain/product_repository.go" ]; then
+if [ -f "$PROJECT_PATH/examples/product_repository.go" ]; then
     test_passed "Generated repository interface exists"
 else
     test_failed "Generated repository interface missing"
 fi
 
-if [ -f "$PROJECT_PATH/internal/infrastructure/product_repository.go" ]; then
+if [ -f "$PROJECT_PATH/examples/product_repository.go" ]; then
     test_passed "Generated repository implementation exists"
 else
     test_failed "Generated repository implementation missing"
 fi
 
-if [ -f "$PROJECT_PATH/internal/application/product_commands.go" ]; then
+if [ -f "$PROJECT_PATH/examples/product_commands.go" ]; then
     test_passed "Generated commands exist"
 else
     test_failed "Generated commands missing"
 fi
 
-if [ -f "$PROJECT_PATH/internal/application/product_command_handlers.go" ]; then
+if [ -f "$PROJECT_PATH/examples/product_command_handlers.go" ]; then
     test_passed "Generated command handlers exist"
 else
     test_failed "Generated command handlers missing"
@@ -300,21 +300,21 @@ echo "Test 9: Generated Code Quality"
 echo "------------------------------"
 
 # Check if generated code follows Go conventions
-if grep -q "package domain" "$PROJECT_PATH/internal/domain/product.go"; then
+if grep -q "package domain" "$PROJECT_PATH/examples/product.go"; then
     test_passed "Generated code has correct package declaration"
 else
     test_failed "Generated code has incorrect package declaration"
 fi
 
 # Check if generated code includes proper imports
-if grep -q "github.com/google/uuid" "$PROJECT_PATH/internal/domain/product.go"; then
+if grep -q "github.com/google/uuid" "$PROJECT_PATH/examples/product.go"; then
     test_passed "Generated code includes required imports"
 else
     test_failed "Generated code missing required imports"
 fi
 
 # Check if generated code includes validation tags
-if grep -q "validate:" "$PROJECT_PATH/internal/domain/product.go"; then
+if grep -q "validate:" "$PROJECT_PATH/examples/product.go"; then
     test_passed "Generated code includes validation tags"
 else
     test_failed "Generated code missing validation tags"

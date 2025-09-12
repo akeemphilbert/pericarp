@@ -31,12 +31,17 @@ Build a complete user management system with commands, queries, and events.
 
 **What you'll build:** A user management API with create, update, and query operations.
 
-### 3. [Adding Event Sourcing](event-sourcing.md) ⏱️ 30 minutes
+### 3. [Demo Application Guide](demo-application.md) ⏱️ 20 minutes
+Explore the comprehensive CLI demo application that showcases all Pericarp features.
+
+**What you'll learn:** How to use the demo application and understand its architecture.
+
+### 4. [Adding Event Sourcing](event-sourcing.md) ⏱️ 30 minutes
 Implement event sourcing to persist and replay domain events.
 
 **What you'll build:** Event-sourced user aggregate with event store persistence.
 
-### 4. [Testing Your Application](testing.md) ⏱️ 30 minutes
+### 5. [Testing Your Application](testing.md) ⏱️ 30 minutes
 Write comprehensive tests including unit tests, integration tests, and BDD scenarios.
 
 **What you'll build:** Complete test suite with high coverage and realistic scenarios.

@@ -1,20 +1,21 @@
 package examples
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
-	"github.com/segmentio/ksuid"
+	"github.com/google/uuid"
 )
 
-// OrderExample demonstrates the updated aggregate pattern using Entity and StandardEvent
+// OrderExample demonstrates the updated aggregate pattern using Entity and EntityEvent
 type OrderExample struct {
-	domain.Entity // Embed the standard Entity struct
-	customerID    string
-	items         []OrderItemExample
-	status        OrderStatusExample
-	totalAmount   MoneyExample
+	domain.BasicEntity // Embed the standard Entity struct
+	customerID         string
+	items              []OrderItemExample
+	status             OrderStatusExample
+	totalAmount        MoneyExample
 }
 
 type OrderItemExample struct {
@@ -36,7 +37,7 @@ type MoneyExample struct {
 	Currency string `json:"currency"`
 }
 
-// NewOrderExample creates a new order using the standard Entity and StandardEvent
+// NewOrderExample creates a new order using the standard Entity and EntityEvent
 func NewOrderExample(customerID string, items []OrderItemExample) (*OrderExample, error) {
 	if customerID == "" {
 		return nil, errors.New("customer ID is required")
@@ -58,26 +59,33 @@ func NewOrderExample(customerID string, items []OrderItemExample) (*OrderExample
 		totalAmount += item.Price.Amount * int64(item.Quantity)
 	}
 
-	orderID := ksuid.New().String()
+	orderID := uuid.New().String()
 	order := &OrderExample{
-		Entity:     domain.NewEntity(orderID), // Use standard Entity
-		customerID: customerID,
-		items:      items,
-		status:     OrderStatusPending,
+		BasicEntity: domain.NewEntity(orderID), // Use standard Entity
+		customerID:  customerID,
+		items:       items,
+		status:      OrderStatusPending,
 		totalAmount: MoneyExample{
 			Amount:   totalAmount,
 			Currency: items[0].Price.Currency, // Assume same currency
 		},
 	}
 
-	// Generate domain event using StandardEvent
-	event := domain.NewEvent(orderID, "Order", "Created", map[string]interface{}{
-		"customer_id":  customerID,
-		"items":        items,
-		"total_amount": order.totalAmount,
-		"status":       string(OrderStatusPending),
-		"created_at":   time.Now(),
-	})
+	// Generate domain event using EntityEvent
+	eventData := struct {
+		CustomerID  string             `json:"customer_id"`
+		Items       []OrderItemExample `json:"items"`
+		TotalAmount MoneyExample       `json:"total_amount"`
+		Status      string             `json:"status"`
+		CreatedAt   time.Time          `json:"created_at"`
+	}{
+		CustomerID:  customerID,
+		Items:       items,
+		TotalAmount: order.totalAmount,
+		Status:      string(OrderStatusPending),
+		CreatedAt:   time.Now(),
+	}
+	event := domain.NewEntityEvent("order", "created", orderID, "", "", eventData)
 
 	order.AddEvent(event) // Use Entity's AddEvent method
 	return order, nil
@@ -91,11 +99,15 @@ func (o *OrderExample) ConfirmOrder() error {
 
 	o.status = OrderStatusConfirmed
 
-	// Generate StandardEvent
-	event := domain.NewEvent(o.ID(), "Order", "Confirmed", map[string]interface{}{
-		"confirmed_at": time.Now(),
-		"status":       string(OrderStatusConfirmed),
-	})
+	// Generate EntityEvent
+	eventData := struct {
+		ConfirmedAt time.Time `json:"confirmed_at"`
+		Status      string    `json:"status"`
+	}{
+		ConfirmedAt: time.Now(),
+		Status:      string(OrderStatusConfirmed),
+	}
+	event := domain.NewEntityEvent("order", "confirmed", o.ID(), "", "", eventData)
 
 	o.AddEvent(event) // Use Entity's AddEvent method
 	return nil
@@ -110,12 +122,18 @@ func (o *OrderExample) CancelOrder(reason string) error {
 	oldStatus := o.status
 	o.status = OrderStatusCancelled
 
-	event := domain.NewEvent(o.ID(), "Order", "Cancelled", map[string]interface{}{
-		"reason":       reason,
-		"old_status":   string(oldStatus),
-		"new_status":   string(OrderStatusCancelled),
-		"cancelled_at": time.Now(),
-	})
+	eventData := struct {
+		Reason      string    `json:"reason"`
+		OldStatus   string    `json:"old_status"`
+		NewStatus   string    `json:"new_status"`
+		CancelledAt time.Time `json:"cancelled_at"`
+	}{
+		Reason:      reason,
+		OldStatus:   string(oldStatus),
+		NewStatus:   string(OrderStatusCancelled),
+		CancelledAt: time.Now(),
+	}
+	event := domain.NewEntityEvent("order", "cancelled", o.ID(), "", "", eventData)
 
 	o.AddEvent(event)
 	return nil
@@ -141,35 +159,43 @@ func (o *OrderExample) LoadFromHistory(events []domain.Event) {
 	for _, event := range events {
 		o.applyEvent(event)
 	}
-	// Call the Entity's LoadFromHistory to handle version and sequence
-	o.Entity.LoadFromHistory(events)
+	// Call the Entity's LoadFromHistory to handle sequence number
+	o.BasicEntity.LoadFromHistory(events)
 }
 
 // applyEvent applies a single event to the aggregate
 func (o *OrderExample) applyEvent(event domain.Event) {
-	// Cast to StandardEvent to access data
-	standardEvent, ok := event.(*domain.StandardEvent)
+	// Cast to EntityEvent to access data
+	entityEvent, ok := event.(*domain.EntityEvent)
 	if !ok {
-		return // Skip non-standard events
+		return // Skip non-entity events
 	}
 
-	// Check if this is an Order event
-	if standardEvent.EntityType() != "Order" {
+	// Check if this is an order event
+	if entityEvent.EntityType != "order" {
 		return
 	}
 
-	data := standardEvent.Data()
+	// Parse the payload to access event data
+	var data map[string]interface{}
+	if err := json.Unmarshal(entityEvent.Payload(), &data); err != nil {
+		return
+	}
 
-	switch standardEvent.ActionType() {
-	case "Created":
-		o.customerID = data["customer_id"].(string)
-		o.status = OrderStatusExample(data["status"].(string))
+	switch entityEvent.Type {
+	case "created":
+		if customerID, ok := data["customer_id"].(string); ok {
+			o.customerID = customerID
+		}
+		if status, ok := data["status"].(string); ok {
+			o.status = OrderStatusExample(status)
+		}
 		// Note: In a real implementation, you'd properly deserialize items and totalAmount
 
-	case "Confirmed":
+	case "confirmed":
 		o.status = OrderStatusConfirmed
 
-	case "Cancelled":
+	case "cancelled":
 		o.status = OrderStatusCancelled
 	}
 }

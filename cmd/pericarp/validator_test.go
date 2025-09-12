@@ -404,6 +404,5 @@ func TestNewValidator(t *testing.T) {
 	assert.NotNil(t, validator)
 
 	// Test that it implements the Validator interface
-	_, ok := validator.(Validator)
-	assert.True(t, ok, "NewValidator should return a Validator interface")
+	// validator is already of type Validator, so no type assertion needed
 }

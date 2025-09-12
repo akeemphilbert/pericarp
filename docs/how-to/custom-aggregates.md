@@ -22,17 +22,17 @@ package domain
 import (
     "errors"
     "time"
-    "github.com/google/uuid"
-    "github.com/example/pericarp/pkg/domain"
+    "github.com/segmentio/ksuid"
+    "github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
 // Order represents an e-commerce order aggregate
 type Order struct {
-    domain.Entity  // Embed the standard Entity struct
-    customerID     string
-    items          []OrderItem
-    status         OrderStatus
-    totalAmount    Money
+    *domain.Entity  // Embed the standard Entity struct
+    customerID      string
+    items           []OrderItem
+    status          OrderStatus
+    totalAmount     Money
 }
 
 type OrderItem struct {
@@ -82,28 +82,21 @@ func NewOrder(customerID string, items []OrderItem) (*Order, error) {
         totalAmount += item.Price.Amount * int64(item.Quantity)
     }
     
-    orderID := uuid.New().String()
+    orderID := ksuid.New().String()
     order := &Order{
-        Entity:     domain.NewEntity(orderID), // Use standard Entity
-        customerID: customerID,
-        items:      items,
-        status:     OrderStatusPending,
+        Entity:      new(domain.Entity).WithID(orderID), // Use standard Entity
+        customerID:  customerID,
+        items:       items,
+        status:      OrderStatusPending,
         totalAmount: Money{
             Amount:   totalAmount,
             Currency: items[0].Price.Currency, // Assume same currency
         },
     }
     
-    // Generate domain event using StandardEvent
-    event := domain.NewEvent(orderID, "Order", "Created", map[string]interface{}{
-        "customer_id":  customerID,
-        "items":        items,
-        "total_amount": order.totalAmount,
-        "status":       string(OrderStatusPending),
-        "created_at":   time.Now(),
-    })
+    // Generate domain event using EntityEvent
+    order.AddEvent(domain.NewEntityEvent("Order", "created", orderID, "", "", order))
     
-    order.AddEvent(event) // Use Entity's AddEvent method
     return order, nil
 }
 ```
@@ -119,13 +112,11 @@ func (o *Order) ConfirmOrder() error {
     
     o.status = OrderStatusConfirmed
     
-    // Generate StandardEvent
-    event := domain.NewEvent(o.ID(), "Order", "Confirmed", map[string]interface{}{
+    // Generate EntityEvent
+    o.AddEvent(domain.NewEntityEvent("Order", "confirmed", o.ID(), "", "", map[string]interface{}{
         "confirmed_at": time.Now(),
         "status":       string(OrderStatusConfirmed),
-    })
-    
-    o.AddEvent(event) // Use Entity's AddEvent method
+    }))
     return nil
 }
 
@@ -146,14 +137,12 @@ func (o *Order) AddItem(item OrderItem) error {
             o.items[i].Quantity += item.Quantity
             o.recalculateTotal()
             
-            event := domain.NewEvent(o.ID(), "Order", "ItemUpdated", map[string]interface{}{
+            o.AddEvent(domain.NewEntityEvent("Order", "item_updated", o.ID(), "", "", map[string]interface{}{
                 "product_id":    item.ProductID,
                 "old_quantity":  oldQuantity,
                 "new_quantity":  o.items[i].Quantity,
                 "updated_at":    time.Now(),
-            })
-            
-            o.AddEvent(event)
+            }))
             return nil
         }
     }
@@ -162,14 +151,12 @@ func (o *Order) AddItem(item OrderItem) error {
     o.items = append(o.items, item)
     o.recalculateTotal()
     
-    event := domain.NewEvent(o.ID(), "Order", "ItemAdded", map[string]interface{}{
+    o.AddEvent(domain.NewEntityEvent("Order", "item_added", o.ID(), "", "", map[string]interface{}{
         "product_id": item.ProductID,
         "quantity":   item.Quantity,
         "price":      item.Price,
         "added_at":   time.Now(),
-    })
-    
-    o.AddEvent(event)
+    }))
     return nil
 }
 
@@ -186,14 +173,12 @@ func (o *Order) CancelOrder(reason string) error {
     oldStatus := o.status
     o.status = OrderStatusCancelled
     
-    event := domain.NewEvent(o.ID(), "Order", "Cancelled", map[string]interface{}{
+    o.AddEvent(domain.NewEntityEvent("Order", "cancelled", o.ID(), "", "", map[string]interface{}{
         "reason":       reason,
         "old_status":   string(oldStatus),
         "new_status":   string(OrderStatusCancelled),
         "cancelled_at": time.Now(),
-    })
-    
-    o.AddEvent(event)
+    }))
     return nil
 }
 
@@ -322,7 +307,7 @@ func (o *Order) ItemCount() int {
     return count
 }
 
-// Note: ID(), Version(), UncommittedEvents(), MarkEventsAsCommitted() 
+// Note: ID(), SequenceNo(), UncommittedEvents(), MarkEventsAsCommitted() 
 // are inherited from the embedded Entity struct
 ```
 
@@ -487,8 +472,8 @@ func TestOrder_LoadFromHistory(t *testing.T) {
         t.Errorf("Expected status confirmed, got %v", order.Status())
     }
     
-    if order.Version() != 2 {
-        t.Errorf("Expected version 2, got %d", order.Version())
+    if order.SequenceNo() != 2 {
+        t.Errorf("Expected sequence number 2, got %d", order.SequenceNo())
     }
     
     // Should have no uncommitted events after loading from history

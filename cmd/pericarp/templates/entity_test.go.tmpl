@@ -53,7 +53,7 @@ func TestNew{{$entityName}}(t *testing.T) {
 			{{end}}
 
 			// Verify aggregate root properties
-			assert.Equal(t, 1, {{$entityLower}}.Version())
+			assert.Equal(t, int64(1), {{$entityLower}}.SequenceNo())
 			assert.NotEmpty(t, {{$entityLower}}.ID())
 			assert.Len(t, {{$entityLower}}.UncommittedEvents(), 1)
 
@@ -108,7 +108,7 @@ func Test{{$entityName}}_LoadFromHistory(t *testing.T) {
 	assert.Equal(t, aggregateID, {{$entityLower}}.Id)
 	{{range filterRequired .Properties}}assert.Equal(t, {{if eq (.Type | goType) "string"}}"test-{{.Name | lower}}"{{else if eq (.Type | goType) "ksuid.KSUID"}}ksuid.New(){{else if eq (.Type | goType) "int"}}123{{else if eq (.Type | goType) "bool"}}true{{else}}{{.Type | goType | zeroValue}}{{end}}, {{$entityLower}}.{{.Name | pascalCase}})
 	{{end}}
-	assert.Equal(t, 1, {{$entityLower}}.Version())
+	assert.Equal(t, int64(1), {{$entityLower}}.SequenceNo())
 }
 
 func Test{{$entityName}}_MarkEventsAsCommitted(t *testing.T) {

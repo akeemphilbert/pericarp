@@ -151,7 +151,7 @@ func TestEntityTemplate_Generation(t *testing.T) {
 			// Verify the generated code has proper Go syntax structure
 			assert.Contains(t, result, "package domain")
 			assert.Contains(t, result, "import (")
-			assert.Contains(t, result, "github.com/google/uuid")
+			assert.Contains(t, result, "github.com/segmentio/ksuid")
 			assert.Contains(t, result, "github.com/akeemphilbert/pericarp/pkg/domain")
 
 			// Verify aggregate root pattern implementation
@@ -452,14 +452,11 @@ func TestEntityEventsTemplate_Generation(t *testing.T) {
 
 		// Created event
 		"type TaskCreatedEvent struct",
-		"domain.StandardEvent",
-		"Id ksuid.KSUID `json:\"id\"`",
-		"Title string `json:\"title\"`",
+		"*domain.EntityEvent",
 		"func NewTaskCreatedEvent(aggregateID ksuid.KSUID, id ksuid.KSUID, title string) *TaskCreatedEvent",
 
 		// Update events for optional fields
 		"type TaskCompletedUpdatedEvent struct",
-		"Completed bool `json:\"completed\"`",
 		"func NewTaskCompletedUpdatedEvent(aggregateID ksuid.KSUID, completed bool) *TaskCompletedUpdatedEvent",
 	}
 

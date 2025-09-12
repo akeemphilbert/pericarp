@@ -2,7 +2,6 @@ package examples
 
 import (
 	"testing"
-	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
@@ -29,10 +28,6 @@ func TestNewUser(t *testing.T) {
 		t.Error("Expected user to be active")
 	}
 
-	if user.Version() != 1 {
-		t.Errorf("Expected version 1, got %d", user.Version())
-	}
-
 	if user.SequenceNo() != 1 {
 		t.Errorf("Expected sequence number 1, got %d", user.SequenceNo())
 	}
@@ -46,8 +41,8 @@ func TestNewUser(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	if events[0].EventType() != "UserCreated" {
-		t.Errorf("Expected event type 'UserCreated', got %s", events[0].EventType())
+	if events[0].EventType() != "user.created" {
+		t.Errorf("Expected event type 'user.created', got %s", events[0].EventType())
 	}
 }
 
@@ -111,10 +106,6 @@ func TestUser_ChangeEmail(t *testing.T) {
 		t.Errorf("Expected email 'newemail@example.com', got %s", user.Email())
 	}
 
-	if user.Version() != 2 {
-		t.Errorf("Expected version 2, got %d", user.Version())
-	}
-
 	if user.SequenceNo() != 2 {
 		t.Errorf("Expected sequence number 2, got %d", user.SequenceNo())
 	}
@@ -124,14 +115,14 @@ func TestUser_ChangeEmail(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	if events[0].EventType() != "UserEmailChanged" {
-		t.Errorf("Expected event type 'UserEmailChanged', got %s", events[0].EventType())
+	if events[0].EventType() != "user.email_changed" {
+		t.Errorf("Expected event type 'user.email_changed', got %s", events[0].EventType())
 	}
 }
 
 func TestUser_ChangeEmail_SameEmail(t *testing.T) {
 	user, _ := NewUser("user-123", "john@example.com", "John Doe")
-	initialVersion := user.Version()
+	initialSequenceNo := user.SequenceNo()
 	user.MarkEventsAsCommitted()
 
 	err := user.ChangeEmail("john@example.com") // Same email
@@ -139,8 +130,8 @@ func TestUser_ChangeEmail_SameEmail(t *testing.T) {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if user.Version() != initialVersion {
-		t.Errorf("Expected version to remain %d, got %d", initialVersion, user.Version())
+	if user.SequenceNo() != initialSequenceNo {
+		t.Errorf("Expected sequence number to remain %d, got %d", initialSequenceNo, user.SequenceNo())
 	}
 
 	if user.HasUncommittedEvents() {
@@ -179,8 +170,8 @@ func TestUser_ChangeName(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	if events[0].EventType() != "UserNameChanged" {
-		t.Errorf("Expected event type 'UserNameChanged', got %s", events[0].EventType())
+	if events[0].EventType() != "user.name_changed" {
+		t.Errorf("Expected event type 'user.name_changed', got %s", events[0].EventType())
 	}
 }
 
@@ -202,8 +193,8 @@ func TestUser_Deactivate(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	if events[0].EventType() != "UserDeactivated" {
-		t.Errorf("Expected event type 'UserDeactivated', got %s", events[0].EventType())
+	if events[0].EventType() != "user.deactivated" {
+		t.Errorf("Expected event type 'user.deactivated', got %s", events[0].EventType())
 	}
 }
 
@@ -226,40 +217,34 @@ func TestUser_Activate(t *testing.T) {
 		t.Errorf("Expected 1 event, got %d", len(events))
 	}
 
-	if events[0].EventType() != "UserActivated" {
-		t.Errorf("Expected event type 'UserActivated', got %s", events[0].EventType())
+	if events[0].EventType() != "user.activated" {
+		t.Errorf("Expected event type 'user.activated', got %s", events[0].EventType())
 	}
 }
 
 func TestUser_LoadFromHistory(t *testing.T) {
-	// Create events representing user history
+	// Create events representing user history using EntityEvent
 	events := []domain.Event{
-		UserCreatedEvent{
-			UserID:    "user-123",
-			Email:     "john@example.com",
-			Name:      "John Doe",
-			CreatedAt: time.Now().Add(-time.Hour),
-		},
-		UserEmailChangedEvent{
-			UserID:    "user-123",
-			OldEmail:  "john@example.com",
-			NewEmail:  "john.doe@example.com",
-			ChangedAt: time.Now().Add(-30 * time.Minute),
-		},
-		UserNameChangedEvent{
-			UserID:    "user-123",
-			OldName:   "John Doe",
-			NewName:   "John Smith",
-			ChangedAt: time.Now().Add(-15 * time.Minute),
-		},
-		UserDeactivatedEvent{
-			UserID:        "user-123",
-			DeactivatedAt: time.Now().Add(-5 * time.Minute),
-		},
+		domain.NewEntityEvent("user", "created", "user-123", "", "", map[string]interface{}{
+			"email":     "john@example.com",
+			"name":      "John Doe",
+			"is_active": true,
+		}),
+		domain.NewEntityEvent("user", "email_changed", "user-123", "", "", map[string]interface{}{
+			"old_email": "john@example.com",
+			"new_email": "john.doe@example.com",
+		}),
+		domain.NewEntityEvent("user", "name_changed", "user-123", "", "", map[string]interface{}{
+			"old_name": "John Doe",
+			"new_name": "John Smith",
+		}),
+		domain.NewEntityEvent("user", "deactivated", "user-123", "", "", map[string]interface{}{
+			"reason": "user_requested",
+		}),
 	}
 
 	// Create empty user and load from history
-	user := &User{Entity: domain.NewEntity("user-123")}
+	user := &User{BasicEntity: domain.NewEntity("user-123")}
 	user.LoadFromHistory(events)
 
 	// Verify final state
@@ -273,10 +258,6 @@ func TestUser_LoadFromHistory(t *testing.T) {
 
 	if user.IsActive() {
 		t.Error("Expected user to be inactive")
-	}
-
-	if user.Version() != 4 {
-		t.Errorf("Expected version 4, got %d", user.Version())
 	}
 
 	if user.SequenceNo() != 4 {
@@ -323,10 +304,10 @@ func TestUser_CompleteLifecycle(t *testing.T) {
 
 	// Verify we have all expected events
 	expectedEventTypes := []string{
-		"UserCreated",
-		"UserEmailChanged",
-		"UserNameChanged",
-		"UserDeactivated",
+		"user.created",
+		"user.email_changed",
+		"user.name_changed",
+		"user.deactivated",
 	}
 
 	if len(allEvents) != len(expectedEventTypes) {
@@ -340,7 +321,7 @@ func TestUser_CompleteLifecycle(t *testing.T) {
 	}
 
 	// Reconstruct user from events
-	reconstructedUser := &User{Entity: domain.NewEntity("user-123")}
+	reconstructedUser := &User{BasicEntity: domain.NewEntity("user-123")}
 	reconstructedUser.LoadFromHistory(allEvents)
 
 	// Verify reconstructed state matches current state
@@ -356,7 +337,7 @@ func TestUser_CompleteLifecycle(t *testing.T) {
 		t.Errorf("Reconstructed active status mismatch: expected %t, got %t", user.IsActive(), reconstructedUser.IsActive())
 	}
 
-	if reconstructedUser.Version() != len(allEvents) {
-		t.Errorf("Reconstructed version mismatch: expected %d, got %d", len(allEvents), reconstructedUser.Version())
+	if reconstructedUser.SequenceNo() != int64(len(allEvents)) {
+		t.Errorf("Reconstructed sequence number mismatch: expected %d, got %d", len(allEvents), reconstructedUser.SequenceNo())
 	}
 }

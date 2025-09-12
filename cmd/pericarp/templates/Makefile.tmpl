@@ -64,7 +64,7 @@ test: ## Run all tests with coverage
 
 test-unit: ## Run unit tests only
 	@echo "🧪 Running unit tests..."
-	@go test -v -race ./internal/domain/... ./internal/application/...
+	@go test -v -race ./examples/...
 	@echo "✅ Unit tests completed"
 
 test-integration: ## Run integration tests
@@ -197,7 +197,7 @@ docker-run: ## Run Docker container
 # Additional targets for Pericarp projects
 validate-architecture: ## Validate DDD architecture
 	@echo "🏗️  Validating domain-driven design architecture..."
-	@go test -v ./internal/domain/... -tags=architecture
+	@go test -v ./examples/... -tags=architecture
 
 performance-test: ## Run performance benchmarks
 	@echo "⚡ Running performance tests..."

@@ -90,7 +90,7 @@ echo "----------------------------------------"
 echo "1. UNIT TESTS"
 echo "----------------------------------------"
 
-run_test "Unit Tests" "go test -v -race -coverprofile=coverage.out ./pkg/... ./internal/..."
+run_test "Unit Tests" "go test -v -race -coverprofile=coverage.out ./pkg/... ./examples/..."
 update_counters $? "Unit Tests"
 
 # 2. BDD Tests

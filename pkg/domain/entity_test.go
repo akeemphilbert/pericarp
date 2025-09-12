@@ -15,7 +15,7 @@ type TestEvent struct {
 	createdAt   time.Time
 	userID      string
 	accountID   string
-	data        string
+	data        []byte
 }
 
 func (e TestEvent) EventType() string               { return e.eventType }
@@ -24,7 +24,7 @@ func (e TestEvent) SequenceNo() int64               { return e.sequenceNo }
 func (e TestEvent) CreatedAt() time.Time            { return e.createdAt }
 func (e TestEvent) User() string                    { return e.userID }
 func (e TestEvent) Account() string                 { return e.accountID }
-func (e TestEvent) Payload() any                    { return e.data }
+func (e TestEvent) Payload() []byte                 { return e.data }
 func (e *TestEvent) SetSequenceNo(sequenceNo int64) { e.sequenceNo = sequenceNo }
 
 func TestEvent_SetSequenceNo(t *testing.T) {
@@ -35,7 +35,7 @@ func TestEvent_SetSequenceNo(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data",
+		data:        []byte("test data"),
 	}
 
 	// Initially sequence number should be 0
@@ -69,7 +69,7 @@ func TestEntity_AddEvent_SetSequenceNo(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data",
+		data:        []byte("test data"),
 	}
 
 	// Verify initial state
@@ -100,7 +100,7 @@ func TestNewEntity(t *testing.T) {
 	}
 
 	if entity.SequenceNo() != 0 {
-		t.Errorf("Expected version 0, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 0, got %d", entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != 0 {
@@ -126,13 +126,13 @@ func TestEntity_AddEvent(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data 1",
+		data:        []byte("test data 1"),
 	}
 
 	entity.AddEvent(event1)
 
 	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected version 1, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 1, got %d", entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != 1 {
@@ -155,13 +155,13 @@ func TestEntity_AddEvent(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data 2",
+		data:        []byte("test data 2"),
 	}
 
 	entity.AddEvent(event2)
 
 	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected version 2, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 2, got %d", entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != 2 {
@@ -192,7 +192,7 @@ func TestEntity_UncommittedEvents(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data 1",
+		data:        []byte("test data 1"),
 	}
 
 	event2 := &TestEvent{
@@ -202,7 +202,7 @@ func TestEntity_UncommittedEvents(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data 2",
+		data:        []byte("test data 2"),
 	}
 
 	entity.AddEvent(event1)
@@ -231,7 +231,7 @@ func TestEntity_UncommittedEvents(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "modified data",
+		data:        []byte("modified data"),
 	}
 	originalEvents := entity.UncommittedEvents()
 	if originalEvents[0].EventType() == "Modified" {
@@ -249,7 +249,7 @@ func TestEntity_MarkEventsAsCommitted(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data",
+		data:        []byte("test data"),
 	}
 
 	entity.AddEvent(event)
@@ -270,9 +270,9 @@ func TestEntity_MarkEventsAsCommitted(t *testing.T) {
 		t.Errorf("Expected 0 uncommitted events, got %d", entity.UncommittedEventCount())
 	}
 
-	// Verify version and sequence are preserved
+	// Verify sequence number is preserved
 	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected version 1, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 1, got %d", entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != 1 {
@@ -291,7 +291,7 @@ func TestEntity_LoadFromHistory(t *testing.T) {
 			createdAt:   time.Now(),
 			userID:      "test-user",
 			accountID:   "test-account",
-			data:        "test data 1",
+			data:        []byte("test data 1"),
 		},
 		&TestEvent{
 			eventType:   "TestEvent2",
@@ -300,7 +300,7 @@ func TestEntity_LoadFromHistory(t *testing.T) {
 			createdAt:   time.Now(),
 			userID:      "test-user",
 			accountID:   "test-account",
-			data:        "test data 2",
+			data:        []byte("test data 2"),
 		},
 		&TestEvent{
 			eventType:   "TestEvent3",
@@ -309,14 +309,14 @@ func TestEntity_LoadFromHistory(t *testing.T) {
 			createdAt:   time.Now(),
 			userID:      "test-user",
 			accountID:   "test-account",
-			data:        "test data 3",
+			data:        []byte("test data 3"),
 		},
 	}
 
 	entity.LoadFromHistory(events)
 
 	if entity.SequenceNo() != 3 {
-		t.Errorf("Expected version 3, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 3, got %d", entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != 3 {
@@ -340,13 +340,13 @@ func TestEntity_LoadFromHistoryEmptyEvents(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data",
+		data:        []byte("test data"),
 	}
 	entity.AddEvent(event)
 
 	// Verify we have state before loading empty history
 	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected version 1 before loading empty history, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 1 before loading empty history, got %d", entity.SequenceNo())
 	}
 
 	// Load empty history - this should reset the entity to initial state
@@ -372,7 +372,7 @@ func TestEntity_Reset(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data 1",
+		data:        []byte("test data 1"),
 	}
 
 	event2 := &TestEvent{
@@ -382,7 +382,7 @@ func TestEntity_Reset(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data 2",
+		data:        []byte("test data 2"),
 	}
 
 	entity.AddEvent(event1)
@@ -390,7 +390,7 @@ func TestEntity_Reset(t *testing.T) {
 
 	// Verify state before reset
 	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected version 2 before reset, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 2 before reset, got %d", entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != 2 {
@@ -406,7 +406,7 @@ func TestEntity_Reset(t *testing.T) {
 
 	// Verify state after reset
 	if entity.SequenceNo() != 0 {
-		t.Errorf("Expected version 0 after reset, got %d", entity.SequenceNo())
+		t.Errorf("Expected sequence number 0 after reset, got %d", entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != 0 {
@@ -433,7 +433,7 @@ func TestEntity_Clone(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data",
+		data:        []byte("test data"),
 	}
 
 	entity.AddEvent(event)
@@ -443,10 +443,6 @@ func TestEntity_Clone(t *testing.T) {
 	// Verify clone has same state
 	if clone.ID() != entity.ID() {
 		t.Errorf("Expected clone ID %s, got %s", entity.ID(), clone.ID())
-	}
-
-	if clone.SequenceNo() != entity.SequenceNo() {
-		t.Errorf("Expected clone version %d, got %d", entity.SequenceNo(), clone.SequenceNo())
 	}
 
 	if clone.SequenceNo() != entity.SequenceNo() {
@@ -465,7 +461,7 @@ func TestEntity_Clone(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "clone data",
+		data:        []byte("clone data"),
 	})
 
 	if entity.UncommittedEventCount() == clone.UncommittedEventCount() {
@@ -483,7 +479,7 @@ func TestEntity_String(t *testing.T) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "test data",
+		data:        []byte("test data"),
 	}
 
 	entity.AddEvent(event)
@@ -517,7 +513,7 @@ func TestEntity_ConcurrentAccess(t *testing.T) {
 					createdAt:   time.Now(),
 					userID:      "test-user",
 					accountID:   "test-account",
-					data:        fmt.Sprintf("goroutine-%d-event-%d", goroutineID, j),
+					data:        []byte(fmt.Sprintf("goroutine-%d-event-%d", goroutineID, j)),
 				}
 
 				entity.AddEvent(event)
@@ -533,7 +529,7 @@ func TestEntity_ConcurrentAccess(t *testing.T) {
 	}
 
 	if entity.SequenceNo() != int64(expectedEventCount) {
-		t.Errorf("Expected version %d, got %d", expectedEventCount, entity.SequenceNo())
+		t.Errorf("Expected sequence number %d, got %d", expectedEventCount, entity.SequenceNo())
 	}
 
 	if entity.SequenceNo() != int64(expectedEventCount) {
@@ -560,7 +556,7 @@ func TestEntity_ConcurrentReadWrite(t *testing.T) {
 					createdAt:   time.Now(),
 					userID:      "test-user",
 					accountID:   "test-account",
-					data:        "concurrent data",
+					data:        []byte("concurrent data"),
 				}
 				entity.AddEvent(event)
 				entity.MarkEventsAsCommitted()
@@ -601,7 +597,7 @@ func BenchmarkEntity_AddEvent(b *testing.B) {
 		createdAt:   time.Now(),
 		userID:      "test-user",
 		accountID:   "test-account",
-		data:        "benchmark data",
+		data:        []byte("benchmark data"),
 	}
 
 	b.ResetTimer()
@@ -624,7 +620,7 @@ func BenchmarkEntity_UncommittedEvents(b *testing.B) {
 			createdAt:   time.Now(),
 			userID:      "test-user",
 			accountID:   "test-account",
-			data:        fmt.Sprintf("benchmark data %d", i),
+			data:        []byte(fmt.Sprintf("benchmark data %d", i)),
 		}
 		entity.AddEvent(event)
 	}
@@ -647,7 +643,7 @@ func BenchmarkEntity_LoadFromHistory(b *testing.B) {
 			createdAt:   time.Now(),
 			userID:      "test-user",
 			accountID:   "test-account",
-			data:        fmt.Sprintf("benchmark data %d", i),
+			data:        []byte(fmt.Sprintf("benchmark data %d", i)),
 		}
 	}
 

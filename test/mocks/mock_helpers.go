@@ -1,17 +1,13 @@
 package mocks
 
 import (
-	"context"
 	"fmt"
 	"time"
 
-	internalapp "github.com/akeemphilbert/pericarp/internal/application"
-	internalappmocks "github.com/akeemphilbert/pericarp/internal/application/mocks"
-	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
-	internaldomainmocks "github.com/akeemphilbert/pericarp/internal/domain/mocks"
+	"github.com/akeemphilbert/pericarp/examples"
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
 	pkgdomainmocks "github.com/akeemphilbert/pericarp/pkg/domain/mocks"
-	"github.com/segmentio/ksuid"
+	"github.com/google/uuid"
 )
 
 // TestEnvelope is a test implementation of the Envelope interface
@@ -38,267 +34,159 @@ func (e *TestEnvelope) Metadata() map[string]interface{} {
 	return e.metadata
 }
 
-// MockConfiguration provides utilities for configuring mocks in tests
-type MockConfiguration struct {
-	EventStore              *pkgdomainmocks.EventStoreMock
-	EventDispatcher         *pkgdomainmocks.EventDispatcherMock
-	UnitOfWork              *pkgdomainmocks.UnitOfWorkMock
-	UserRepository          *internaldomainmocks.UserRepositoryMock
-	UserReadModelRepository *internalappmocks.UserReadModelRepositoryMock
-}
-
-// NewMockConfiguration creates a new mock configuration with default behaviors
-func NewMockConfiguration() *MockConfiguration {
-	return &MockConfiguration{
-		EventStore:              &pkgdomainmocks.EventStoreMock{},
-		EventDispatcher:         &pkgdomainmocks.EventDispatcherMock{},
-		UnitOfWork:              &pkgdomainmocks.UnitOfWorkMock{},
-		UserRepository:          &internaldomainmocks.UserRepositoryMock{},
-		UserReadModelRepository: &internalappmocks.UserReadModelRepositoryMock{},
+// NewTestEnvelope creates a new test envelope
+func NewTestEnvelope(event pkgdomain.Event) *TestEnvelope {
+	return &TestEnvelope{
+		event:     event,
+		eventID:   uuid.New().String(),
+		timestamp: time.Now(),
+		metadata:  make(map[string]interface{}),
 	}
 }
 
-// ConfigureSuccessfulEventStore configures the event store mock for successful operations
-func (m *MockConfiguration) ConfigureSuccessfulEventStore() {
-	m.EventStore.SaveFunc = func(ctx context.Context, events []pkgdomain.Event) ([]pkgdomain.Envelope, error) {
-		envelopes := make([]pkgdomain.Envelope, len(events))
-		for i, event := range events {
-			envelopes[i] = &TestEnvelope{
-				event:     event,
-				eventID:   ksuid.New().String(),
-				timestamp: time.Now(),
-				metadata: map[string]interface{}{
-					"aggregate_id": event.AggregateID(),
-					"event_type":   event.EventType(),
-					"version":      event.Version(),
-				},
-			}
-		}
-		return envelopes, nil
-	}
-
-	m.EventStore.LoadFunc = func(ctx context.Context, aggregateID string) ([]pkgdomain.Envelope, error) {
-		return []pkgdomain.Envelope{}, nil
-	}
-
-	m.EventStore.LoadFromVersionFunc = func(ctx context.Context, aggregateID string, version int) ([]pkgdomain.Envelope, error) {
-		return []pkgdomain.Envelope{}, nil
-	}
-}
-
-// ConfigureSuccessfulEventDispatcher configures the event dispatcher mock for successful operations
-func (m *MockConfiguration) ConfigureSuccessfulEventDispatcher() {
-	m.EventDispatcher.DispatchFunc = func(ctx context.Context, envelopes []pkgdomain.Envelope) error {
-		return nil
-	}
-
-	m.EventDispatcher.SubscribeFunc = func(eventType string, handler pkgdomain.EventHandler) error {
-		return nil
-	}
-}
-
-// ConfigureSuccessfulUnitOfWork configures the unit of work mock for successful operations
-func (m *MockConfiguration) ConfigureSuccessfulUnitOfWork() {
-	var registeredEvents []pkgdomain.Event
-
-	m.UnitOfWork.RegisterEventsFunc = func(events []pkgdomain.Event) {
-		registeredEvents = append(registeredEvents, events...)
-	}
-
-	m.UnitOfWork.CommitFunc = func(ctx context.Context) ([]pkgdomain.Envelope, error) {
-		envelopes := make([]pkgdomain.Envelope, len(registeredEvents))
-		for i, event := range registeredEvents {
-			envelopes[i] = &TestEnvelope{
-				event:     event,
-				eventID:   ksuid.New().String(),
-				timestamp: time.Now(),
-				metadata: map[string]interface{}{
-					"aggregate_id": event.AggregateID(),
-					"event_type":   event.EventType(),
-					"version":      event.Version(),
-				},
-			}
-		}
-		registeredEvents = nil // Clear after commit
-		return envelopes, nil
-	}
-
-	m.UnitOfWork.RollbackFunc = func() error {
-		registeredEvents = nil
-		return nil
-	}
-}
-
-// ConfigureSuccessfulUserRepository configures the user repository mock for successful operations
-func (m *MockConfiguration) ConfigureSuccessfulUserRepository() {
-	users := make(map[string]*internaldomain.User)
-
-	m.UserRepository.SaveFunc = func(user *internaldomain.User) error {
-		users[user.ID()] = user
-		return nil
-	}
-
-	m.UserRepository.FindByIDFunc = func(id string) (*internaldomain.User, error) {
-		if user, exists := users[id]; exists {
-			return user, nil
-		}
-		return nil, &internalapp.ApplicationError{Code: "USER_NOT_FOUND", Message: "User not found"}
-	}
-
-	m.UserRepository.FindByEmailFunc = func(email string) (*internaldomain.User, error) {
-		for _, user := range users {
-			if user.Email() == email {
-				return user, nil
-			}
-		}
-		return nil, &internalapp.ApplicationError{Code: "USER_NOT_FOUND", Message: "User not found"}
-	}
-
-	m.UserRepository.DeleteFunc = func(id string) error {
-		delete(users, id)
-		return nil
-	}
-
-	m.UserRepository.LoadFromVersionFunc = func(id string, version int) (*internaldomain.User, error) {
-		if user, exists := users[id]; exists {
-			return user, nil
-		}
-		return nil, &internalapp.ApplicationError{Code: "USER_NOT_FOUND", Message: "User not found"}
-	}
-}
-
-// ConfigureSuccessfulUserReadModelRepository configures the user read model repository mock for successful operations
-func (m *MockConfiguration) ConfigureSuccessfulUserReadModelRepository() {
-	users := make(map[ksuid.KSUID]*internalapp.UserReadModel)
-
-	m.UserReadModelRepository.GetByIDFunc = func(ctx context.Context, id ksuid.KSUID) (*internalapp.UserReadModel, error) {
-		if user, exists := users[id]; exists {
-			return user, nil
-		}
-		return nil, &internalapp.ApplicationError{Code: "USER_NOT_FOUND", Message: "User not found"}
-	}
-
-	m.UserReadModelRepository.GetByEmailFunc = func(ctx context.Context, email string) (*internalapp.UserReadModel, error) {
-		for _, user := range users {
-			if user.Email == email {
-				return user, nil
-			}
-		}
-		return nil, &internalapp.ApplicationError{Code: "USER_NOT_FOUND", Message: "User not found"}
-	}
-
-	m.UserReadModelRepository.ListFunc = func(ctx context.Context, page, pageSize int, active *bool) ([]internalapp.UserReadModel, int, error) {
-		var filteredUsers []internalapp.UserReadModel
-		for _, user := range users {
-			if active == nil || user.IsActive == *active {
-				filteredUsers = append(filteredUsers, *user)
-			}
-		}
-
-		totalCount := len(filteredUsers)
-		start := (page - 1) * pageSize
-		end := start + pageSize
-
-		if start >= totalCount {
-			return []internalapp.UserReadModel{}, totalCount, nil
-		}
-
-		if end > totalCount {
-			end = totalCount
-		}
-
-		return filteredUsers[start:end], totalCount, nil
-	}
-
-	m.UserReadModelRepository.SaveFunc = func(ctx context.Context, user *internalapp.UserReadModel) error {
-		users[user.ID] = user
-		return nil
-	}
-
-	m.UserReadModelRepository.DeleteFunc = func(ctx context.Context, id ksuid.KSUID) error {
-		delete(users, id)
-		return nil
-	}
-
-	m.UserReadModelRepository.CountFunc = func(ctx context.Context, active *bool) (int, error) {
-		count := 0
-		for _, user := range users {
-			if active == nil || user.IsActive == *active {
-				count++
-			}
-		}
-		return count, nil
-	}
-}
-
-// ConfigureAllForSuccess configures all mocks for successful operations
-func (m *MockConfiguration) ConfigureAllForSuccess() {
-	m.ConfigureSuccessfulEventStore()
-	m.ConfigureSuccessfulEventDispatcher()
-	m.ConfigureSuccessfulUnitOfWork()
-	m.ConfigureSuccessfulUserRepository()
-	m.ConfigureSuccessfulUserReadModelRepository()
-}
-
-// TestScenarioBuilder provides utilities for building test scenarios with mocks
+// TestScenarioBuilder helps build test scenarios
 type TestScenarioBuilder struct {
-	config *MockConfiguration
+	config *TestScenarioConfig
+}
+
+// TestScenarioConfig holds configuration for test scenarios
+type TestScenarioConfig struct {
+	EventStore      pkgdomain.EventStore
+	EventDispatcher pkgdomain.EventDispatcher
+	Logger          pkgdomain.Logger
 }
 
 // NewTestScenarioBuilder creates a new test scenario builder
 func NewTestScenarioBuilder() *TestScenarioBuilder {
 	return &TestScenarioBuilder{
-		config: NewMockConfiguration(),
+		config: &TestScenarioConfig{
+			EventStore:      &pkgdomainmocks.EventStoreMock{},
+			EventDispatcher: &pkgdomainmocks.EventDispatcherMock{},
+			Logger:          &pkgdomainmocks.LoggerMock{},
+		},
 	}
 }
 
-// WithSuccessfulUserCreation configures mocks for successful user creation scenario
-func (b *TestScenarioBuilder) WithSuccessfulUserCreation() *TestScenarioBuilder {
-	b.config.ConfigureAllForSuccess()
+// WithEventStore sets the event store
+func (b *TestScenarioBuilder) WithEventStore(eventStore pkgdomain.EventStore) *TestScenarioBuilder {
+	b.config.EventStore = eventStore
 	return b
 }
 
-// WithUserRepositoryError configures the user repository to return an error
-func (b *TestScenarioBuilder) WithUserRepositoryError(err error) *TestScenarioBuilder {
-	b.config.UserRepository.SaveFunc = func(user *internaldomain.User) error {
-		return err
-	}
+// WithEventDispatcher sets the event dispatcher
+func (b *TestScenarioBuilder) WithEventDispatcher(dispatcher pkgdomain.EventDispatcher) *TestScenarioBuilder {
+	b.config.EventDispatcher = dispatcher
 	return b
 }
 
-// WithEventStoreError configures the event store to return an error
-func (b *TestScenarioBuilder) WithEventStoreError(err error) *TestScenarioBuilder {
-	b.config.EventStore.SaveFunc = func(ctx context.Context, events []pkgdomain.Event) ([]pkgdomain.Envelope, error) {
-		return nil, err
-	}
+// WithLogger sets the logger
+func (b *TestScenarioBuilder) WithLogger(logger pkgdomain.Logger) *TestScenarioBuilder {
+	b.config.Logger = logger
 	return b
 }
 
-// WithEventDispatcherError configures the event dispatcher to return an error
-func (b *TestScenarioBuilder) WithEventDispatcherError(err error) *TestScenarioBuilder {
-	b.config.EventDispatcher.DispatchFunc = func(ctx context.Context, envelopes []pkgdomain.Envelope) error {
-		return err
-	}
-	return b
-}
-
-// WithExistingUser configures the repository to return an existing user for email lookup
-func (b *TestScenarioBuilder) WithExistingUser(email string, user *internaldomain.User) *TestScenarioBuilder {
-	b.config.UserRepository.FindByEmailFunc = func(searchEmail string) (*internaldomain.User, error) {
-		if searchEmail == email {
-			return user, nil
-		}
-		return nil, &internalapp.ApplicationError{Code: "USER_NOT_FOUND", Message: "User not found"}
-	}
-	return b
-}
-
-// Build returns the configured mock configuration
-func (b *TestScenarioBuilder) Build() *MockConfiguration {
+// Build creates the test scenario
+func (b *TestScenarioBuilder) Build() *TestScenarioConfig {
 	return b.config
 }
 
-// AssertionHelpers provides utilities for making assertions about mock calls
+// TestUserBuilder helps build test users
+type TestUserBuilder struct {
+	id       string
+	email    string
+	name     string
+	isActive bool
+}
+
+// NewTestUserBuilder creates a new test user builder
+func NewTestUserBuilder() *TestUserBuilder {
+	return &TestUserBuilder{
+		id:       uuid.New().String(),
+		email:    "test@example.com",
+		name:     "Test User",
+		isActive: true,
+	}
+}
+
+// WithID sets the user ID
+func (b *TestUserBuilder) WithID(id string) *TestUserBuilder {
+	b.id = id
+	return b
+}
+
+// WithEmail sets the user email
+func (b *TestUserBuilder) WithEmail(email string) *TestUserBuilder {
+	b.email = email
+	return b
+}
+
+// WithName sets the user name
+func (b *TestUserBuilder) WithName(name string) *TestUserBuilder {
+	b.name = name
+	return b
+}
+
+// WithActive sets the user active status
+func (b *TestUserBuilder) WithActive(isActive bool) *TestUserBuilder {
+	b.isActive = isActive
+	return b
+}
+
+// Build creates a test user
+func (b *TestUserBuilder) Build() (*examples.User, error) {
+	user, err := examples.NewUser(b.id, b.email, b.name)
+	if err != nil {
+		return nil, err
+	}
+
+	if !b.isActive {
+		if err := user.Deactivate(); err != nil {
+			return nil, err
+		}
+	}
+
+	return user, nil
+}
+
+// TestEventBuilder helps build test events
+type TestEventBuilder struct{}
+
+// NewTestEventBuilder creates a new test event builder
+func NewTestEventBuilder() *TestEventBuilder {
+	return &TestEventBuilder{}
+}
+
+// UserCreatedEvent creates a user created event
+func (b *TestEventBuilder) UserCreatedEvent(userID, email, name string) pkgdomain.Event {
+	return pkgdomain.NewEntityEvent("user", "created", userID, "", "", map[string]interface{}{
+		"email": email,
+		"name":  name,
+	})
+}
+
+// UserEmailChangedEvent creates a user email changed event
+func (b *TestEventBuilder) UserEmailChangedEvent(userID, oldEmail, newEmail string) pkgdomain.Event {
+	return pkgdomain.NewEntityEvent("user", "email_changed", userID, "", "", map[string]interface{}{
+		"old_email": oldEmail,
+		"new_email": newEmail,
+	})
+}
+
+// UserActivatedEvent creates a user activated event
+func (b *TestEventBuilder) UserActivatedEvent(userID string) pkgdomain.Event {
+	return pkgdomain.NewEntityEvent("user", "activated", userID, "", "", map[string]interface{}{
+		"activated_at": time.Now(),
+	})
+}
+
+// UserDeactivatedEvent creates a user deactivated event
+func (b *TestEventBuilder) UserDeactivatedEvent(userID string) pkgdomain.Event {
+	return pkgdomain.NewEntityEvent("user", "deactivated", userID, "", "", map[string]interface{}{
+		"deactivated_at": time.Now(),
+	})
+}
+
+// AssertionHelpers provides helper functions for test assertions
 type AssertionHelpers struct{}
 
 // NewAssertionHelpers creates a new assertion helpers instance
@@ -306,53 +194,159 @@ func NewAssertionHelpers() *AssertionHelpers {
 	return &AssertionHelpers{}
 }
 
-// AssertEventStoreSaveCalled verifies that EventStore.Save was called with expected events
-func (h *AssertionHelpers) AssertEventStoreSaveCalled(mock *pkgdomainmocks.EventStoreMock, expectedEventCount int) error {
-	calls := mock.SaveCalls()
-	if len(calls) == 0 {
-		return &AssertionError{Message: "EventStore.Save was not called"}
+// AssertEventStoreSaveCalled checks if EventStore.Save was called
+func (h *AssertionHelpers) AssertEventStoreSaveCalled(mock *pkgdomainmocks.EventStoreMock) error {
+	if mock.SaveFunc == nil {
+		return fmt.Errorf("EventStore.Save was not called")
 	}
-
-	lastCall := calls[len(calls)-1]
-	if len(lastCall.Events) != expectedEventCount {
-		return &AssertionError{
-			Message:  "EventStore.Save called with unexpected number of events",
-			Expected: expectedEventCount,
-			Actual:   len(lastCall.Events),
-		}
-	}
-
 	return nil
 }
 
-// AssertEventDispatcherDispatchCalled verifies that EventDispatcher.Dispatch was called
+// AssertEventStoreGetEventsCalled checks if EventStore.GetEvents was called
+func (h *AssertionHelpers) AssertEventStoreGetEventsCalled(mock *pkgdomainmocks.EventStoreMock) error {
+	if mock.GetEventsFunc == nil {
+		return fmt.Errorf("EventStore.GetEvents was not called")
+	}
+	return nil
+}
+
+// AssertEventDispatcherDispatchCalled checks if EventDispatcher.Dispatch was called
 func (h *AssertionHelpers) AssertEventDispatcherDispatchCalled(mock *pkgdomainmocks.EventDispatcherMock) error {
-	calls := mock.DispatchCalls()
-	if len(calls) == 0 {
-		return &AssertionError{Message: "EventDispatcher.Dispatch was not called"}
+	if mock.DispatchFunc == nil {
+		return fmt.Errorf("EventDispatcher.Dispatch was not called")
 	}
 	return nil
 }
 
-// AssertUserRepositorySaveCalled verifies that UserRepository.Save was called
-func (h *AssertionHelpers) AssertUserRepositorySaveCalled(mock *internaldomainmocks.UserRepositoryMock) error {
-	calls := mock.SaveCalls()
-	if len(calls) == 0 {
-		return &AssertionError{Message: "UserRepository.Save was not called"}
+// AssertLoggerInfoCalled checks if Logger.Info was called
+func (h *AssertionHelpers) AssertLoggerInfoCalled(mock *pkgdomainmocks.LoggerMock) error {
+	if mock.InfoFunc == nil {
+		return fmt.Errorf("Logger.Info was not called")
 	}
 	return nil
 }
 
-// AssertionError represents an assertion failure
-type AssertionError struct {
-	Message  string
-	Expected interface{}
-	Actual   interface{}
+// AssertLoggerErrorCalled checks if Logger.Error was called
+func (h *AssertionHelpers) AssertLoggerErrorCalled(mock *pkgdomainmocks.LoggerMock) error {
+	if mock.ErrorFunc == nil {
+		return fmt.Errorf("Logger.Error was not called")
+	}
+	return nil
 }
 
-func (e *AssertionError) Error() string {
-	if e.Expected != nil && e.Actual != nil {
-		return fmt.Sprintf("%s: expected %v, got %v", e.Message, e.Expected, e.Actual)
+// TestData provides common test data
+type TestData struct{}
+
+// NewTestData creates a new test data instance
+func NewTestData() *TestData {
+	return &TestData{}
+}
+
+// ValidUser returns a valid user for testing
+func (td *TestData) ValidUser() *examples.User {
+	user, _ := examples.NewUser(uuid.New().String(), "valid@example.com", "Valid User")
+	return user
+}
+
+// ValidUserWithID returns a valid user with specific ID
+func (td *TestData) ValidUserWithID(id string) *examples.User {
+	user, _ := examples.NewUser(id, "valid@example.com", "Valid User")
+	return user
+}
+
+// InactiveUser returns an inactive user for testing
+func (td *TestData) InactiveUser() *examples.User {
+	user, _ := examples.NewUser(uuid.New().String(), "inactive@example.com", "Inactive User")
+	user.Deactivate()
+	return user
+}
+
+// UserWithEmail returns a user with specific email
+func (td *TestData) UserWithEmail(email string) *examples.User {
+	user, _ := examples.NewUser(uuid.New().String(), email, "Test User")
+	return user
+}
+
+// MultipleUsers returns multiple users for testing
+func (td *TestData) MultipleUsers(count int) []*examples.User {
+	users := make([]*examples.User, count)
+	for i := 0; i < count; i++ {
+		users[i], _ = examples.NewUser(
+			uuid.New().String(),
+			fmt.Sprintf("user%d@example.com", i),
+			fmt.Sprintf("User %d", i),
+		)
 	}
-	return e.Message
+	return users
+}
+
+// EventSequence returns a sequence of events for testing
+func (td *TestData) EventSequence(userID string) []pkgdomain.Event {
+	eventBuilder := NewTestEventBuilder()
+	return []pkgdomain.Event{
+		eventBuilder.UserCreatedEvent(userID, "test@example.com", "Test User"),
+		eventBuilder.UserEmailChangedEvent(userID, "test@example.com", "newemail@example.com"),
+		eventBuilder.UserDeactivatedEvent(userID),
+		eventBuilder.UserActivatedEvent(userID),
+	}
+}
+
+// Helper functions for common test scenarios
+
+// CreateUserWithEvents creates a user and returns it with its events
+func CreateUserWithEvents(id, email, name string) (*examples.User, []pkgdomain.Event, error) {
+	user, err := examples.NewUser(id, email, name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	events := user.GetEvents()
+	return user, events, nil
+}
+
+// CreateUserWithEmailChange creates a user, changes email, and returns all events
+func CreateUserWithEmailChange(id, email, name, newEmail string) (*examples.User, []pkgdomain.Event, error) {
+	user, err := examples.NewUser(id, email, name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Get initial events
+	initialEvents := user.GetEvents()
+
+	// Change email
+	if err := user.ChangeEmail(newEmail); err != nil {
+		return nil, nil, err
+	}
+
+	// Get all events
+	allEvents := user.GetEvents()
+	return user, allEvents, nil
+}
+
+// CreateUserWithLifecycle creates a user and performs full lifecycle operations
+func CreateUserWithLifecycle(id, email, name string) (*examples.User, []pkgdomain.Event, error) {
+	user, err := examples.NewUser(id, email, name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Change email
+	if err := user.ChangeEmail("newemail@example.com"); err != nil {
+		return nil, nil, err
+	}
+
+	// Deactivate
+	if err := user.Deactivate(); err != nil {
+		return nil, nil, err
+	}
+
+	// Activate
+	if err := user.Activate(); err != nil {
+		return nil, nil, err
+	}
+
+	// Get all events
+	allEvents := user.GetEvents()
+	return user, allEvents, nil
 }

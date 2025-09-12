@@ -76,7 +76,7 @@ func (d *WatermillEventDispatcher) Dispatch(ctx context.Context, envelopes []dom
 	return nil
 }
 
-// dispatchSingle dispatches a single envelope to all registered handlers
+// dispatchSingle dispatches a single envelope to all registered handlers using wildcard topics
 func (d *WatermillEventDispatcher) dispatchSingle(ctx context.Context, envelope domain.Envelope) error {
 	event := envelope.Event()
 	eventType := event.EventType()
@@ -94,29 +94,28 @@ func (d *WatermillEventDispatcher) dispatchSingle(ctx context.Context, envelope 
 		return nil
 	}
 
-	// Serialize the envelope to JSON for the message payload
-	envelopeData := map[string]interface{}{
-		"event_id":     envelope.EventID(),
-		"event_type":   eventType,
-		"aggregate_id": event.AggregateID(),
-		"version":      event.SequenceNo(),
-		"occurred_at":  event.CreatedAt(),
-		"timestamp":    envelope.Timestamp(),
-		"metadata":     envelope.Metadata(),
-		"event_data":   event, // This will be JSON serialized
-	}
-
-	payload, err := json.Marshal(envelopeData)
-	if err != nil {
-		return fmt.Errorf("failed to serialize envelope: %w", err)
-	}
+	// Generate the 4 wildcard topic patterns
+	wildcardTopics := d.generateWildcardTopics(eventType)
 
 	// Create Watermill message
-	msg := message.NewMessage(envelope.EventID(), payload)
+	msg := message.NewMessage(envelope.EventID(), envelope.Event().Payload())
+
 	msg.Metadata.Set("event_type", eventType)
 	msg.Metadata.Set("aggregate_id", event.AggregateID())
+	msg.Metadata.Set("sequence_no", fmt.Sprintf("%d", event.SequenceNo()))
+	msg.Metadata.Set("occurred_at", event.CreatedAt().Format(time.RFC3339))
+	msg.Metadata.Set("timestamp", envelope.Timestamp().Format(time.RFC3339))
+	msg.Metadata.Set("metadata", fmt.Sprintf("%v", envelope.Metadata()))
+	msg.Metadata.Set("event_data", fmt.Sprintf("%v", event))
 
-	// Publish to each handler's unique topic to ensure all handlers receive the event
+	// Publish to all 4 wildcard topic patterns - the router will route these to handlers
+	for _, topic := range wildcardTopics {
+		if err := d.pubSub.Publish(topic, msg); err != nil {
+			return fmt.Errorf("failed to publish message to wildcard topic %s: %w", topic, err)
+		}
+	}
+
+	// Also publish to each handler's specific topic to ensure they receive the event
 	for i := range handlers {
 		handlerTopic := fmt.Sprintf("%s_handler_%d", eventType, i+1)
 		if err := d.pubSub.Publish(handlerTopic, msg); err != nil {
@@ -124,14 +123,37 @@ func (d *WatermillEventDispatcher) dispatchSingle(ctx context.Context, envelope 
 		}
 	}
 
-	d.logger.Debug("Event dispatched to all handlers", watermill.LogFields{
-		"event_id":      envelope.EventID(),
-		"event_type":    eventType,
-		"aggregate_id":  event.AggregateID(),
-		"handler_count": len(handlers),
+	d.logger.Debug("Event dispatched to wildcard and handler topics", watermill.LogFields{
+		"event_id":        envelope.EventID(),
+		"event_type":      eventType,
+		"aggregate_id":    event.AggregateID(),
+		"wildcard_topics": wildcardTopics,
+		"handler_count":   len(handlers),
 	})
 
 	return nil
+}
+
+// generateWildcardTopics generates the 4 wildcard topic patterns for an event type
+// Event type format: "entityType.eventType" (e.g., "user.created")
+// Returns: ["entityType.*", "*.eventType", "*.*", "entityType.eventType"]
+func (d *WatermillEventDispatcher) generateWildcardTopics(eventType string) []string {
+	// Split the event type into entity type and event type
+	parts := strings.Split(eventType, ".")
+	if len(parts) != 2 {
+		// If the event type doesn't follow the expected format, return just the original
+		return []string{eventType}
+	}
+
+	entityType := parts[0]
+	eventTypeOnly := parts[1]
+
+	return []string{
+		fmt.Sprintf("%s.*", entityType),    // entityType.*
+		fmt.Sprintf("*.%s", eventTypeOnly), // *.eventType
+		"*.*",                              // *.*
+		eventType,                          // entityType.eventType
+	}
 }
 
 // Subscribe registers an event handler for specific event types
@@ -142,12 +164,13 @@ func (d *WatermillEventDispatcher) Subscribe(eventType string, handler domain.Ev
 	// Add handler to the registry
 	d.handlers[eventType] = append(d.handlers[eventType], handler)
 
-	// Create a unique handler name and topic for this subscription
+	// Create a unique handler name for this subscription
 	handlerIndex := len(d.handlers[eventType])
 	handlerName := fmt.Sprintf("%s_handler_%d", eventType, handlerIndex)
-	handlerTopic := fmt.Sprintf("%s_handler_%d", eventType, handlerIndex)
 
-	// Each handler subscribes to its own unique topic
+	// Subscribe to the specific event type topic
+	// Each handler gets its own unique topic to avoid conflicts
+	handlerTopic := fmt.Sprintf("%s_handler_%d", eventType, handlerIndex)
 	d.router.AddNoPublisherHandler(
 		handlerName,
 		handlerTopic,
@@ -158,9 +181,9 @@ func (d *WatermillEventDispatcher) Subscribe(eventType string, handler domain.Ev
 	)
 
 	d.logger.Info("Event handler subscribed", watermill.LogFields{
-		"event_type":    eventType,
-		"handler_name":  handlerName,
-		"handler_topic": handlerTopic,
+		"event_type":   eventType,
+		"handler_name": handlerName,
+		"topic":        handlerTopic,
 	})
 
 	return nil
@@ -168,14 +191,8 @@ func (d *WatermillEventDispatcher) Subscribe(eventType string, handler domain.Ev
 
 // handleMessage processes a Watermill message using the domain event handler
 func (d *WatermillEventDispatcher) handleMessage(msg *message.Message, handler domain.EventHandler) error {
-	// Deserialize the envelope from the message payload
-	var envelopeData map[string]interface{}
-	if err := json.Unmarshal(msg.Payload, &envelopeData); err != nil {
-		return fmt.Errorf("failed to deserialize envelope: %w", err)
-	}
-
-	// Reconstruct the envelope
-	envelope, err := d.reconstructEnvelope(envelopeData)
+	// Reconstruct the envelope from message metadata and payload
+	envelope, err := d.reconstructEnvelopeFromMessage(msg)
 	if err != nil {
 		return fmt.Errorf("failed to reconstruct envelope: %w", err)
 	}
@@ -199,6 +216,74 @@ func (d *WatermillEventDispatcher) handleMessage(msg *message.Message, handler d
 	return nil
 }
 
+// reconstructEnvelopeFromMessage reconstructs a domain.Envelope from watermill message metadata and payload
+func (d *WatermillEventDispatcher) reconstructEnvelopeFromMessage(msg *message.Message) (domain.Envelope, error) {
+	// Extract data from message metadata
+	eventType := msg.Metadata.Get("event_type")
+	aggregateID := msg.Metadata.Get("aggregate_id")
+	sequenceNoStr := msg.Metadata.Get("sequence_no")
+	occurredAtStr := msg.Metadata.Get("occurred_at")
+	timestampStr := msg.Metadata.Get("timestamp")
+	metadataStr := msg.Metadata.Get("metadata")
+
+	// Parse sequence number
+	var seqNo int64
+	if _, err := fmt.Sscanf(sequenceNoStr, "%d", &seqNo); err != nil {
+		return nil, fmt.Errorf("invalid sequence_no: %s", sequenceNoStr)
+	}
+
+	// Parse timestamps
+	occurredAt, err := time.Parse(time.RFC3339, occurredAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid occurred_at timestamp: %w", err)
+	}
+
+	timestamp, err := time.Parse(time.RFC3339, timestampStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %w", err)
+	}
+
+	// Parse metadata
+	var metadata map[string]interface{}
+	if metadataStr != "" {
+		if err := json.Unmarshal([]byte(metadataStr), &metadata); err != nil {
+			metadata = make(map[string]interface{})
+		}
+	} else {
+		metadata = make(map[string]interface{})
+	}
+
+	// Parse entity type and event type from the combined event type
+	entityType := "Generic"
+	eventTypeOnly := eventType
+	if dotIndex := strings.LastIndex(eventType, "."); dotIndex != -1 {
+		entityType = eventType[:dotIndex]
+		eventTypeOnly = eventType[dotIndex+1:]
+	}
+
+	// Create the event using the message payload
+	event := &domain.EntityEvent{
+		EntityType:  entityType,
+		Type:        eventTypeOnly,
+		AggregateId: aggregateID,
+		SequenceNum: seqNo,
+		CreatedTime: occurredAt,
+		UserId:      "",
+		AccountId:   "",
+		PayloadData: msg.Payload, // Use the message payload directly
+	}
+
+	// Create envelope
+	envelope := &eventEnvelope{
+		event:     event,
+		metadata:  metadata,
+		eventID:   msg.UUID,
+		timestamp: timestamp,
+	}
+
+	return envelope, nil
+}
+
 // reconstructEnvelope reconstructs a domain.Envelope from serialized data
 func (d *WatermillEventDispatcher) reconstructEnvelope(data map[string]interface{}) (domain.Envelope, error) {
 	eventID, ok := data["event_id"].(string)
@@ -216,9 +301,9 @@ func (d *WatermillEventDispatcher) reconstructEnvelope(data map[string]interface
 		return nil, fmt.Errorf("missing or invalid aggregate_id")
 	}
 
-	version, ok := data["version"].(float64) // JSON numbers are float64
+	sequenceNo, ok := data["sequence_no"].(float64) // JSON numbers are float64
 	if !ok {
-		return nil, fmt.Errorf("missing or invalid version")
+		return nil, fmt.Errorf("missing or invalid sequence_no")
 	}
 
 	// Extract metadata
@@ -237,15 +322,19 @@ func (d *WatermillEventDispatcher) reconstructEnvelope(data map[string]interface
 	}
 
 	// Create a generic event (in a real implementation, you'd use an event registry)
+	rawData, err := json.Marshal(data["event_data"])
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal event_data: %w", err)
+	}
 	event := &domain.EntityEvent{
 		EntityType:  entityType,
 		Type:        eventTypeOnly,
 		AggregateId: aggregateID,
-		SequenceNum: int64(version),
+		SequenceNum: int64(sequenceNo),
 		CreatedTime: time.Now(), // We don't have the original timestamp
 		UserId:      "",
 		AccountId:   "",
-		Data:        data["event_data"], // Preserve the original event data
+		PayloadData: rawData, // Preserve the original event data
 	}
 
 	// Create envelope

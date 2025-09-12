@@ -159,12 +159,7 @@ func (s *GormEventStore) Save(ctx context.Context, events []domain.Event) ([]dom
 
 // Load retrieves all events for an aggregate
 func (s *GormEventStore) Load(ctx context.Context, aggregateID string) ([]domain.Envelope, error) {
-	return s.LoadFromVersion(ctx, aggregateID, 0)
-}
-
-// LoadFromVersion retrieves events for an aggregate starting from a specific version
-func (s *GormEventStore) LoadFromVersion(ctx context.Context, aggregateID string, version int) ([]domain.Envelope, error) {
-	return s.LoadFromSequence(ctx, aggregateID, int64(version))
+	return s.LoadFromSequence(ctx, aggregateID, 0)
 }
 
 // LoadFromSequence retrieves events for an aggregate starting from a specific sequence number
@@ -206,7 +201,7 @@ func (s *GormEventStore) LoadFromSequence(ctx context.Context, aggregateID strin
 			AggregateId: record.AggregateID,
 			SequenceNum: record.SequenceNo,
 			CreatedTime: record.Timestamp,
-			Data:        record.Data,
+			PayloadData: []byte(record.Data),
 		}
 
 		envelope := &eventEnvelope{
@@ -220,4 +215,9 @@ func (s *GormEventStore) LoadFromSequence(ctx context.Context, aggregateID strin
 	}
 
 	return envelopes, nil
+}
+
+// LoadFromVersion retrieves events for an aggregate starting from a specific version (sequence number)
+func (s *GormEventStore) LoadFromVersion(ctx context.Context, aggregateID string, version int64) ([]domain.Envelope, error) {
+	return s.LoadFromSequence(ctx, aggregateID, version)
 }

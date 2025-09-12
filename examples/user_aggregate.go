@@ -1,6 +1,7 @@
 package examples
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 // User demonstrates how to use the Entity struct as a base for concrete aggregates.
 // It embeds the Entity struct to inherit event sourcing capabilities.
 type User struct {
-	domain.Entity
+	domain.BasicEntity
 	email    string
 	name     string
 	isActive bool
@@ -31,19 +32,25 @@ func NewUser(id, email, name string) (*User, error) {
 	}
 
 	user := &User{
-		Entity:   domain.NewEntity(id),
-		email:    email,
-		name:     name,
-		isActive: true,
+		BasicEntity: domain.NewEntity(id),
+		email:       email,
+		name:        name,
+		isActive:    true,
 	}
 
 	// Generate the initial domain event
-	event := UserCreatedEvent{
-		UserID:    id,
+	eventData := struct {
+		Email     string    `json:"email"`
+		Name      string    `json:"name"`
+		IsActive  bool      `json:"is_active"`
+		CreatedAt time.Time `json:"created_at"`
+	}{
 		Email:     email,
 		Name:      name,
+		IsActive:  true,
 		CreatedAt: time.Now(),
 	}
+	event := domain.NewEntityEvent("user", "created", id, "", "", eventData)
 
 	user.AddEvent(event)
 	return user, nil
@@ -80,12 +87,14 @@ func (u *User) ChangeEmail(newEmail string) error {
 	u.email = newEmail
 
 	// Generate domain event
-	event := UserEmailChangedEvent{
-		UserID:    u.ID(),
-		OldEmail:  oldEmail,
-		NewEmail:  newEmail,
-		ChangedAt: time.Now(),
+	eventData := struct {
+		OldEmail string `json:"old_email"`
+		NewEmail string `json:"new_email"`
+	}{
+		OldEmail: oldEmail,
+		NewEmail: newEmail,
 	}
+	event := domain.NewEntityEvent("user", "email_changed", u.ID(), "", "", eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -106,12 +115,14 @@ func (u *User) ChangeName(newName string) error {
 	u.name = newName
 
 	// Generate domain event
-	event := UserNameChangedEvent{
-		UserID:    u.ID(),
-		OldName:   oldName,
-		NewName:   newName,
-		ChangedAt: time.Now(),
+	eventData := struct {
+		OldName string `json:"old_name"`
+		NewName string `json:"new_name"`
+	}{
+		OldName: oldName,
+		NewName: newName,
 	}
+	event := domain.NewEntityEvent("user", "name_changed", u.ID(), "", "", eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -125,10 +136,14 @@ func (u *User) Deactivate() error {
 
 	u.isActive = false
 
-	event := UserDeactivatedEvent{
-		UserID:        u.ID(),
+	eventData := struct {
+		DeactivatedAt time.Time `json:"deactivated_at"`
+		Reason        string    `json:"reason"`
+	}{
 		DeactivatedAt: time.Now(),
+		Reason:        "user_requested",
 	}
+	event := domain.NewEntityEvent("user", "deactivated", u.ID(), "", "", eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -142,10 +157,14 @@ func (u *User) Activate() error {
 
 	u.isActive = true
 
-	event := UserActivatedEvent{
-		UserID:      u.ID(),
+	eventData := struct {
+		ActivatedAt time.Time `json:"activated_at"`
+		Reason      string    `json:"reason"`
+	}{
 		ActivatedAt: time.Now(),
+		Reason:      "admin_action",
 	}
+	event := domain.NewEntityEvent("user", "activated", u.ID(), "", "", eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -158,29 +177,55 @@ func (u *User) LoadFromHistory(events []domain.Event) {
 		u.applyEvent(event)
 	}
 
-	// Call the base implementation to update version and sequence
-	u.Entity.LoadFromHistory(events)
+	// Call the base implementation to update sequence number
+	u.BasicEntity.LoadFromHistory(events)
 }
 
 // applyEvent applies a single event to the user aggregate.
 // This is used during aggregate reconstruction from event history.
 func (u *User) applyEvent(event domain.Event) {
-	switch e := event.(type) {
-	case UserCreatedEvent:
-		u.email = e.Email
-		u.name = e.Name
-		u.isActive = true
+	// Cast to EntityEvent to access data
+	entityEvent, ok := event.(*domain.EntityEvent)
+	if !ok {
+		// Unknown event type - this is normal for forward compatibility
+		// The aggregate should gracefully handle unknown events
+		return
+	}
 
-	case UserEmailChangedEvent:
-		u.email = e.NewEmail
+	switch entityEvent.Type {
+	case "created":
+		// For created events, the payload contains the full user data
+		var userData User
+		if err := json.Unmarshal(entityEvent.Payload(), &userData); err == nil {
+			u.email = userData.email
+			u.name = userData.name
+			u.isActive = userData.isActive
+		}
 
-	case UserNameChangedEvent:
-		u.name = e.NewName
+	case "email_changed":
+		// For email changed events, the payload contains the change data
+		var changeData struct {
+			OldEmail string `json:"old_email"`
+			NewEmail string `json:"new_email"`
+		}
+		if err := json.Unmarshal(entityEvent.Payload(), &changeData); err == nil {
+			u.email = changeData.NewEmail
+		}
 
-	case UserDeactivatedEvent:
+	case "name_changed":
+		// For name changed events, the payload contains the change data
+		var changeData struct {
+			OldName string `json:"old_name"`
+			NewName string `json:"new_name"`
+		}
+		if err := json.Unmarshal(entityEvent.Payload(), &changeData); err == nil {
+			u.name = changeData.NewName
+		}
+
+	case "deactivated":
 		u.isActive = false
 
-	case UserActivatedEvent:
+	case "activated":
 		u.isActive = true
 
 	default:
@@ -189,65 +234,4 @@ func (u *User) applyEvent(event domain.Event) {
 	}
 }
 
-// Domain Events
-
-// UserCreatedEvent represents the creation of a new user
-type UserCreatedEvent struct {
-	UserID    string    `json:"user_id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func (e UserCreatedEvent) EventType() string     { return "UserCreated" }
-func (e UserCreatedEvent) AggregateID() string   { return e.UserID }
-func (e UserCreatedEvent) Version() int          { return 1 }
-func (e UserCreatedEvent) OccurredAt() time.Time { return e.CreatedAt }
-
-// UserEmailChangedEvent represents a change in user's email
-type UserEmailChangedEvent struct {
-	UserID    string    `json:"user_id"`
-	OldEmail  string    `json:"old_email"`
-	NewEmail  string    `json:"new_email"`
-	ChangedAt time.Time `json:"changed_at"`
-}
-
-func (e UserEmailChangedEvent) EventType() string     { return "UserEmailChanged" }
-func (e UserEmailChangedEvent) AggregateID() string   { return e.UserID }
-func (e UserEmailChangedEvent) Version() int          { return 1 }
-func (e UserEmailChangedEvent) OccurredAt() time.Time { return e.ChangedAt }
-
-// UserNameChangedEvent represents a change in user's name
-type UserNameChangedEvent struct {
-	UserID    string    `json:"user_id"`
-	OldName   string    `json:"old_name"`
-	NewName   string    `json:"new_name"`
-	ChangedAt time.Time `json:"changed_at"`
-}
-
-func (e UserNameChangedEvent) EventType() string     { return "UserNameChanged" }
-func (e UserNameChangedEvent) AggregateID() string   { return e.UserID }
-func (e UserNameChangedEvent) Version() int          { return 1 }
-func (e UserNameChangedEvent) OccurredAt() time.Time { return e.ChangedAt }
-
-// UserDeactivatedEvent represents user deactivation
-type UserDeactivatedEvent struct {
-	UserID        string    `json:"user_id"`
-	DeactivatedAt time.Time `json:"deactivated_at"`
-}
-
-func (e UserDeactivatedEvent) EventType() string     { return "UserDeactivated" }
-func (e UserDeactivatedEvent) AggregateID() string   { return e.UserID }
-func (e UserDeactivatedEvent) Version() int          { return 1 }
-func (e UserDeactivatedEvent) OccurredAt() time.Time { return e.DeactivatedAt }
-
-// UserActivatedEvent represents user activation
-type UserActivatedEvent struct {
-	UserID      string    `json:"user_id"`
-	ActivatedAt time.Time `json:"activated_at"`
-}
-
-func (e UserActivatedEvent) EventType() string     { return "UserActivated" }
-func (e UserActivatedEvent) AggregateID() string   { return e.UserID }
-func (e UserActivatedEvent) Version() int          { return 1 }
-func (e UserActivatedEvent) OccurredAt() time.Time { return e.ActivatedAt }
+// Domain Events - Using EntityEvent for all events

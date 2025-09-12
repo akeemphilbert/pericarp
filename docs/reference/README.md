@@ -75,9 +75,7 @@ Example configurations for different scenarios:
 - [`pkg/infrastructure`](packages/infrastructure.md) - Infrastructure implementations
 
 ### Internal Packages
-- [`internal/domain`](packages/internal-domain.md) - Example domain implementations
-- [`internal/application`](packages/internal-application.md) - Example application handlers
-- [`internal/infrastructure`](packages/internal-infrastructure.md) - Example infrastructure
+- [`examples/`](packages/examples.md) - Example implementations and usage patterns
 
 ## Testing Reference
 
@@ -123,16 +121,20 @@ Guide for migrating between versions:
 ### Common Patterns
 ```go
 // Create aggregate
-user, err := NewUser(email, name)
+user := new(User).WithEmail(email, name)
 
 // Handle command
-func (h *Handler) Handle(ctx context.Context, log Logger, p Payload[Cmd]) (Response[struct{}], error)
+func (h *Handler) Handle(ctx context.Context, logger Logger, eventStore EventStore, eventDispatcher EventDispatcher, payload Payload[Command]) (Response[any], error)
+
+// Handle query
+func (h *Handler) Handle(ctx context.Context, logger Logger, query Query) (Result, error)
 
 // Register handler
-bus.Register("CommandType", handler, middleware...)
+commandBus.Register("CommandType", handler)
+queryBus.Register("QueryType", handler)
 
 // Configure with Fx
-fx.New(pericarp.Module, yourModule)
+fx.New(pkg.Module, yourModule)
 ```
 
 ### Configuration Template

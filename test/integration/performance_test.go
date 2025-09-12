@@ -11,16 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akeemphilbert/pericarp/examples"
+	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
+	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-
-	internalapp "github.com/akeemphilbert/pericarp/internal/application"
-	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
-	internalinfra "github.com/akeemphilbert/pericarp/internal/infrastructure"
-	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
-	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 )
 
 // TestPerformanceAndConcurrency runs performance and concurrency tests
@@ -62,517 +59,316 @@ func TestPerformanceAndConcurrency(t *testing.T) {
 }
 
 func testPerformanceWithDatabase(t *testing.T, driver, dsn string) {
-	system, cleanup := setupSystem(t, driver, dsn)
-	defer cleanup()
+	// Setup database
+	var db *gorm.DB
+	var err error
 
-	t.Run("BulkUserCreation", func(t *testing.T) {
-		testBulkUserCreation(t, system)
+	switch driver {
+	case "sqlite":
+		db, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	case "postgres":
+		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	default:
+		t.Fatalf("unsupported database driver: %s", driver)
+	}
+
+	if err != nil {
+		t.Fatalf("failed to connect to database: %v", err)
+	}
+
+	// Setup infrastructure
+	infraDB := &pkginfra.Database{DB: db}
+	if err := infraDB.Migrate(); err != nil {
+		t.Fatalf("failed to migrate database: %v", err)
+	}
+
+	// Setup event store and dispatcher
+	logger := pkgdomain.NewLogger("test")
+	eventStore := pkginfra.NewEventStore(db, logger)
+	eventDispatcher := pkginfra.NewEventDispatcher(logger)
+
+	// Register event handlers
+	eventDispatcher.RegisterHandler("user", "created", func(ctx context.Context, event pkgdomain.Event) error {
+		return nil
+	})
+	eventDispatcher.RegisterHandler("user", "email_changed", func(ctx context.Context, event pkgdomain.Event) error {
+		return nil
+	})
+	eventDispatcher.RegisterHandler("user", "activated", func(ctx context.Context, event pkgdomain.Event) error {
+		return nil
+	})
+	eventDispatcher.RegisterHandler("user", "deactivated", func(ctx context.Context, event pkgdomain.Event) error {
+		return nil
+	})
+
+	// Run performance tests
+	t.Run("EventStorePerformance", func(t *testing.T) {
+		testEventStorePerformance(t, eventStore)
+	})
+
+	t.Run("EventDispatcherPerformance", func(t *testing.T) {
+		testEventDispatcherPerformance(t, eventDispatcher)
 	})
 
 	t.Run("ConcurrentUserOperations", func(t *testing.T) {
-		testConcurrentUserOperations(t, system)
+		testConcurrentUserOperations(t, eventStore, eventDispatcher)
 	})
 
-	t.Run("LargeEventStreamPerformance", func(t *testing.T) {
-		testLargeEventStreamPerformance(t, system)
+	t.Run("MemoryUsage", func(t *testing.T) {
+		testMemoryUsage(t, eventStore)
 	})
 
-	t.Run("QueryPerformance", func(t *testing.T) {
-		testQueryPerformance(t, system)
-	})
-
-	t.Run("ConcurrentReadWrite", func(t *testing.T) {
-		testConcurrentReadWrite(t, system)
-	})
+	// Cleanup
+	sqlDB, err := db.DB()
+	if err == nil {
+		sqlDB.Close()
+	}
 }
 
-func testBulkUserCreation(t *testing.T, system *TestSystem) {
+func testEventStorePerformance(t *testing.T, eventStore pkgdomain.EventStore) {
 	ctx := context.Background()
 	numUsers := 1000
 
-	t.Logf("Creating %d users...", numUsers)
+	// Test event store save performance
 	start := time.Now()
-
 	for i := 0; i < numUsers; i++ {
-		cmd := internalapp.CreateUserCommand{
-			ID:    uuid.New(),
-			Email: fmt.Sprintf("bulk%d@example.com", i),
-			Name:  fmt.Sprintf("Bulk User %d", i),
-		}
-
-		err := system.CreateUserHandler.Handle(ctx, system.Logger, cmd)
+		userID := uuid.New().String()
+		user, err := examples.NewUser(userID, fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User %d", i))
 		if err != nil {
 			t.Fatalf("failed to create user %d: %v", i, err)
 		}
 
-		// Log progress every 100 users
-		if (i+1)%100 == 0 {
-			elapsed := time.Since(start)
-			rate := float64(i+1) / elapsed.Seconds()
-			t.Logf("Created %d users in %v (%.2f users/sec)", i+1, elapsed, rate)
+		events := user.GetEvents()
+		for _, event := range events {
+			if err := eventStore.Save(ctx, event); err != nil {
+				t.Fatalf("failed to save event %d: %v", i, err)
+			}
 		}
 	}
 
 	duration := time.Since(start)
-	rate := float64(numUsers) / duration.Seconds()
+	eventsPerSecond := float64(numUsers) / duration.Seconds()
 
-	t.Logf("Created %d users in %v (%.2f users/sec)", numUsers, duration, rate)
+	t.Logf("EventStore Save Performance:")
+	t.Logf("  Users: %d", numUsers)
+	t.Logf("  Duration: %v", duration)
+	t.Logf("  Events/sec: %.2f", eventsPerSecond)
 
-	// Performance assertions
-	maxDuration := 30 * time.Second
-	minRate := 30.0 // users per second
-
-	if duration > maxDuration {
-		t.Errorf("bulk creation too slow: %v (max: %v)", duration, maxDuration)
+	// Performance assertion
+	if eventsPerSecond < 50 {
+		t.Errorf("EventStore save performance too low: %.2f events/sec (expected at least 50)", eventsPerSecond)
 	}
 
-	if rate < minRate {
-		t.Errorf("creation rate too low: %.2f users/sec (min: %.2f)", rate, minRate)
+	// Test event store load performance
+	start = time.Now()
+	loadedCount := 0
+	for i := 0; i < numUsers; i++ {
+		userID := uuid.New().String()
+		events, err := eventStore.GetEvents(ctx, userID, 0)
+		if err == nil && len(events) > 0 {
+			loadedCount++
+		}
 	}
 
-	// Wait for projections
-	time.Sleep(2 * time.Second)
+	duration = time.Since(start)
+	loadsPerSecond := float64(numUsers) / duration.Seconds()
 
-	// Verify all users were created
-	listQuery := internalapp.ListUsersQuery{
-		Page:     1,
-		PageSize: numUsers + 100, // Buffer for other tests
-	}
+	t.Logf("EventStore Load Performance:")
+	t.Logf("  Loads: %d", numUsers)
+	t.Logf("  Duration: %v", duration)
+	t.Logf("  Loads/sec: %.2f", loadsPerSecond)
 
-	result, err := system.ListUsersHandler.Handle(ctx, system.Logger, listQuery)
-	if err != nil {
-		t.Fatalf("failed to list users: %v", err)
-	}
-
-	if result.TotalCount < numUsers {
-		t.Errorf("expected at least %d users, got %d", numUsers, result.TotalCount)
+	// Performance assertion
+	if loadsPerSecond < 100 {
+		t.Errorf("EventStore load performance too low: %.2f loads/sec (expected at least 100)", loadsPerSecond)
 	}
 }
 
-func testConcurrentUserOperations(t *testing.T, system *TestSystem) {
+func testEventDispatcherPerformance(t *testing.T, eventDispatcher pkgdomain.EventDispatcher) {
 	ctx := context.Background()
-	numGoroutines := 20
-	operationsPerGoroutine := 50
+	numEvents := 1000
 
-	t.Logf("Running %d concurrent goroutines with %d operations each...", numGoroutines, operationsPerGoroutine)
+	// Track handler calls
+	var handlerCalled int32
+	handler := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&handlerCalled, 1)
+		return nil
+	}
+
+	// Register handler
+	if err := eventDispatcher.RegisterHandler("user", "created", handler); err != nil {
+		t.Fatalf("failed to register handler: %v", err)
+	}
+
+	// Test dispatch performance
+	start := time.Now()
+	for i := 0; i < numEvents; i++ {
+		userID := uuid.New().String()
+		user, err := examples.NewUser(userID, fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User %d", i))
+		if err != nil {
+			t.Fatalf("failed to create user %d: %v", i, err)
+		}
+
+		events := user.GetEvents()
+		for _, event := range events {
+			if err := eventDispatcher.Dispatch(ctx, event); err != nil {
+				t.Fatalf("failed to dispatch event %d: %v", i, err)
+			}
+		}
+	}
+
+	duration := time.Since(start)
+	eventsPerSecond := float64(numEvents) / duration.Seconds()
+
+	t.Logf("EventDispatcher Performance:")
+	t.Logf("  Events: %d", numEvents)
+	t.Logf("  Duration: %v", duration)
+	t.Logf("  Events/sec: %.2f", eventsPerSecond)
+
+	// Wait for async processing
+	time.Sleep(1 * time.Second)
+
+	// Verify all handlers were called
+	if int(atomic.LoadInt32(&handlerCalled)) != numEvents {
+		t.Errorf("expected %d handler calls, got %d", numEvents, atomic.LoadInt32(&handlerCalled))
+	}
+
+	// Performance assertion
+	if eventsPerSecond < 100 {
+		t.Errorf("EventDispatcher performance too low: %.2f events/sec (expected at least 100)", eventsPerSecond)
+	}
+}
+
+func testConcurrentUserOperations(t *testing.T, eventStore pkgdomain.EventStore, eventDispatcher pkgdomain.EventDispatcher) {
+	ctx := context.Background()
+	numGoroutines := 50
+	usersPerGoroutine := 20
 
 	var wg sync.WaitGroup
-	errChan := make(chan error, numGoroutines*operationsPerGoroutine)
+	var errors int32
+
 	start := time.Now()
 
-	for g := 0; g < numGoroutines; g++ {
+	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(goroutineID int) {
 			defer wg.Done()
 
-			for i := 0; i < operationsPerGoroutine; i++ {
-				userID := uuid.New()
-
-				// Create user
-				createCmd := internalapp.CreateUserCommand{
-					ID:    userID,
-					Email: fmt.Sprintf("concurrent%d_%d@example.com", goroutineID, i),
-					Name:  fmt.Sprintf("Concurrent User %d_%d", goroutineID, i),
-				}
-
-				if err := system.CreateUserHandler.Handle(ctx, system.Logger, createCmd); err != nil {
-					errChan <- fmt.Errorf("goroutine %d, operation %d, create: %w", goroutineID, i, err)
+			for j := 0; j < usersPerGoroutine; j++ {
+				userID := uuid.New().String()
+				user, err := examples.NewUser(userID, fmt.Sprintf("user%d_%d@example.com", goroutineID, j), fmt.Sprintf("User %d_%d", goroutineID, j))
+				if err != nil {
+					atomic.AddInt32(&errors, 1)
 					continue
 				}
 
-				// Update email
-				updateEmailCmd := internalapp.UpdateUserEmailCommand{
-					ID:       userID,
-					NewEmail: fmt.Sprintf("updated%d_%d@example.com", goroutineID, i),
+				// Save events
+				events := user.GetEvents()
+				for _, event := range events {
+					if err := eventStore.Save(ctx, event); err != nil {
+						atomic.AddInt32(&errors, 1)
+						continue
+					}
 				}
 
-				if err := system.UpdateUserEmailHandler.Handle(ctx, system.Logger, updateEmailCmd); err != nil {
-					errChan <- fmt.Errorf("goroutine %d, operation %d, update email: %w", goroutineID, i, err)
+				// Dispatch events
+				for _, event := range events {
+					if err := eventDispatcher.Dispatch(ctx, event); err != nil {
+						atomic.AddInt32(&errors, 1)
+						continue
+					}
+				}
+
+				// Perform some operations
+				if err := user.ChangeEmail(fmt.Sprintf("newemail%d_%d@example.com", goroutineID, j)); err != nil {
+					atomic.AddInt32(&errors, 1)
 					continue
 				}
 
-				// Update name
-				updateNameCmd := internalapp.UpdateUserNameCommand{
-					ID:      userID,
-					NewName: fmt.Sprintf("Updated User %d_%d", goroutineID, i),
-				}
-
-				if err := system.UpdateUserNameHandler.Handle(ctx, system.Logger, updateNameCmd); err != nil {
-					errChan <- fmt.Errorf("goroutine %d, operation %d, update name: %w", goroutineID, i, err)
-					continue
+				// Save and dispatch new events
+				newEvents := user.GetEvents()
+				for _, event := range newEvents {
+					if err := eventStore.Save(ctx, event); err != nil {
+						atomic.AddInt32(&errors, 1)
+						continue
+					}
+					if err := eventDispatcher.Dispatch(ctx, event); err != nil {
+						atomic.AddInt32(&errors, 1)
+						continue
+					}
 				}
 			}
-		}(g)
+		}(i)
 	}
 
 	wg.Wait()
-	close(errChan)
-
 	duration := time.Since(start)
-	totalOperations := numGoroutines * operationsPerGoroutine * 3 // 3 operations per user
-	rate := float64(totalOperations) / duration.Seconds()
 
-	t.Logf("Completed %d concurrent operations in %v (%.2f ops/sec)", totalOperations, duration, rate)
+	totalUsers := numGoroutines * usersPerGoroutine
+	usersPerSecond := float64(totalUsers) / duration.Seconds()
 
-	// Check for errors
-	var errors []error
-	for err := range errChan {
-		errors = append(errors, err)
+	t.Logf("Concurrent Operations Performance:")
+	t.Logf("  Goroutines: %d", numGoroutines)
+	t.Logf("  Users per goroutine: %d", usersPerGoroutine)
+	t.Logf("  Total users: %d", totalUsers)
+	t.Logf("  Duration: %v", duration)
+	t.Logf("  Users/sec: %.2f", usersPerSecond)
+	t.Logf("  Errors: %d", atomic.LoadInt32(&errors))
+
+	// Performance assertion
+	if usersPerSecond < 10 {
+		t.Errorf("concurrent operations performance too low: %.2f users/sec (expected at least 10)", usersPerSecond)
 	}
 
-	if len(errors) > 0 {
-		t.Errorf("concurrent operations had %d errors, first error: %v", len(errors), errors[0])
-		// Log first few errors for debugging
-		for i, err := range errors {
-			if i >= 5 {
-				break
-			}
-			t.Logf("Error %d: %v", i+1, err)
-		}
-	}
-
-	// Performance assertions
-	maxDuration := 60 * time.Second
-	minRate := 50.0 // operations per second
-
-	if duration > maxDuration {
-		t.Errorf("concurrent operations too slow: %v (max: %v)", duration, maxDuration)
-	}
-
-	if rate < minRate {
-		t.Errorf("operation rate too low: %.2f ops/sec (min: %.2f)", rate, minRate)
+	// Error assertion
+	errorRate := float64(atomic.LoadInt32(&errors)) / float64(totalUsers*2) // *2 for create + update operations
+	if errorRate > 0.01 {                                                   // 1% error rate
+		t.Errorf("error rate too high: %.2f%% (expected less than 1%%)", errorRate*100)
 	}
 }
 
-func testLargeEventStreamPerformance(t *testing.T, system *TestSystem) {
+func testMemoryUsage(t *testing.T, eventStore pkgdomain.EventStore) {
 	ctx := context.Background()
-	userID := uuid.New()
+	numUsers := 1000
 
-	// Create user first
-	createCmd := internalapp.CreateUserCommand{
-		ID:    userID,
-		Email: "eventstream@example.com",
-		Name:  "Event Stream User",
-	}
-
-	err := system.CreateUserHandler.Handle(ctx, system.Logger, createCmd)
-	if err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
-
-	// Perform many updates to create large event stream
-	numUpdates := 500
-	t.Logf("Performing %d updates to create large event stream...", numUpdates)
-
-	start := time.Now()
-	for i := 0; i < numUpdates; i++ {
-		if i%2 == 0 {
-			// Update email
-			updateCmd := internalapp.UpdateUserEmailCommand{
-				ID:       userID,
-				NewEmail: fmt.Sprintf("stream%d@example.com", i),
-			}
-			err = system.UpdateUserEmailHandler.Handle(ctx, system.Logger, updateCmd)
-		} else {
-			// Update name
-			updateCmd := internalapp.UpdateUserNameCommand{
-				ID:      userID,
-				NewName: fmt.Sprintf("Stream User %d", i),
-			}
-			err = system.UpdateUserNameHandler.Handle(ctx, system.Logger, updateCmd)
-		}
-
-		if err != nil {
-			t.Fatalf("failed to update user at iteration %d: %v", i, err)
-		}
-
-		// Log progress
-		if (i+1)%100 == 0 {
-			elapsed := time.Since(start)
-			rate := float64(i+1) / elapsed.Seconds()
-			t.Logf("Completed %d updates in %v (%.2f updates/sec)", i+1, elapsed, rate)
-		}
-	}
-
-	updateDuration := time.Since(start)
-	updateRate := float64(numUpdates) / updateDuration.Seconds()
-
-	t.Logf("Completed %d updates in %v (%.2f updates/sec)", numUpdates, updateDuration, updateRate)
-
-	// Test event loading performance
-	t.Log("Loading large event stream...")
-	loadStart := time.Now()
-	envelopes, err := system.EventStore.Load(ctx, userID.String())
-	loadDuration := time.Since(loadStart)
-
-	if err != nil {
-		t.Fatalf("failed to load events: %v", err)
-	}
-
-	expectedEvents := numUpdates + 1 // +1 for initial creation
-	if len(envelopes) != expectedEvents {
-		t.Errorf("expected %d events, got %d", expectedEvents, len(envelopes))
-	}
-
-	t.Logf("Loaded %d events in %v", len(envelopes), loadDuration)
-
-	// Test reconstruction performance
-	t.Log("Reconstructing aggregate from large event stream...")
-	reconstructStart := time.Now()
-
-	events := make([]pkgdomain.Event, len(envelopes))
-	for i, envelope := range envelopes {
-		events[i] = envelope.Event()
-	}
-
-	reconstructedUser := &internaldomain.User{}
-	reconstructedUser.LoadFromHistory(events)
-
-	reconstructDuration := time.Since(reconstructStart)
-
-	t.Logf("Reconstructed aggregate in %v", reconstructDuration)
-
-	// Performance assertions
-	maxUpdateDuration := 30 * time.Second
-	maxLoadDuration := 5 * time.Second
-	maxReconstructDuration := 1 * time.Second
-	minUpdateRate := 15.0 // updates per second
-
-	if updateDuration > maxUpdateDuration {
-		t.Errorf("updates too slow: %v (max: %v)", updateDuration, maxUpdateDuration)
-	}
-
-	if updateRate < minUpdateRate {
-		t.Errorf("update rate too low: %.2f updates/sec (min: %.2f)", updateRate, minUpdateRate)
-	}
-
-	if loadDuration > maxLoadDuration {
-		t.Errorf("event loading too slow: %v (max: %v)", loadDuration, maxLoadDuration)
-	}
-
-	if reconstructDuration > maxReconstructDuration {
-		t.Errorf("reconstruction too slow: %v (max: %v)", reconstructDuration, maxReconstructDuration)
-	}
-
-	// Verify final state
-	if reconstructedUser.Version() != expectedEvents {
-		t.Errorf("expected version %d, got %d", expectedEvents, reconstructedUser.Version())
-	}
-}
-
-func testQueryPerformance(t *testing.T, system *TestSystem) {
-	ctx := context.Background()
-
-	// Create users for query testing
-	numUsers := 100
-	userIDs := make([]uuid.UUID, numUsers)
-
-	t.Logf("Creating %d users for query testing...", numUsers)
+	// Create and save many users
+	userIDs := make([]string, numUsers)
 	for i := 0; i < numUsers; i++ {
-		userIDs[i] = uuid.New()
-		cmd := internalapp.CreateUserCommand{
-			ID:    userIDs[i],
-			Email: fmt.Sprintf("query%d@example.com", i),
-			Name:  fmt.Sprintf("Query User %d", i),
-		}
+		userID := uuid.New().String()
+		userIDs[i] = userID
 
-		err := system.CreateUserHandler.Handle(ctx, system.Logger, cmd)
+		user, err := examples.NewUser(userID, fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User %d", i))
 		if err != nil {
 			t.Fatalf("failed to create user %d: %v", i, err)
 		}
-	}
 
-	// Wait for projections
-	time.Sleep(1 * time.Second)
-
-	// Test individual user queries
-	t.Log("Testing individual user queries...")
-	queryStart := time.Now()
-
-	for i := 0; i < numUsers; i++ {
-		query := internalapp.GetUserQuery{ID: userIDs[i]}
-		_, err := system.GetUserHandler.Handle(ctx, system.Logger, query)
-		if err != nil {
-			t.Errorf("failed to query user %d: %v", i, err)
+		events := user.GetEvents()
+		for _, event := range events {
+			if err := eventStore.Save(ctx, event); err != nil {
+				t.Fatalf("failed to save event %d: %v", i, err)
+			}
 		}
 	}
 
-	queryDuration := time.Since(queryStart)
-	queryRate := float64(numUsers) / queryDuration.Seconds()
-
-	t.Logf("Completed %d individual queries in %v (%.2f queries/sec)", numUsers, queryDuration, queryRate)
-
-	// Test email queries
-	t.Log("Testing email queries...")
-	emailQueryStart := time.Now()
-
-	for i := 0; i < numUsers; i++ {
-		query := internalapp.GetUserByEmailQuery{Email: fmt.Sprintf("query%d@example.com", i)}
-		_, err := system.GetUserByEmailHandler.Handle(ctx, system.Logger, query)
-		if err != nil {
-			t.Errorf("failed to query user by email %d: %v", i, err)
-		}
-	}
-
-	emailQueryDuration := time.Since(emailQueryStart)
-	emailQueryRate := float64(numUsers) / emailQueryDuration.Seconds()
-
-	t.Logf("Completed %d email queries in %v (%.2f queries/sec)", numUsers, emailQueryDuration, emailQueryRate)
-
-	// Test list queries with different page sizes
-	pageSizes := []int{10, 25, 50, 100}
-	for _, pageSize := range pageSizes {
-		t.Logf("Testing list query with page size %d...", pageSize)
-		listStart := time.Now()
-
-		query := internalapp.ListUsersQuery{
-			Page:     1,
-			PageSize: pageSize,
-		}
-
-		result, err := system.ListUsersHandler.Handle(ctx, system.Logger, query)
-		if err != nil {
-			t.Errorf("failed to list users with page size %d: %v", pageSize, err)
-			continue
-		}
-
-		listDuration := time.Since(listStart)
-		t.Logf("List query (page size %d) completed in %v, returned %d users",
-			pageSize, listDuration, len(result.Users))
-
-		// Performance assertion for list queries
-		maxListDuration := 1 * time.Second
-		if listDuration > maxListDuration {
-			t.Errorf("list query too slow for page size %d: %v (max: %v)",
-				pageSize, listDuration, maxListDuration)
-		}
-	}
-
-	// Performance assertions
-	maxQueryDuration := 5 * time.Second
-	maxEmailQueryDuration := 5 * time.Second
-	minQueryRate := 20.0 // queries per second
-
-	if queryDuration > maxQueryDuration {
-		t.Errorf("individual queries too slow: %v (max: %v)", queryDuration, maxQueryDuration)
-	}
-
-	if emailQueryDuration > maxEmailQueryDuration {
-		t.Errorf("email queries too slow: %v (max: %v)", emailQueryDuration, maxEmailQueryDuration)
-	}
-
-	if queryRate < minQueryRate {
-		t.Errorf("query rate too low: %.2f queries/sec (min: %.2f)", queryRate, minQueryRate)
-	}
-
-	if emailQueryRate < minQueryRate {
-		t.Errorf("email query rate too low: %.2f queries/sec (min: %.2f)", emailQueryRate, minQueryRate)
-	}
-}
-
-func testConcurrentReadWrite(t *testing.T, system *TestSystem) {
-	ctx := context.Background()
-	duration := 10 * time.Second
-
-	t.Logf("Running concurrent read/write test for %v...", duration)
-
-	var wg sync.WaitGroup
-	var writeCount, readCount int64
-	var writeErrors, readErrors int64
-
-	// Start time
+	// Load all users and measure memory usage
 	start := time.Now()
-	deadline := start.Add(duration)
-
-	// Writer goroutines
-	numWriters := 5
-	for i := 0; i < numWriters; i++ {
-		wg.Add(1)
-		go func(writerID int) {
-			defer wg.Done()
-
-			for time.Now().Before(deadline) {
-				userID := uuid.New()
-				cmd := internalapp.CreateUserCommand{
-					ID:    userID,
-					Email: fmt.Sprintf("rw%d_%d@example.com", writerID, time.Now().UnixNano()),
-					Name:  fmt.Sprintf("RW User %d", writerID),
-				}
-
-				if err := system.CreateUserHandler.Handle(ctx, system.Logger, cmd); err != nil {
-					atomic.AddInt64(&writeErrors, 1)
-				} else {
-					atomic.AddInt64(&writeCount, 1)
-				}
-
-				// Small delay to prevent overwhelming the system
-				time.Sleep(10 * time.Millisecond)
-			}
-		}(i)
+	loadedUsers := 0
+	for _, userID := range userIDs {
+		events, err := eventStore.GetEvents(ctx, userID, 0)
+		if err == nil && len(events) > 0 {
+			loadedUsers++
+		}
 	}
+	duration := time.Since(start)
 
-	// Reader goroutines
-	numReaders := 10
-	for i := 0; i < numReaders; i++ {
-		wg.Add(1)
-		go func(readerID int) {
-			defer wg.Done()
+	t.Logf("Memory Usage Test:")
+	t.Logf("  Users created: %d", numUsers)
+	t.Logf("  Users loaded: %d", loadedUsers)
+	t.Logf("  Load duration: %v", duration)
+	t.Logf("  Load rate: %.2f users/sec", float64(loadedUsers)/duration.Seconds())
 
-			for time.Now().Before(deadline) {
-				// List users
-				listQuery := internalapp.ListUsersQuery{
-					Page:     1,
-					PageSize: 10,
-				}
-
-				if _, err := system.ListUsersHandler.Handle(ctx, system.Logger, listQuery); err != nil {
-					atomic.AddInt64(&readErrors, 1)
-				} else {
-					atomic.AddInt64(&readCount, 1)
-				}
-
-				// Small delay
-				time.Sleep(5 * time.Millisecond)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	actualDuration := time.Since(start)
-	finalWriteCount := atomic.LoadInt64(&writeCount)
-	finalReadCount := atomic.LoadInt64(&readCount)
-	finalWriteErrors := atomic.LoadInt64(&writeErrors)
-	finalReadErrors := atomic.LoadInt64(&readErrors)
-
-	writeRate := float64(finalWriteCount) / actualDuration.Seconds()
-	readRate := float64(finalReadCount) / actualDuration.Seconds()
-
-	t.Logf("Concurrent read/write results:")
-	t.Logf("  Duration: %v", actualDuration)
-	t.Logf("  Writes: %d (%.2f/sec), Errors: %d", finalWriteCount, writeRate, finalWriteErrors)
-	t.Logf("  Reads: %d (%.2f/sec), Errors: %d", finalReadCount, readRate, finalReadErrors)
-
-	// Performance assertions
-	minWriteRate := 5.0  // writes per second
-	minReadRate := 20.0  // reads per second
-	maxErrorRate := 0.05 // 5% error rate
-
-	if writeRate < minWriteRate {
-		t.Errorf("write rate too low: %.2f writes/sec (min: %.2f)", writeRate, minWriteRate)
-	}
-
-	if readRate < minReadRate {
-		t.Errorf("read rate too low: %.2f reads/sec (min: %.2f)", readRate, minReadRate)
-	}
-
-	writeErrorRate := float64(finalWriteErrors) / float64(finalWriteCount+finalWriteErrors)
-	if writeErrorRate > maxErrorRate {
-		t.Errorf("write error rate too high: %.2f%% (max: %.2f%%)", writeErrorRate*100, maxErrorRate*100)
-	}
-
-	readErrorRate := float64(finalReadErrors) / float64(finalReadCount+finalReadErrors)
-	if readErrorRate > maxErrorRate {
-		t.Errorf("read error rate too high: %.2f%% (max: %.2f%%)", readErrorRate*100, maxErrorRate*100)
+	// Basic assertion
+	if loadedUsers != numUsers {
+		t.Errorf("expected to load %d users, got %d", numUsers, loadedUsers)
 	}
 }

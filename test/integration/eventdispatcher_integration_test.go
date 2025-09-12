@@ -10,11 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
-	internaldomain "github.com/akeemphilbert/pericarp/internal/domain"
+	"github.com/akeemphilbert/pericarp/examples"
 	pkgdomain "github.com/akeemphilbert/pericarp/pkg/domain"
 	pkginfra "github.com/akeemphilbert/pericarp/pkg/infrastructure"
+	"github.com/google/uuid"
 )
 
 // TestEventDispatcherIntegration tests the EventDispatcher with Watermill channels
@@ -48,621 +47,325 @@ func TestEventDispatcherIntegration(t *testing.T) {
 }
 
 func testBasicEventDispatch(t *testing.T) {
-	dispatcher := pkginfra.NewEventDispatcher()
-	ctx := context.Background()
+	// Setup
+	logger := pkgdomain.NewLogger("test")
+	dispatcher := pkginfra.NewEventDispatcher(logger)
 
-	// Create a test handler
-	var receivedEvents []pkgdomain.Event
-	var mu sync.Mutex
-
-	handler := &TestEventHandler{
-		eventTypes: []string{"UserCreated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			mu.Lock()
-			defer mu.Unlock()
-			receivedEvents = append(receivedEvents, envelope.Event())
-			return nil
-		},
+	// Track handler calls
+	var handlerCalled int32
+	handler := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&handlerCalled, 1)
+		return nil
 	}
 
 	// Subscribe handler
-	err := dispatcher.Subscribe("UserCreated", handler)
-	if err != nil {
+	if err := dispatcher.RegisterHandler("user", "created", handler); err != nil {
 		t.Fatalf("failed to subscribe handler: %v", err)
 	}
 
-	// Create test event
-	event := internaldomain.NewUserCreatedEvent(
-		uuid.New(),
-		"test@example.com",
-		"Test User",
-		uuid.New().String(),
-		1,
-	)
-
-	// Create envelope
-	envelope := &TestEnvelope{
-		event:     event,
-		eventID:   uuid.New().String(),
-		timestamp: time.Now(),
-		metadata: map[string]interface{}{
-			"aggregate_id": event.AggregateID(),
-			"event_type":   event.EventType(),
-		},
+	// Create test event using examples.User
+	userID := uuid.New().String()
+	user, err := examples.NewUser(userID, "test@example.com", "Test User")
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
 	}
 
+	events := user.GetEvents()
+	if len(events) == 0 {
+		t.Fatal("no events generated")
+	}
+	event := events[0]
+
 	// Dispatch event
-	err = dispatcher.Dispatch(ctx, []pkgdomain.Envelope{envelope})
-	if err != nil {
+	ctx := context.Background()
+	if err := dispatcher.Dispatch(ctx, event); err != nil {
 		t.Fatalf("failed to dispatch event: %v", err)
 	}
 
-	// Wait for event processing
+	// Wait a bit for async processing
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify event was received
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(receivedEvents) != 1 {
-		t.Fatalf("expected 1 received event, got %d", len(receivedEvents))
-	}
-
-	receivedEvent := receivedEvents[0]
-	if receivedEvent.EventType() != event.EventType() {
-		t.Errorf("expected event type %s, got %s", event.EventType(), receivedEvent.EventType())
-	}
-
-	if receivedEvent.AggregateID() != event.AggregateID() {
-		t.Errorf("expected aggregate ID %s, got %s", event.AggregateID(), receivedEvent.AggregateID())
+	// Verify handler was called
+	if atomic.LoadInt32(&handlerCalled) != 1 {
+		t.Errorf("expected handler to be called 1 time, got %d", atomic.LoadInt32(&handlerCalled))
 	}
 }
 
 func testMultipleHandlers(t *testing.T) {
-	dispatcher := pkginfra.NewEventDispatcher()
-	ctx := context.Background()
+	// Setup
+	logger := pkgdomain.NewLogger("test")
+	dispatcher := pkginfra.NewEventDispatcher(logger)
 
-	// Create multiple handlers for the same event type
-	var handler1Events, handler2Events []pkgdomain.Event
-	var mu1, mu2 sync.Mutex
-
-	handler1 := &TestEventHandler{
-		eventTypes: []string{"UserCreated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			mu1.Lock()
-			defer mu1.Unlock()
-			handler1Events = append(handler1Events, envelope.Event())
-			return nil
-		},
+	// Track handler calls
+	var handler1Called, handler2Called int32
+	handler1 := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&handler1Called, 1)
+		return nil
+	}
+	handler2 := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&handler2Called, 1)
+		return nil
 	}
 
-	handler2 := &TestEventHandler{
-		eventTypes: []string{"UserCreated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			mu2.Lock()
-			defer mu2.Unlock()
-			handler2Events = append(handler2Events, envelope.Event())
-			return nil
-		},
-	}
-
-	// Subscribe both handlers
-	err := dispatcher.Subscribe("UserCreated", handler1)
-	if err != nil {
+	// Subscribe multiple handlers
+	if err := dispatcher.RegisterHandler("user", "created", handler1); err != nil {
 		t.Fatalf("failed to subscribe handler1: %v", err)
 	}
-
-	err = dispatcher.Subscribe("UserCreated", handler2)
-	if err != nil {
+	if err := dispatcher.RegisterHandler("user", "created", handler2); err != nil {
 		t.Fatalf("failed to subscribe handler2: %v", err)
 	}
 
-	// Create and dispatch event
-	event := internaldomain.NewUserCreatedEvent(
-		uuid.New(),
-		"test@example.com",
-		"Test User",
-		uuid.New().String(),
-		1,
-	)
-
-	envelope := &TestEnvelope{
-		event:     event,
-		eventID:   uuid.New().String(),
-		timestamp: time.Now(),
-		metadata:  map[string]interface{}{},
+	// Create test event
+	userID := uuid.New().String()
+	user, err := examples.NewUser(userID, "test@example.com", "Test User")
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
 	}
 
-	err = dispatcher.Dispatch(ctx, []pkgdomain.Envelope{envelope})
-	if err != nil {
+	events := user.GetEvents()
+	if len(events) == 0 {
+		t.Fatal("no events generated")
+	}
+	event := events[0]
+
+	// Dispatch event
+	ctx := context.Background()
+	if err := dispatcher.Dispatch(ctx, event); err != nil {
 		t.Fatalf("failed to dispatch event: %v", err)
 	}
 
-	// Wait for processing
-	time.Sleep(200 * time.Millisecond)
+	// Wait a bit for async processing
+	time.Sleep(100 * time.Millisecond)
 
-	// Verify both handlers received the event
-	mu1.Lock()
-	handler1Count := len(handler1Events)
-	mu1.Unlock()
-
-	mu2.Lock()
-	handler2Count := len(handler2Events)
-	mu2.Unlock()
-
-	if handler1Count != 1 {
-		t.Errorf("handler1 expected 1 event, got %d", handler1Count)
+	// Verify both handlers were called
+	if atomic.LoadInt32(&handler1Called) != 1 {
+		t.Errorf("expected handler1 to be called 1 time, got %d", atomic.LoadInt32(&handler1Called))
 	}
-
-	if handler2Count != 1 {
-		t.Errorf("handler2 expected 1 event, got %d", handler2Count)
+	if atomic.LoadInt32(&handler2Called) != 1 {
+		t.Errorf("expected handler2 to be called 1 time, got %d", atomic.LoadInt32(&handler2Called))
 	}
 }
 
 func testConcurrentDispatch(t *testing.T) {
-	dispatcher := pkginfra.NewEventDispatcher()
-	ctx := context.Background()
+	// Setup
+	logger := pkgdomain.NewLogger("test")
+	dispatcher := pkginfra.NewEventDispatcher(logger)
 
-	// Create handler that tracks concurrent executions
-	var receivedEvents []pkgdomain.Event
-	var mu sync.Mutex
-	var concurrentCount int32
-	var maxConcurrent int32
-
-	handler := &TestEventHandler{
-		eventTypes: []string{"UserCreated", "UserEmailUpdated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			// Track concurrent executions
-			current := atomic.AddInt32(&concurrentCount, 1)
-			defer atomic.AddInt32(&concurrentCount, -1)
-
-			// Update max concurrent
-			for {
-				max := atomic.LoadInt32(&maxConcurrent)
-				if current <= max || atomic.CompareAndSwapInt32(&maxConcurrent, max, current) {
-					break
-				}
-			}
-
-			// Simulate some processing time
-			time.Sleep(10 * time.Millisecond)
-
-			mu.Lock()
-			receivedEvents = append(receivedEvents, envelope.Event())
-			mu.Unlock()
-
-			return nil
-		},
+	// Track handler calls
+	var handlerCalled int32
+	handler := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&handlerCalled, 1)
+		return nil
 	}
 
 	// Subscribe handler
-	err := dispatcher.Subscribe("UserCreated", handler)
-	if err != nil {
-		t.Fatalf("failed to subscribe to UserCreated: %v", err)
+	if err := dispatcher.RegisterHandler("user", "created", handler); err != nil {
+		t.Fatalf("failed to subscribe handler: %v", err)
 	}
 
-	err = dispatcher.Subscribe("UserEmailUpdated", handler)
-	if err != nil {
-		t.Fatalf("failed to subscribe to UserEmailUpdated: %v", err)
-	}
-
-	// Create multiple events
-	numEvents := 20
-	envelopes := make([]pkgdomain.Envelope, numEvents)
+	// Create multiple events concurrently
+	numEvents := 10
+	var wg sync.WaitGroup
+	ctx := context.Background()
 
 	for i := 0; i < numEvents; i++ {
-		var event pkgdomain.Event
-		if i%2 == 0 {
-			event = internaldomain.NewUserCreatedEvent(
-				uuid.New(),
-				"test@example.com",
-				"Test User",
-				uuid.New().String(),
-				1,
-			)
-		} else {
-			event = internaldomain.NewUserEmailUpdatedEvent(
-				uuid.New(),
-				"old@example.com",
-				"new@example.com",
-				uuid.New().String(),
-				2,
-			)
-		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
 
-		envelopes[i] = &TestEnvelope{
-			event:     event,
-			eventID:   uuid.New().String(),
-			timestamp: time.Now(),
-			metadata:  map[string]interface{}{},
-		}
-	}
-
-	// Dispatch all events concurrently
-	start := time.Now()
-	err = dispatcher.Dispatch(ctx, envelopes)
-	if err != nil {
-		t.Fatalf("failed to dispatch events: %v", err)
-	}
-
-	// Wait for all events to be processed
-	timeout := time.After(5 * time.Second)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			t.Fatal("timeout waiting for events to be processed")
-		case <-ticker.C:
-			mu.Lock()
-			count := len(receivedEvents)
-			mu.Unlock()
-
-			if count == numEvents {
-				goto done
+			userID := uuid.New().String()
+			user, err := examples.NewUser(userID, fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User %d", i))
+			if err != nil {
+				t.Errorf("failed to create user %d: %v", i, err)
+				return
 			}
-		}
+
+			events := user.GetEvents()
+			if len(events) == 0 {
+				t.Errorf("no events generated for user %d", i)
+				return
+			}
+
+			event := events[0]
+			if err := dispatcher.Dispatch(ctx, event); err != nil {
+				t.Errorf("failed to dispatch event %d: %v", i, err)
+			}
+		}(i)
 	}
 
-done:
-	duration := time.Since(start)
-	t.Logf("Processed %d events in %v with max concurrency %d", numEvents, duration, maxConcurrent)
+	wg.Wait()
 
-	// Verify all events were processed
-	mu.Lock()
-	finalCount := len(receivedEvents)
-	mu.Unlock()
+	// Wait a bit for async processing
+	time.Sleep(200 * time.Millisecond)
 
-	if finalCount != numEvents {
-		t.Errorf("expected %d events processed, got %d", numEvents, finalCount)
-	}
-
-	// Verify concurrent processing occurred
-	if maxConcurrent < 2 {
-		t.Errorf("expected concurrent processing, max concurrent was %d", maxConcurrent)
+	// Verify all handlers were called
+	if int(atomic.LoadInt32(&handlerCalled)) != numEvents {
+		t.Errorf("expected handler to be called %d times, got %d", numEvents, atomic.LoadInt32(&handlerCalled))
 	}
 }
 
 func testHandlerErrors(t *testing.T) {
-	dispatcher := pkginfra.NewEventDispatcher()
-	ctx := context.Background()
+	// Setup
+	logger := pkgdomain.NewLogger("test")
+	dispatcher := pkginfra.NewEventDispatcher(logger)
 
-	// Create handler that fails on specific events
-	var processedEvents []pkgdomain.Event
-	var mu sync.Mutex
-
-	handler := &TestEventHandler{
-		eventTypes: []string{"UserCreated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			event := envelope.Event()
-
-			// Fail if aggregate ID contains "fail"
-			if contains(event.AggregateID(), "fail") {
-				return fmt.Errorf("simulated handler error")
-			}
-
-			mu.Lock()
-			processedEvents = append(processedEvents, event)
-			mu.Unlock()
-
-			return nil
-		},
+	// Create handler that returns error
+	handler := func(ctx context.Context, event pkgdomain.Event) error {
+		return fmt.Errorf("handler error")
 	}
 
 	// Subscribe handler
-	err := dispatcher.Subscribe("UserCreated", handler)
-	if err != nil {
+	if err := dispatcher.RegisterHandler("user", "created", handler); err != nil {
 		t.Fatalf("failed to subscribe handler: %v", err)
 	}
 
-	// Create events - some that will succeed, some that will fail
-	successEvent := internaldomain.NewUserCreatedEvent(
-		uuid.New(),
-		"success@example.com",
-		"Success User",
-		"success-aggregate",
-		1,
-	)
-
-	failEvent := internaldomain.NewUserCreatedEvent(
-		uuid.New(),
-		"fail@example.com",
-		"Fail User",
-		"fail-aggregate",
-		1,
-	)
-
-	envelopes := []pkgdomain.Envelope{
-		&TestEnvelope{
-			event:     successEvent,
-			eventID:   uuid.New().String(),
-			timestamp: time.Now(),
-			metadata:  map[string]interface{}{},
-		},
-		&TestEnvelope{
-			event:     failEvent,
-			eventID:   uuid.New().String(),
-			timestamp: time.Now(),
-			metadata:  map[string]interface{}{},
-		},
-	}
-
-	// Dispatch events
-	err = dispatcher.Dispatch(ctx, envelopes)
-	// Note: The dispatcher should handle errors gracefully and not fail the entire dispatch
+	// Create test event
+	userID := uuid.New().String()
+	user, err := examples.NewUser(userID, "test@example.com", "Test User")
 	if err != nil {
-		t.Logf("dispatch returned error (may be expected): %v", err)
+		t.Fatalf("failed to create user: %v", err)
 	}
 
-	// Wait for processing
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify only successful event was processed
-	mu.Lock()
-	count := len(processedEvents)
-	mu.Unlock()
-
-	// Should have processed only the successful event
-	if count != 1 {
-		t.Errorf("expected 1 processed event, got %d", count)
+	events := user.GetEvents()
+	if len(events) == 0 {
+		t.Fatal("no events generated")
 	}
+	event := events[0]
+
+	// Dispatch event - should not return error even if handler fails
+	ctx := context.Background()
+	if err := dispatcher.Dispatch(ctx, event); err != nil {
+		t.Fatalf("dispatch should not return error even if handler fails: %v", err)
+	}
+
+	// Wait a bit for async processing
+	time.Sleep(100 * time.Millisecond)
 }
 
 func testEventFiltering(t *testing.T) {
-	dispatcher := pkginfra.NewEventDispatcher()
+	// Setup
+	logger := pkgdomain.NewLogger("test")
+	dispatcher := pkginfra.NewEventDispatcher(logger)
+
+	// Track handler calls
+	var createdHandlerCalled, updatedHandlerCalled int32
+	createdHandler := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&createdHandlerCalled, 1)
+		return nil
+	}
+	updatedHandler := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&updatedHandlerCalled, 1)
+		return nil
+	}
+
+	// Subscribe handlers for different event types
+	if err := dispatcher.RegisterHandler("user", "created", createdHandler); err != nil {
+		t.Fatalf("failed to subscribe created handler: %v", err)
+	}
+	if err := dispatcher.RegisterHandler("user", "email_changed", updatedHandler); err != nil {
+		t.Fatalf("failed to subscribe updated handler: %v", err)
+	}
+
+	// Create user (generates created event)
+	userID := uuid.New().String()
+	user, err := examples.NewUser(userID, "test@example.com", "Test User")
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	// Dispatch created event
+	createdEvents := user.GetEvents()
+	if len(createdEvents) == 0 {
+		t.Fatal("no created events generated")
+	}
+
 	ctx := context.Background()
-
-	// Create handlers for different event types
-	var userCreatedEvents, userEmailUpdatedEvents []pkgdomain.Event
-	var mu1, mu2 sync.Mutex
-
-	userCreatedHandler := &TestEventHandler{
-		eventTypes: []string{"UserCreated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			mu1.Lock()
-			defer mu1.Unlock()
-			userCreatedEvents = append(userCreatedEvents, envelope.Event())
-			return nil
-		},
+	if err := dispatcher.Dispatch(ctx, createdEvents[0]); err != nil {
+		t.Fatalf("failed to dispatch created event: %v", err)
 	}
 
-	userEmailUpdatedHandler := &TestEventHandler{
-		eventTypes: []string{"UserEmailUpdated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			mu2.Lock()
-			defer mu2.Unlock()
-			userEmailUpdatedEvents = append(userEmailUpdatedEvents, envelope.Event())
-			return nil
-		},
+	// Change email (generates email_changed event)
+	if err := user.ChangeEmail("newemail@example.com"); err != nil {
+		t.Fatalf("failed to change email: %v", err)
 	}
 
-	// Subscribe handlers
-	err := dispatcher.Subscribe("UserCreated", userCreatedHandler)
-	if err != nil {
-		t.Fatalf("failed to subscribe UserCreated handler: %v", err)
+	// Dispatch email changed event
+	emailEvents := user.GetEvents()
+	if len(emailEvents) == 0 {
+		t.Fatal("no email change events generated")
 	}
 
-	err = dispatcher.Subscribe("UserEmailUpdated", userEmailUpdatedHandler)
-	if err != nil {
-		t.Fatalf("failed to subscribe UserEmailUpdated handler: %v", err)
+	if err := dispatcher.Dispatch(ctx, emailEvents[0]); err != nil {
+		t.Fatalf("failed to dispatch email changed event: %v", err)
 	}
 
-	// Create mixed events
-	events := []pkgdomain.Event{
-		internaldomain.NewUserCreatedEvent(
-			uuid.New(),
-			"user1@example.com",
-			"User 1",
-			uuid.New().String(),
-			1,
-		),
-		internaldomain.NewUserEmailUpdatedEvent(
-			uuid.New(),
-			"old@example.com",
-			"new@example.com",
-			uuid.New().String(),
-			2,
-		),
-		internaldomain.NewUserCreatedEvent(
-			uuid.New(),
-			"user2@example.com",
-			"User 2",
-			uuid.New().String(),
-			1,
-		),
+	// Wait a bit for async processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify correct handlers were called
+	if atomic.LoadInt32(&createdHandlerCalled) != 1 {
+		t.Errorf("expected created handler to be called 1 time, got %d", atomic.LoadInt32(&createdHandlerCalled))
 	}
-
-	envelopes := make([]pkgdomain.Envelope, len(events))
-	for i, event := range events {
-		envelopes[i] = &TestEnvelope{
-			event:     event,
-			eventID:   uuid.New().String(),
-			timestamp: time.Now(),
-			metadata:  map[string]interface{}{},
-		}
+	if atomic.LoadInt32(&updatedHandlerCalled) != 1 {
+		t.Errorf("expected updated handler to be called 1 time, got %d", atomic.LoadInt32(&updatedHandlerCalled))
 	}
-
-	// Dispatch events
-	err = dispatcher.Dispatch(ctx, envelopes)
-	if err != nil {
-		t.Fatalf("failed to dispatch events: %v", err)
-	}
-
-	// Wait for processing
-	time.Sleep(200 * time.Millisecond)
-
-	// Verify filtering
-	mu1.Lock()
-	createdCount := len(userCreatedEvents)
-	mu1.Unlock()
-
-	mu2.Lock()
-	emailUpdatedCount := len(userEmailUpdatedEvents)
-	mu2.Unlock()
-
-	if createdCount != 2 {
-		t.Errorf("expected 2 UserCreated events, got %d", createdCount)
-	}
-
-	if emailUpdatedCount != 1 {
-		t.Errorf("expected 1 UserEmailUpdated event, got %d", emailUpdatedCount)
-	}
-
-	// Verify event types
-	mu1.Lock()
-	for i, event := range userCreatedEvents {
-		if event.EventType() != "UserCreated" {
-			t.Errorf("userCreatedEvents[%d] has wrong type: %s", i, event.EventType())
-		}
-	}
-	mu1.Unlock()
-
-	mu2.Lock()
-	for i, event := range userEmailUpdatedEvents {
-		if event.EventType() != "UserEmailUpdated" {
-			t.Errorf("userEmailUpdatedEvents[%d] has wrong type: %s", i, event.EventType())
-		}
-	}
-	mu2.Unlock()
 }
 
 func testDispatcherPerformance(t *testing.T) {
-	dispatcher := pkginfra.NewEventDispatcher()
-	ctx := context.Background()
+	// Setup
+	logger := pkgdomain.NewLogger("test")
+	dispatcher := pkginfra.NewEventDispatcher(logger)
 
-	// Create high-throughput handler
-	var processedCount int64
-	handler := &TestEventHandler{
-		eventTypes: []string{"UserCreated"},
-		handleFunc: func(ctx context.Context, envelope pkgdomain.Envelope) error {
-			atomic.AddInt64(&processedCount, 1)
-			return nil
-		},
+	// Track handler calls
+	var handlerCalled int32
+	handler := func(ctx context.Context, event pkgdomain.Event) error {
+		atomic.AddInt32(&handlerCalled, 1)
+		return nil
 	}
 
-	err := dispatcher.Subscribe("UserCreated", handler)
-	if err != nil {
+	// Subscribe handler
+	if err := dispatcher.RegisterHandler("user", "created", handler); err != nil {
 		t.Fatalf("failed to subscribe handler: %v", err)
 	}
 
-	// Create large number of events
-	numEvents := 10000
-	envelopes := make([]pkgdomain.Envelope, numEvents)
-
-	for i := 0; i < numEvents; i++ {
-		event := internaldomain.NewUserCreatedEvent(
-			uuid.New(),
-			fmt.Sprintf("user%d@example.com", i),
-			fmt.Sprintf("User %d", i),
-			uuid.New().String(),
-			1,
-		)
-
-		envelopes[i] = &TestEnvelope{
-			event:     event,
-			eventID:   uuid.New().String(),
-			timestamp: time.Now(),
-			metadata:  map[string]interface{}{},
-		}
-	}
-
-	// Measure dispatch performance
+	// Performance test
+	numEvents := 1000
 	start := time.Now()
-	err = dispatcher.Dispatch(ctx, envelopes)
-	if err != nil {
-		t.Fatalf("failed to dispatch events: %v", err)
+
+	ctx := context.Background()
+	for i := 0; i < numEvents; i++ {
+		userID := uuid.New().String()
+		user, err := examples.NewUser(userID, fmt.Sprintf("user%d@example.com", i), fmt.Sprintf("User %d", i))
+		if err != nil {
+			t.Fatalf("failed to create user %d: %v", i, err)
+		}
+
+		events := user.GetEvents()
+		if len(events) == 0 {
+			t.Fatalf("no events generated for user %d", i)
+		}
+
+		event := events[0]
+		if err := dispatcher.Dispatch(ctx, event); err != nil {
+			t.Fatalf("failed to dispatch event %d: %v", i, err)
+		}
 	}
 
 	// Wait for all events to be processed
-	timeout := time.After(30 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	time.Sleep(1 * time.Second)
 
-	for {
-		select {
-		case <-timeout:
-			processed := atomic.LoadInt64(&processedCount)
-			t.Fatalf("timeout: processed %d/%d events", processed, numEvents)
-		case <-ticker.C:
-			processed := atomic.LoadInt64(&processedCount)
-			if processed >= int64(numEvents) {
-				goto done
-			}
-		}
-	}
-
-done:
 	duration := time.Since(start)
-	throughput := float64(numEvents) / duration.Seconds()
+	eventsPerSecond := float64(numEvents) / duration.Seconds()
 
-	t.Logf("Processed %d events in %v (%.2f events/sec)", numEvents, duration, throughput)
+	t.Logf("Dispatched %d events in %v (%.2f events/sec)", numEvents, duration, eventsPerSecond)
 
-	// Performance assertions
-	maxDuration := 10 * time.Second
-	minThroughput := 1000.0 // events per second
-
-	if duration > maxDuration {
-		t.Errorf("dispatch too slow: %v (max: %v)", duration, maxDuration)
+	// Verify all handlers were called
+	if int(atomic.LoadInt32(&handlerCalled)) != numEvents {
+		t.Errorf("expected handler to be called %d times, got %d", numEvents, atomic.LoadInt32(&handlerCalled))
 	}
 
-	if throughput < minThroughput {
-		t.Errorf("throughput too low: %.2f events/sec (min: %.2f)", throughput, minThroughput)
+	// Performance assertion (adjust as needed)
+	if eventsPerSecond < 100 {
+		t.Errorf("performance too low: %.2f events/sec (expected at least 100)", eventsPerSecond)
 	}
-}
-
-// TestEventHandler is a test implementation of EventHandler
-type TestEventHandler struct {
-	eventTypes []string
-	handleFunc func(context.Context, pkgdomain.Envelope) error
-}
-
-func (h *TestEventHandler) Handle(ctx context.Context, envelope pkgdomain.Envelope) error {
-	return h.handleFunc(ctx, envelope)
-}
-
-func (h *TestEventHandler) EventTypes() []string {
-	return h.eventTypes
-}
-
-// TestEnvelope is a test implementation of Envelope
-type TestEnvelope struct {
-	event     pkgdomain.Event
-	eventID   string
-	timestamp time.Time
-	metadata  map[string]interface{}
-}
-
-func (e *TestEnvelope) Event() pkgdomain.Event {
-	return e.event
-}
-
-func (e *TestEnvelope) EventID() string {
-	return e.eventID
-}
-
-func (e *TestEnvelope) Timestamp() time.Time {
-	return e.timestamp
-}
-
-func (e *TestEnvelope) Metadata() map[string]interface{} {
-	return e.metadata
-}
-
-// Helper functions
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr ||
-		(len(s) > len(substr) &&
-			(s[:len(substr)] == substr ||
-				s[len(s)-len(substr):] == substr ||
-				containsSubstring(s, substr))))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

@@ -27,7 +27,7 @@ func TestEndToEnd_CompleteProjectGeneration(t *testing.T) {
 	projectDir := filepath.Join(tempDir, projectName)
 
 	creator := NewProjectCreator(logger)
-	err := creator.CreateProject(projectName, "", projectDir, false)
+	err := creator.CreateProject(projectName, "", projectDir, false, "")
 	require.NoError(t, err, "Project creation should succeed")
 
 	// Verify project structure was created
@@ -158,7 +158,7 @@ func TestEndToEnd_MultipleInputFormats(t *testing.T) {
 
 			// Create project
 			creator := NewProjectCreator(logger)
-			err := creator.CreateProject(projectName, "", projectDir, false)
+			err := creator.CreateProject(projectName, "", projectDir, false, "")
 			require.NoError(t, err)
 
 			// Generate code
@@ -276,7 +276,7 @@ func TestEndToEnd_CLICommandIntegration(t *testing.T) {
 					destination = testTempDir
 				}
 
-				err2 = creator.CreateProject(projectName, "", destination, dryRun)
+				err2 = creator.CreateProject(projectName, "", destination, dryRun, "")
 
 			case "generate":
 				generator := NewCodeGenerator(logger)
@@ -351,7 +351,7 @@ func TestEndToEnd_FilePreservationWorkflow(t *testing.T) {
 
 	// Step 2: Add Pericarp capabilities to existing repository
 	creator := NewProjectCreator(logger)
-	err = creator.CreateProject("existing-project", "", repoDir, false)
+	err = creator.CreateProject("existing-project", "", repoDir, false, "")
 	require.NoError(t, err)
 
 	// Step 3: Verify existing files were preserved
@@ -398,11 +398,11 @@ func TestEndToEnd_ErrorRecoveryAndValidation(t *testing.T) {
 		creator := NewProjectCreator(logger)
 
 		// Try with invalid name first
-		err := creator.CreateProject("Invalid-Name", "", tempDir, true)
+		err := creator.CreateProject("Invalid-Name", "", tempDir, true, "")
 		assert.Error(t, err)
 
 		// Then try with valid name
-		err = creator.CreateProject("valid-name", "", tempDir, true)
+		err = creator.CreateProject("valid-name", "", tempDir, true, "")
 		assert.NoError(t, err)
 	})
 
@@ -446,7 +446,7 @@ func TestEndToEnd_PerformanceAndScalability(t *testing.T) {
 		start := time.Now()
 
 		creator := NewProjectCreator(logger)
-		err := creator.CreateProject("large-project", "", filepath.Join(tempDir, "large-project"), false)
+		err := creator.CreateProject("large-project", "", filepath.Join(tempDir, "large-project"), false, "")
 		require.NoError(t, err)
 
 		duration := time.Since(start)
@@ -484,7 +484,7 @@ func TestEndToEnd_ConcurrentOperations(t *testing.T) {
 				projectName := fmt.Sprintf("concurrent-project-%d", index)
 				projectDir := filepath.Join(tempDir, projectName)
 
-				err := creator.CreateProject(projectName, "", projectDir, false)
+				err := creator.CreateProject(projectName, "", projectDir, false, "")
 				results <- err
 			}(i)
 		}
@@ -581,7 +581,7 @@ func TestEndToEnd_VerboseLoggingIntegration(t *testing.T) {
 		creator := NewProjectCreator(logger)
 		projectDir := filepath.Join(tempDir, "verbose-project")
 
-		err := creator.CreateProject("verbose-project", "", projectDir, true)
+		err := creator.CreateProject("verbose-project", "", projectDir, true, "")
 		assert.NoError(t, err)
 	})
 
@@ -604,7 +604,7 @@ func BenchmarkEndToEnd_ProjectCreation(b *testing.B) {
 		projectName := fmt.Sprintf("benchmark-project-%d", i)
 		projectDir := filepath.Join(tempDir, projectName)
 
-		err := creator.CreateProject(projectName, "", projectDir, true) // Use dry-run for speed
+		err := creator.CreateProject(projectName, "", projectDir, true, "") // Use dry-run for speed
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -637,7 +637,7 @@ func BenchmarkEndToEnd_CompleteWorkflow(b *testing.B) {
 
 		// Create project
 		creator := NewProjectCreator(logger)
-		err := creator.CreateProject(projectName, "", projectDir, true)
+		err := creator.CreateProject(projectName, "", projectDir, true, "")
 		if err != nil {
 			b.Fatal(err)
 		}

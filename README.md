@@ -35,40 +35,47 @@ func main() {
 - **CQRS Pattern**: Separate command and query handling with unified middleware support
 - **Event Sourcing**: Persist-then-dispatch pattern with event store and dispatcher
 - **Ready-to-Use Entity**: Concrete aggregate root implementation with built-in event management
-- **StandardEvent**: Generic event implementation that eliminates the need for specific event types
+- **EntityEvent**: Generic event implementation that eliminates the need for specific event types
 - **Database Flexibility**: Support for SQLite (development) and PostgreSQL (production)
 - **Dependency Injection**: Built-in Fx modules for easy configuration
 - **Comprehensive Testing**: BDD scenarios, unit tests, and integration tests
 - **Performance Optimized**: No reflection in hot paths, efficient JSON serialization
 - **Thread-Safe**: Concurrent access protection for all core components
 
-## StandardEvent - Flexible Event Creation
+## EntityEvent - Flexible Event Creation
 
-The `StandardEvent` provides a single, flexible way to create domain events without needing to define specific event types for each use case.
+The `EntityEvent` provides a single, flexible way to create domain events without needing to define specific event types for each use case.
 
 ```go
 import "github.com/akeemphilbert/pericarp/pkg/domain"
 
 // User creation event
-event := domain.NewEvent("user-123", "User", "Created", map[string]interface{}{
-    "email": "john@example.com",
-    "name":  "John Doe",
-    "role":  "admin",
-})
+user := &User{ID: "user-123", Email: "john@example.com", Name: "John Doe", Role: "admin"}
+event := domain.NewEntityEvent("user", "created", "user-123", "", "", user)
 
 // Order status change
-event := domain.NewEvent("order-456", "Order", "StatusChanged", map[string]interface{}{
-    "old_status": "pending",
-    "new_status": "shipped",
-    "tracking":   "TRACK123",
-})
+statusChange := struct {
+    OldStatus string `json:"old_status"`
+    NewStatus string `json:"new_status"`
+    Tracking  string `json:"tracking"`
+}{
+    OldStatus: "pending",
+    NewStatus: "shipped",
+    Tracking:  "TRACK123",
+}
+event := domain.NewEntityEvent("order", "status_changed", "order-456", "", "", statusChange)
 
 // Custom business event
-event := domain.NewEvent("payment-999", "Payment", "ProcessingCompleted", map[string]interface{}{
-    "amount":         99.99,
-    "currency":       "USD",
-    "transaction_id": "txn_abc123",
-})
+payment := struct {
+    Amount        float64 `json:"amount"`
+    Currency      string  `json:"currency"`
+    TransactionID string  `json:"transaction_id"`
+}{
+    Amount:        99.99,
+    Currency:      "USD",
+    TransactionID: "txn_abc123",
+}
+event := domain.NewEntityEvent("payment", "processing_completed", "payment-999", "", "", payment)
 
 // Add metadata for cross-cutting concerns
 event.SetMetadata("correlation_id", "req-abc123")
@@ -77,9 +84,9 @@ event.SetMetadata("user_id", "user-123")
 
 ### Benefits
 
-- **Single Factory**: Just use `domain.NewEvent()` for all event types
-- **Flexible Data**: Store any JSON-serializable data in the event
-- **Consistent Format**: All events follow the same `EntityType.ActionType` naming
+- **Single Factory**: Just use `domain.NewEntityEvent()` for all event types
+- **Type-Safe Data**: Pass any serializable struct or object as event data
+- **Consistent Format**: All events follow the same `entitytype.eventtype` naming
 - **Metadata Support**: Add correlation IDs, user context, and other cross-cutting data
 - **JSON Serialization**: Built-in marshaling/unmarshaling support
 

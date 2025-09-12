@@ -11,7 +11,7 @@ This project was generated using the Pericarp CLI tool and follows the establish
 ```
 {{.ProjectName}}/
 ├── cmd/{{.ProjectName}}/          # Application entry point
-├── internal/
+├── examples/
 │   ├── application/               # Application layer (commands, queries, handlers)
 │   ├── domain/                   # Domain layer (entities, events, repositories)
 │   └── infrastructure/           # Infrastructure layer (implementations)
@@ -93,17 +93,17 @@ This application follows the principles of:
 
 ### Layers
 
-1. **Domain Layer** (`internal/domain/`)
+1. **Domain Layer** (`examples/`)
    - Contains business logic and domain entities
    - Defines repository interfaces
    - Domain events and business rules
 
-2. **Application Layer** (`internal/application/`)
+2. **Application Layer** (`examples/`)
    - Commands and queries
    - Command and query handlers
    - Application services
 
-3. **Infrastructure Layer** (`internal/infrastructure/`)
+3. **Infrastructure Layer** (`examples/`)
    - Repository implementations
    - Database access
    - External service integrations

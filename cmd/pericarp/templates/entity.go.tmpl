@@ -15,7 +15,7 @@ type {{.Name}} struct {
 	{{end}}
 	
 	// Aggregate root fields
-	version           int
+	sequenceNo        int64
 	uncommittedEvents []domain.Event
 }
 
@@ -30,7 +30,7 @@ func New{{.Name}}({{range $i, $prop := (filterRequired .Properties)}}{{if $i}}, 
 		{{range .Properties}}{{if .Required}}{{.Name | pascalCase}}: {{.Name | camelCase}},
 		{{else}}{{.Name | pascalCase}}: {{.Type | goType | zeroValue}},
 		{{end}}{{end}}
-		version: 1,
+		sequenceNo: 1,
 		uncommittedEvents: make([]domain.Event, 0),
 	}
 
@@ -46,9 +46,9 @@ func ({{slice .Name 0 1 | lower}} *{{.Name}}) ID() string {
 	return {{slice .Name 0 1 | lower}}.Id.String()
 }
 
-// Version returns the current version of the aggregate
-func ({{slice .Name 0 1 | lower}} *{{.Name}}) Version() int {
-	return {{slice .Name 0 1 | lower}}.version
+// SequenceNo returns the current sequence number of the aggregate
+func ({{slice .Name 0 1 | lower}} *{{.Name}}) SequenceNo() int64 {
+	return {{slice .Name 0 1 | lower}}.sequenceNo
 }
 
 // UncommittedEvents returns uncommitted events
@@ -65,7 +65,7 @@ func ({{slice .Name 0 1 | lower}} *{{.Name}}) MarkEventsAsCommitted() {
 func ({{slice .Name 0 1 | lower}} *{{.Name}}) LoadFromHistory(events []domain.Event) {
 	for _, event := range events {
 		{{slice .Name 0 1 | lower}}.applyEvent(event)
-		{{slice .Name 0 1 | lower}}.version = event.Version()
+		{{slice .Name 0 1 | lower}}.sequenceNo = event.SequenceNo()
 	}
 }
 

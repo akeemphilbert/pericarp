@@ -1,7 +1,7 @@
 package domain
 
-//go:generate moq -out mocks/aggregate_root_mock.go . AggregateRoot
-//go:generate moq -out mocks/repository_mock.go . Repository
+//go:generate moq -out mocks/aggregate_root_mock.go -pkg mocks . AggregateRoot
+//go:generate moq -out mocks/repository_mock.go -pkg mocks . Repository
 
 import "context"
 
@@ -18,11 +18,11 @@ import "context"
 // Example implementation:
 //
 //	type User struct {
-//	    id      string
-//	    email   string
-//	    name    string
-//	    version int
-//	    events  []Event
+//	    id         string
+//	    email      string
+//	    name       string
+//	    sequenceNo int64
+//	    events     []Event
 //	}
 //
 //	func (u *User) ChangeEmail(newEmail string) error {
@@ -38,7 +38,7 @@ import "context"
 //	    // Apply change and generate event
 //	    oldEmail := u.email
 //	    u.email = newEmail
-//	    u.version++
+//	    u.sequenceNo++
 //
 //	    event := UserEmailChangedEvent{
 //	        UserID:   u.id,
@@ -56,10 +56,10 @@ type AggregateRoot interface {
 	// of this aggregate type.
 	ID() string
 
-	// Version returns the current version of the aggregate.
-	// The version is incremented each time the aggregate's state changes
+	// SequenceNo returns the current sequence number of the aggregate.
+	// The sequence number is incremented each time the aggregate's state changes
 	// and is used for optimistic concurrency control.
-	Version() int
+	SequenceNo() int64
 
 	// UncommittedEvents returns the list of events that have been generated
 	// by business operations but not yet persisted to the event store.
@@ -81,7 +81,7 @@ type AggregateRoot interface {
 	//
 	// The method should:
 	//   - Apply events in the order they occurred
-	//   - Update the aggregate's version based on the events
+	//   - Update the aggregate's sequence number based on the events
 	//   - Not generate new events during reconstruction
 	//   - Handle unknown event types gracefully (for forward compatibility)
 	//
@@ -97,7 +97,7 @@ type AggregateRoot interface {
 	//	        case UserEmailChangedEvent:
 	//	            u.email = e.NewEmail
 	//	        }
-	//	        u.version = event.Version()
+	//	        u.sequenceNo = event.SequenceNo()
 	//	    }
 	//	    u.events = nil // Clear events after loading
 	//	}
@@ -145,7 +145,7 @@ type Repository[T AggregateRoot] interface {
 	//   4. Handle any concurrency or persistence errors
 	//
 	// The method should handle optimistic concurrency control by checking
-	// the aggregate version against the latest version in the event store.
+	// the aggregate sequence number against the latest sequence number in the event store.
 	Save(ctx context.Context, aggregate T) error
 
 	// Load retrieves an aggregate by its ID, reconstructing it from stored events.
@@ -160,7 +160,7 @@ type Repository[T AggregateRoot] interface {
 	//
 	// The reconstructed aggregate should have:
 	//   - Current state based on all historical events
-	//   - Correct version number
+	//   - Correct sequence number
 	//   - No uncommitted events (clean state)
 	Load(ctx context.Context, id string) (T, error)
 }

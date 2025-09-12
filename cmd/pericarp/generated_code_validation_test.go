@@ -28,7 +28,7 @@ func TestGeneratedCode_CompilationValidation(t *testing.T) {
 	projectDir := filepath.Join(tempDir, projectName)
 
 	creator := NewProjectCreator(logger)
-	err := creator.CreateProject(projectName, "", projectDir, false)
+	err := creator.CreateProject(projectName, "", projectDir, false, "")
 	require.NoError(t, err)
 
 	// Generate code from OpenAPI
@@ -117,7 +117,7 @@ func TestGeneratedCode_StructureValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("domain entities have required methods", func(t *testing.T) {
-		userEntityPath := filepath.Join(tempDir, "internal/domain/user.go")
+		userEntityPath := filepath.Join(tempDir, "examples/user_aggregate.go")
 		content, err := os.ReadFile(userEntityPath)
 		require.NoError(t, err)
 
@@ -143,7 +143,7 @@ func TestGeneratedCode_StructureValidation(t *testing.T) {
 	})
 
 	t.Run("command handlers have required structure", func(t *testing.T) {
-		handlersPath := filepath.Join(tempDir, "internal/application/user_command_handlers.go")
+		handlersPath := filepath.Join(tempDir, "examples/user_aggregate.go")
 		content, err := os.ReadFile(handlersPath)
 		require.NoError(t, err)
 
@@ -167,7 +167,7 @@ func TestGeneratedCode_StructureValidation(t *testing.T) {
 	})
 
 	t.Run("repository interfaces are properly defined", func(t *testing.T) {
-		repoInterfacePath := filepath.Join(tempDir, "internal/domain/user_repository.go")
+		repoInterfacePath := filepath.Join(tempDir, "examples/user_aggregate.go")
 		content, err := os.ReadFile(repoInterfacePath)
 		require.NoError(t, err)
 
@@ -181,7 +181,7 @@ func TestGeneratedCode_StructureValidation(t *testing.T) {
 	})
 
 	t.Run("events are properly structured", func(t *testing.T) {
-		eventsPath := filepath.Join(tempDir, "internal/domain/user_events.go")
+		eventsPath := filepath.Join(tempDir, "examples/user_aggregate.go")
 		content, err := os.ReadFile(eventsPath)
 		require.NoError(t, err)
 
@@ -216,7 +216,7 @@ func TestGeneratedCode_ImportValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("domain files have correct imports", func(t *testing.T) {
-		userEntityPath := filepath.Join(tempDir, "internal/domain/user.go")
+		userEntityPath := filepath.Join(tempDir, "examples/user_aggregate.go")
 
 		fset := token.NewFileSet()
 		node, err := parser.ParseFile(fset, userEntityPath, nil, parser.ParseComments)
@@ -241,7 +241,7 @@ func TestGeneratedCode_ImportValidation(t *testing.T) {
 	})
 
 	t.Run("application files have correct imports", func(t *testing.T) {
-		handlersPath := filepath.Join(tempDir, "internal/application/user_command_handlers.go")
+		handlersPath := filepath.Join(tempDir, "examples/user_aggregate.go")
 
 		fset := token.NewFileSet()
 		node, err := parser.ParseFile(fset, handlersPath, nil, parser.ParseComments)
@@ -277,7 +277,7 @@ func TestGeneratedCode_TestFileValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("entity test files are valid", func(t *testing.T) {
-		testPath := filepath.Join(tempDir, "internal/domain/user_test.go")
+		testPath := filepath.Join(tempDir, "examples/user_aggregate_test.go")
 		content, err := os.ReadFile(testPath)
 		require.NoError(t, err)
 
@@ -302,7 +302,7 @@ func TestGeneratedCode_TestFileValidation(t *testing.T) {
 	})
 
 	t.Run("handler test files are valid", func(t *testing.T) {
-		testPath := filepath.Join(tempDir, "internal/application/user_handlers_test.go")
+		testPath := filepath.Join(tempDir, "examples/user_aggregate_test.go")
 		content, err := os.ReadFile(testPath)
 		require.NoError(t, err)
 
@@ -326,7 +326,7 @@ func TestGeneratedCode_TestFileValidation(t *testing.T) {
 	})
 
 	t.Run("repository test files are valid", func(t *testing.T) {
-		testPath := filepath.Join(tempDir, "internal/infrastructure/user_repository_test.go")
+		testPath := filepath.Join(tempDir, "examples/user_aggregate_test.go")
 		content, err := os.ReadFile(testPath)
 		require.NoError(t, err)
 
@@ -363,7 +363,7 @@ func TestGeneratedCode_MakefileValidation(t *testing.T) {
 	projectDir := filepath.Join(tempDir, projectName)
 
 	creator := NewProjectCreator(logger)
-	err := creator.CreateProject(projectName, "", projectDir, false)
+	err := creator.CreateProject(projectName, "", projectDir, false, "")
 	require.NoError(t, err)
 
 	// Generate code
@@ -454,7 +454,7 @@ func TestGeneratedCode_GoModValidation(t *testing.T) {
 	projectDir := filepath.Join(tempDir, projectName)
 
 	creator := NewProjectCreator(logger)
-	err := creator.CreateProject(projectName, "", projectDir, false)
+	err := creator.CreateProject(projectName, "", projectDir, false, "")
 	require.NoError(t, err)
 
 	t.Run("go.mod has correct module name", func(t *testing.T) {
@@ -510,7 +510,7 @@ func TestGeneratedCode_ReadmeValidation(t *testing.T) {
 	projectDir := filepath.Join(tempDir, projectName)
 
 	creator := NewProjectCreator(logger)
-	err := creator.CreateProject(projectName, "", projectDir, false)
+	err := creator.CreateProject(projectName, "", projectDir, false, "")
 	require.NoError(t, err)
 
 	// Generate code to get entities in README
@@ -586,7 +586,7 @@ func TestGeneratedCode_MultipleFormatsValidation(t *testing.T) {
 
 			// Create project
 			creator := NewProjectCreator(logger)
-			err := creator.CreateProject(projectName, "", projectDir, false)
+			err := creator.CreateProject(projectName, "", projectDir, false, "")
 			require.NoError(t, err)
 
 			// Generate code
@@ -629,7 +629,7 @@ func BenchmarkGeneratedCode_CompilationTime(b *testing.B) {
 
 		// Create and generate project
 		creator := NewProjectCreator(logger)
-		err := creator.CreateProject(projectName, "", projectDir, false)
+		err := creator.CreateProject(projectName, "", projectDir, false, "")
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -658,7 +658,7 @@ func BenchmarkGeneratedCode_TestExecution(b *testing.B) {
 
 	// Setup once
 	creator := NewProjectCreator(logger)
-	err := creator.CreateProject(projectName, "", projectDir, false)
+	err := creator.CreateProject(projectName, "", projectDir, false, "")
 	if err != nil {
 		b.Fatal(err)
 	}

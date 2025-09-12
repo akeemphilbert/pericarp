@@ -172,7 +172,7 @@ func TestProjectCreator_CreateProject_WithRepository(t *testing.T) {
 	repoURL := "https://github.com/octocat/Hello-World.git"
 
 	// Test creating project with repository cloning
-	err = creator.CreateProject(projectName, repoURL, destination, false)
+	err = creator.CreateProject(projectName, repoURL, destination, false, "")
 	assert.NoError(t, err)
 
 	// Verify repository was cloned
@@ -199,7 +199,7 @@ func TestProjectCreator_CreateProject_WithRepository_DryRun(t *testing.T) {
 	repoURL := "https://github.com/octocat/Hello-World.git"
 
 	// Test dry run with repository cloning
-	err = creator.CreateProject(projectName, repoURL, destination, true)
+	err = creator.CreateProject(projectName, repoURL, destination, true, "")
 	assert.NoError(t, err)
 
 	// Verify nothing was actually created in dry run mode

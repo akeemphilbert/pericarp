@@ -42,8 +42,7 @@ func TestNewParserRegistry(t *testing.T) {
 	assert.NotNil(t, registry)
 
 	// Test that it implements the interface
-	_, ok := registry.(ParserRegistry)
-	assert.True(t, ok, "NewParserRegistry should return a ParserRegistry implementation")
+	// registry is already of type ParserRegistry, so no type assertion needed
 }
 
 func TestDefaultParserRegistry_RegisterParser(t *testing.T) {

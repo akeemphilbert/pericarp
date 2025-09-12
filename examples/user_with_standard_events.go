@@ -1,24 +1,25 @@
 package examples
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/domain"
 )
 
-// UserWithStandardEvents demonstrates how to use the StandardEvent with the Entity struct
+// UserWithEntityEvents demonstrates how to use the EntityEvent with the Entity struct
 // to avoid creating many specific event types. This approach is more flexible and
 // reduces boilerplate code.
-type UserWithStandardEvents struct {
-	domain.Entity
+type UserWithEntityEvents struct {
+	domain.BasicEntity
 	email    string
 	name     string
 	isActive bool
 }
 
-// NewUserWithStandardEvents creates a new user aggregate using StandardEvent.
-func NewUserWithStandardEvents(id, email, name string) (*UserWithStandardEvents, error) {
+// NewUserWithEntityEvents creates a new user aggregate using EntityEvent.
+func NewUserWithEntityEvents(id, email, name string) (*UserWithEntityEvents, error) {
 	if id == "" {
 		return nil, errors.New("user ID cannot be empty")
 	}
@@ -29,42 +30,48 @@ func NewUserWithStandardEvents(id, email, name string) (*UserWithStandardEvents,
 		return nil, errors.New("name cannot be empty")
 	}
 
-	user := &UserWithStandardEvents{
-		Entity:   domain.NewEntity(id),
-		email:    email,
-		name:     name,
-		isActive: true,
+	user := &UserWithEntityEvents{
+		BasicEntity: domain.NewEntity(id),
+		email:       email,
+		name:        name,
+		isActive:    true,
 	}
 
 	// Create a standard "Created" event
-	event := domain.NewEvent(id, "User", "Created", map[string]interface{}{
-		"email":      email,
-		"name":       name,
-		"is_active":  true,
-		"created_at": time.Now(),
-	})
+	eventData := struct {
+		Email     string    `json:"email"`
+		Name      string    `json:"name"`
+		IsActive  bool      `json:"is_active"`
+		CreatedAt time.Time `json:"created_at"`
+	}{
+		Email:     email,
+		Name:      name,
+		IsActive:  true,
+		CreatedAt: time.Now(),
+	}
+	event := domain.NewEntityEvent("user", "created", id, "", "", eventData)
 
 	user.AddEvent(event)
 	return user, nil
 }
 
 // Email returns the user's email address
-func (u *UserWithStandardEvents) Email() string {
+func (u *UserWithEntityEvents) Email() string {
 	return u.email
 }
 
 // Name returns the user's name
-func (u *UserWithStandardEvents) Name() string {
+func (u *UserWithEntityEvents) Name() string {
 	return u.name
 }
 
 // IsActive returns whether the user is active
-func (u *UserWithStandardEvents) IsActive() bool {
+func (u *UserWithEntityEvents) IsActive() bool {
 	return u.isActive
 }
 
 // ChangeEmail changes the user's email address using a standard field update event.
-func (u *UserWithStandardEvents) ChangeEmail(newEmail string) error {
+func (u *UserWithEntityEvents) ChangeEmail(newEmail string) error {
 	if newEmail == "" {
 		return errors.New("email cannot be empty")
 	}
@@ -78,11 +85,16 @@ func (u *UserWithStandardEvents) ChangeEmail(newEmail string) error {
 	u.email = newEmail
 
 	// Generate standard field update event
-	event := domain.NewEvent(u.ID(), "User", "EmailUpdated", map[string]interface{}{
-		"field":     "email",
-		"old_value": oldEmail,
-		"new_value": newEmail,
-	})
+	eventData := struct {
+		Field    string `json:"field"`
+		OldValue string `json:"old_value"`
+		NewValue string `json:"new_value"`
+	}{
+		Field:    "email",
+		OldValue: oldEmail,
+		NewValue: newEmail,
+	}
+	event := domain.NewEntityEvent("user", "email_updated", u.ID(), "", "", eventData)
 
 	// Add additional context
 	event.SetMetadata("updated_by", "system")
@@ -93,7 +105,7 @@ func (u *UserWithStandardEvents) ChangeEmail(newEmail string) error {
 }
 
 // ChangeName changes the user's name using a standard field update event.
-func (u *UserWithStandardEvents) ChangeName(newName string) error {
+func (u *UserWithEntityEvents) ChangeName(newName string) error {
 	if newName == "" {
 		return errors.New("name cannot be empty")
 	}
@@ -107,11 +119,16 @@ func (u *UserWithStandardEvents) ChangeName(newName string) error {
 	u.name = newName
 
 	// Generate standard field update event
-	event := domain.NewEvent(u.ID(), "User", "NameUpdated", map[string]interface{}{
-		"field":     "name",
-		"old_value": oldName,
-		"new_value": newName,
-	})
+	eventData := struct {
+		Field    string `json:"field"`
+		OldValue string `json:"old_value"`
+		NewValue string `json:"new_value"`
+	}{
+		Field:    "name",
+		OldValue: oldName,
+		NewValue: newName,
+	}
+	event := domain.NewEntityEvent("user", "name_updated", u.ID(), "", "", eventData)
 
 	// Add additional context
 	event.SetMetadata("updated_by", "system")
@@ -122,7 +139,7 @@ func (u *UserWithStandardEvents) ChangeName(newName string) error {
 }
 
 // Deactivate deactivates the user account using a status change event.
-func (u *UserWithStandardEvents) Deactivate() error {
+func (u *UserWithEntityEvents) Deactivate() error {
 	if !u.isActive {
 		return nil // Already deactivated
 	}
@@ -130,19 +147,25 @@ func (u *UserWithStandardEvents) Deactivate() error {
 	u.isActive = false
 
 	// Generate standard status change event
-	event := domain.NewEvent(u.ID(), "User", "StatusChanged", map[string]interface{}{
-		"old_status":     "active",
-		"new_status":     "inactive",
-		"reason":         "user_requested",
-		"deactivated_at": time.Now(),
-	})
+	eventData := struct {
+		OldStatus     string    `json:"old_status"`
+		NewStatus     string    `json:"new_status"`
+		Reason        string    `json:"reason"`
+		DeactivatedAt time.Time `json:"deactivated_at"`
+	}{
+		OldStatus:     "active",
+		NewStatus:     "inactive",
+		Reason:        "user_requested",
+		DeactivatedAt: time.Now(),
+	}
+	event := domain.NewEntityEvent("user", "status_changed", u.ID(), "", "", eventData)
 
 	u.AddEvent(event)
 	return nil
 }
 
 // Activate activates the user account using a status change event.
-func (u *UserWithStandardEvents) Activate() error {
+func (u *UserWithEntityEvents) Activate() error {
 	if u.isActive {
 		return nil // Already active
 	}
@@ -150,19 +173,25 @@ func (u *UserWithStandardEvents) Activate() error {
 	u.isActive = true
 
 	// Generate standard status change event
-	event := domain.NewEvent(u.ID(), "User", "StatusChanged", map[string]interface{}{
-		"old_status":   "inactive",
-		"new_status":   "active",
-		"reason":       "admin_action",
-		"activated_at": time.Now(),
-	})
+	eventData := struct {
+		OldStatus   string    `json:"old_status"`
+		NewStatus   string    `json:"new_status"`
+		Reason      string    `json:"reason"`
+		ActivatedAt time.Time `json:"activated_at"`
+	}{
+		OldStatus:   "inactive",
+		NewStatus:   "active",
+		Reason:      "admin_action",
+		ActivatedAt: time.Now(),
+	}
+	event := domain.NewEntityEvent("user", "status_changed", u.ID(), "", "", eventData)
 
 	u.AddEvent(event)
 	return nil
 }
 
 // UpdateProfile updates multiple user fields in a single operation.
-func (u *UserWithStandardEvents) UpdateProfile(newEmail, newName string) error {
+func (u *UserWithEntityEvents) UpdateProfile(newEmail, newName string) error {
 	if newEmail == "" {
 		return errors.New("email cannot be empty")
 	}
@@ -185,21 +214,27 @@ func (u *UserWithStandardEvents) UpdateProfile(newEmail, newName string) error {
 	u.name = newName
 
 	// Generate a single "Updated" event with all changes
-	data := map[string]interface{}{
-		"updated_at": time.Now(),
+	eventData := struct {
+		UpdatedAt time.Time `json:"updated_at"`
+		OldEmail  string    `json:"old_email,omitempty"`
+		NewEmail  string    `json:"new_email,omitempty"`
+		OldName   string    `json:"old_name,omitempty"`
+		NewName   string    `json:"new_name,omitempty"`
+	}{
+		UpdatedAt: time.Now(),
 	}
 
 	if emailChanged {
-		data["old_email"] = oldEmail
-		data["new_email"] = newEmail
+		eventData.OldEmail = oldEmail
+		eventData.NewEmail = newEmail
 	}
 
 	if nameChanged {
-		data["old_name"] = oldName
-		data["new_name"] = newName
+		eventData.OldName = oldName
+		eventData.NewName = newName
 	}
 
-	event := domain.NewEvent(u.ID(), "User", "Updated", data)
+	event := domain.NewEntityEvent("user", "updated", u.ID(), "", "", eventData)
 	// Build list of updated fields
 	var updatedFields []string
 	if emailChanged {
@@ -215,68 +250,90 @@ func (u *UserWithStandardEvents) UpdateProfile(newEmail, newName string) error {
 }
 
 // Delete marks the user as deleted (soft delete).
-func (u *UserWithStandardEvents) Delete(reason string) error {
+func (u *UserWithEntityEvents) Delete(reason string) error {
 	// Generate standard delete event
-	event := domain.NewEvent(u.ID(), "User", "Deleted", map[string]interface{}{
-		"reason":      reason,
-		"deleted_at":  time.Now(),
-		"soft_delete": true,
-	})
+	eventData := struct {
+		Reason     string    `json:"reason"`
+		DeletedAt  time.Time `json:"deleted_at"`
+		SoftDelete bool      `json:"soft_delete"`
+	}{
+		Reason:     reason,
+		DeletedAt:  time.Now(),
+		SoftDelete: true,
+	}
+	event := domain.NewEntityEvent("user", "deleted", u.ID(), "", "", eventData)
 
 	u.AddEvent(event)
 	return nil
 }
 
-// LoadFromHistory reconstructs the user aggregate from StandardEvents.
-func (u *UserWithStandardEvents) LoadFromHistory(events []domain.Event) {
+// LoadFromHistory reconstructs the user aggregate from EntityEvents.
+func (u *UserWithEntityEvents) LoadFromHistory(events []domain.Event) {
 	for _, event := range events {
-		u.applyStandardEvent(event)
+		u.applyEntityEvent(event)
 	}
 
-	// Call the base implementation to update version and sequence
-	u.Entity.LoadFromHistory(events)
+	// Call the base implementation to update sequence number
+	u.BasicEntity.LoadFromHistory(events)
 }
 
-// applyStandardEvent applies a StandardEvent to the user aggregate.
-func (u *UserWithStandardEvents) applyStandardEvent(event domain.Event) {
-	// Try to cast to StandardEvent
-	standardEvent, ok := event.(*domain.StandardEvent)
+// applyEntityEvent applies an EntityEvent to the user aggregate.
+func (u *UserWithEntityEvents) applyEntityEvent(event domain.Event) {
+	// Try to cast to EntityEvent
+	entityEvent, ok := event.(*domain.EntityEvent)
 	if !ok {
 		// Handle other event types if needed
 		return
 	}
 
-	// Handle events based on entity type and action type
-	if standardEvent.EntityType() != "User" {
+	// Handle events based on entity type
+	if entityEvent.EntityType != "user" {
 		return // Not a user event
 	}
 
-	switch standardEvent.ActionType() {
-	case "Created":
-		u.email = standardEvent.GetDataString("email")
-		u.name = standardEvent.GetDataString("name")
-		u.isActive = standardEvent.GetDataBool("is_active")
+	// Parse the payload to access event data
+	var data map[string]interface{}
+	if err := json.Unmarshal(entityEvent.Payload(), &data); err != nil {
+		return
+	}
 
-	case "EmailUpdated":
-		u.email = standardEvent.GetDataString("new_value")
+	switch entityEvent.Type {
+	case "created":
+		if email, ok := data["email"].(string); ok {
+			u.email = email
+		}
+		if name, ok := data["name"].(string); ok {
+			u.name = name
+		}
+		if isActive, ok := data["is_active"].(bool); ok {
+			u.isActive = isActive
+		}
 
-	case "NameUpdated":
-		u.name = standardEvent.GetDataString("new_value")
+	case "email_updated":
+		if newValue, ok := data["new_value"].(string); ok {
+			u.email = newValue
+		}
 
-	case "Updated":
+	case "name_updated":
+		if newValue, ok := data["new_value"].(string); ok {
+			u.name = newValue
+		}
+
+	case "updated":
 		// Handle bulk updates
-		if newEmail := standardEvent.GetDataString("new_email"); newEmail != "" {
+		if newEmail, ok := data["new_email"].(string); ok && newEmail != "" {
 			u.email = newEmail
 		}
-		if newName := standardEvent.GetDataString("new_name"); newName != "" {
+		if newName, ok := data["new_name"].(string); ok && newName != "" {
 			u.name = newName
 		}
 
-	case "StatusChanged":
-		newStatus := standardEvent.GetDataString("new_status")
-		u.isActive = newStatus == "active"
+	case "status_changed":
+		if newStatus, ok := data["new_status"].(string); ok {
+			u.isActive = newStatus == "active"
+		}
 
-	case "Deleted":
+	case "deleted":
 		// Handle soft delete - could set a deleted flag if needed
 		// For this example, we don't change the state
 
@@ -286,16 +343,12 @@ func (u *UserWithStandardEvents) applyStandardEvent(event domain.Event) {
 }
 
 // GetEventSummary returns a summary of all uncommitted events for debugging.
-func (u *UserWithStandardEvents) GetEventSummary() []string {
+func (u *UserWithEntityEvents) GetEventSummary() []string {
 	events := u.UncommittedEvents()
 	summary := make([]string, len(events))
 
 	for i, event := range events {
-		if standardEvent, ok := event.(*domain.StandardEvent); ok {
-			summary[i] = standardEvent.EventType()
-		} else {
-			summary[i] = event.EventType()
-		}
+		summary[i] = event.EventType()
 	}
 
 	return summary

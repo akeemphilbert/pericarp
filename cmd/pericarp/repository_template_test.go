@@ -43,9 +43,9 @@ func TestRepositoryInterfaceTemplate_Generation(t *testing.T) {
 				"package domain",
 				"type UserRepository interface",
 				"Save(ctx context.Context, user *User) error",
-				"Load(ctx context.Context, id string) (*User, error)",
-				"Delete(ctx context.Context, id string) error",
-				"Exists(ctx context.Context, id string) (bool, error)",
+				"Load(ctx context.Context, id ksuid.KSUID) (*User, error)",
+				"Delete(ctx context.Context, id ksuid.KSUID) error",
+				"Exists(ctx context.Context, id ksuid.KSUID) (bool, error)",
 				"FindByEmail(ctx context.Context, email string) ([]*User, error)",
 				"FindByName(ctx context.Context, name string) ([]*User, error)",
 				"FindAll(ctx context.Context, limit, offset int) ([]*User, error)",
@@ -78,9 +78,9 @@ func TestRepositoryInterfaceTemplate_Generation(t *testing.T) {
 				"package domain",
 				"type OrderRepository interface",
 				"Save(ctx context.Context, order *Order) error",
-				"Load(ctx context.Context, id string) (*Order, error)",
-				"Delete(ctx context.Context, id string) error",
-				"Exists(ctx context.Context, id string) (bool, error)",
+				"Load(ctx context.Context, id ksuid.KSUID) (*Order, error)",
+				"Delete(ctx context.Context, id ksuid.KSUID) error",
+				"Exists(ctx context.Context, id ksuid.KSUID) (bool, error)",
 				"FindAll(ctx context.Context, limit, offset int) ([]*Order, error)",
 				"Count(ctx context.Context) (int64, error)",
 			},
@@ -101,7 +101,7 @@ func TestRepositoryInterfaceTemplate_Generation(t *testing.T) {
 			// Verify proper Go syntax structure
 			assert.Contains(t, result, "import (")
 			assert.Contains(t, result, "context")
-			assert.Contains(t, result, "github.com/google/uuid")
+			assert.Contains(t, result, "github.com/segmentio/ksuid")
 		})
 	}
 }
@@ -157,12 +157,12 @@ func TestRepositoryImplementationTemplate_Generation(t *testing.T) {
 		"if product == nil {",
 		"return fmt.Errorf(\"product cannot be nil\")",
 		"events := product.UncommittedEvents()",
-		"r.eventStore.SaveEvents(ctx, product.ID(), events, product.Version()-len(events))",
+		"r.eventStore.Save(ctx, events)",
 		"product.MarkEventsAsCommitted()",
 
 		// Load method
-		"func (r *ProductEventSourcingRepository) Load(ctx context.Context, id string) (*appDomain.Product, error)",
-		"events, err := r.eventStore.GetEvents(ctx, id.String())",
+		"func (r *ProductEventSourcingRepository) Load(ctx context.Context, id ksuid.KSUID) (*appDomain.Product, error)",
+		"envelopes, err := r.eventStore.Load(ctx, aggregateID)",
 		"product := &appDomain.Product{}",
 		"product.LoadFromHistory(events)",
 
@@ -218,19 +218,19 @@ func TestRepositoryTemplate_ErrorHandling(t *testing.T) {
 		"return fmt.Errorf(\"account cannot be nil\")",
 
 		// Event store errors
-		"if err := r.eventStore.SaveEvents",
+		"if _, err := r.eventStore.Save(ctx, events); err != nil {",
 		"return fmt.Errorf(\"failed to save events for account %s: %w\", account.ID(), err)",
 
 		// Load errors
 		"if err != nil {",
-		"return nil, fmt.Errorf(\"failed to load events for account %s: %w\", id.String(), err)",
+		"return nil, fmt.Errorf(\"failed to load events for account %s: %w\", aggregateID, err)",
 
 		// Not found errors
-		"if len(events) == 0 {",
-		"return nil, fmt.Errorf(\"account not found: %s\", id.String())",
+		"if len(envelopes) == 0 {",
+		"return nil, fmt.Errorf(\"account not found: %s\", aggregateID)",
 
 		// Existence check errors
-		"return false, fmt.Errorf(\"failed to check existence of account %s: %w\", id.String(), err)",
+		"return false, fmt.Errorf(\"failed to check existence of account %s: %w\", aggregateID, err)",
 	}
 
 	for _, pattern := range errorPatterns {
@@ -274,9 +274,9 @@ func TestRepositoryTemplate_ContextUsage(t *testing.T) {
 	contextPatterns := []string{
 		// Interface methods with context
 		"Save(ctx context.Context, document *Document) error",
-		"Load(ctx context.Context, id string) (*Document, error)",
-		"Delete(ctx context.Context, id string) error",
-		"Exists(ctx context.Context, id string) (bool, error)",
+		"Load(ctx context.Context, id ksuid.KSUID) (*Document, error)",
+		"Delete(ctx context.Context, id ksuid.KSUID) error",
+		"Exists(ctx context.Context, id ksuid.KSUID) (bool, error)",
 		"FindAll(ctx context.Context, limit, offset int) ([]*Document, error)",
 		"Count(ctx context.Context) (int64, error)",
 	}
@@ -287,8 +287,8 @@ func TestRepositoryTemplate_ContextUsage(t *testing.T) {
 
 	// Implementation context usage
 	implContextPatterns := []string{
-		"r.eventStore.SaveEvents(ctx, document.ID(), events",
-		"r.eventStore.GetEvents(ctx, id.String())",
+		"r.eventStore.Save(ctx, events)",
+		"r.eventStore.Load(ctx, aggregateID)",
 	}
 
 	for _, pattern := range implContextPatterns {
@@ -332,7 +332,7 @@ func TestRepositoryTemplate_CRUDOperations(t *testing.T) {
 		"Save(ctx context.Context, task *Task) error",
 
 		// Read operations
-		"Load(ctx context.Context, id string) (*Task, error)",
+		"Load(ctx context.Context, id ksuid.KSUID) (*Task, error)",
 		"FindByTitle(ctx context.Context, title string) ([]*Task, error)",
 		"FindByStatus(ctx context.Context, status string) ([]*Task, error)",
 		"FindAll(ctx context.Context, limit, offset int) ([]*Task, error)",
@@ -455,17 +455,17 @@ func TestRepositoryTemplate_EventSourcingPatterns(t *testing.T) {
 		"events := invoice.UncommittedEvents()",
 		"if len(events) == 0 {",
 		"r.logger.Debug(\"No uncommitted events to save for invoice %s\", invoice.ID())",
-		"r.eventStore.SaveEvents(ctx, invoice.ID(), events, invoice.Version()-len(events))",
+		"r.eventStore.Save(ctx, events)",
 		"invoice.MarkEventsAsCommitted()",
 
 		// Load with event replay
-		"events, err := r.eventStore.GetEvents(ctx, id.String())",
+		"envelopes, err := r.eventStore.Load(ctx, aggregateID)",
 		"invoice := &appDomain.Invoice{}",
 		"invoice.LoadFromHistory(events)",
 
 		// Logging
 		"r.logger.Debug(\"Saved %d events for invoice %s\", len(events), invoice.ID())",
-		"r.logger.Debug(\"Loaded invoice %s from %d events\", id.String(), len(events))",
+		"r.logger.Debug(\"Loaded invoice %s from %d events\", aggregateID, len(events))",
 	}
 
 	for _, pattern := range eventSourcingPatterns {
