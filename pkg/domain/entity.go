@@ -76,8 +76,8 @@ type BasicEntity struct {
 
 // NewEntity creates a new entity with the given ID.
 // The entity starts with sequence number 0.
-func NewEntity(id string) BasicEntity {
-	return BasicEntity{
+func NewEntity(id string) *BasicEntity {
+	return &BasicEntity{
 		id:         id,
 		sequenceNo: 0,
 		events:     []Event{},
