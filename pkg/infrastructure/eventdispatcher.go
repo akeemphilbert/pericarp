@@ -97,8 +97,12 @@ func (d *WatermillEventDispatcher) dispatchSingle(ctx context.Context, envelope 
 	// Generate the 4 wildcard topic patterns
 	wildcardTopics := d.generateWildcardTopics(eventType)
 
-	// Create Watermill message
-	msg := message.NewMessage(envelope.EventID(), envelope.Event().Payload())
+	// Create Watermill message with serialized Event object
+	eventJSON, err := json.Marshal(envelope.Event())
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+	msg := message.NewMessage(envelope.EventID(), eventJSON)
 
 	msg.Metadata.Set("event_type", eventType)
 	msg.Metadata.Set("aggregate_id", event.AggregateID())
@@ -261,21 +265,15 @@ func (d *WatermillEventDispatcher) reconstructEnvelopeFromMessage(msg *message.M
 		eventTypeOnly = eventType[dotIndex+1:]
 	}
 
-	// Create the event using the message payload
-	event := &domain.EntityEvent{
-		EntityType:  entityType,
-		Type:        eventTypeOnly,
-		AggregateId: aggregateID,
-		SequenceNum: seqNo,
-		CreatedTime: occurredAt,
-		UserId:      "",
-		AccountId:   "",
-		PayloadData: msg.Payload, // Use the message payload directly
+	// Deserialize the complete event from the message payload
+	var event domain.EntityEvent
+	if err := json.Unmarshal(msg.Payload, &event); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal event from payload: %w", err)
 	}
 
 	// Create envelope
 	envelope := &eventEnvelope{
-		event:     event,
+		event:     &event,
 		metadata:  metadata,
 		eventID:   msg.UUID,
 		timestamp: timestamp,
