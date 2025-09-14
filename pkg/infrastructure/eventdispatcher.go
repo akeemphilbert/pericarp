@@ -223,10 +223,7 @@ func (d *WatermillEventDispatcher) handleMessage(msg *message.Message, handler d
 // reconstructEnvelopeFromMessage reconstructs a domain.Envelope from watermill message metadata and payload
 func (d *WatermillEventDispatcher) reconstructEnvelopeFromMessage(msg *message.Message) (domain.Envelope, error) {
 	// Extract data from message metadata
-	eventType := msg.Metadata.Get("event_type")
-	aggregateID := msg.Metadata.Get("aggregate_id")
 	sequenceNoStr := msg.Metadata.Get("sequence_no")
-	occurredAtStr := msg.Metadata.Get("occurred_at")
 	timestampStr := msg.Metadata.Get("timestamp")
 	metadataStr := msg.Metadata.Get("metadata")
 
@@ -234,12 +231,6 @@ func (d *WatermillEventDispatcher) reconstructEnvelopeFromMessage(msg *message.M
 	var seqNo int64
 	if _, err := fmt.Sscanf(sequenceNoStr, "%d", &seqNo); err != nil {
 		return nil, fmt.Errorf("invalid sequence_no: %s", sequenceNoStr)
-	}
-
-	// Parse timestamps
-	occurredAt, err := time.Parse(time.RFC3339, occurredAtStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid occurred_at timestamp: %w", err)
 	}
 
 	timestamp, err := time.Parse(time.RFC3339, timestampStr)
@@ -255,14 +246,6 @@ func (d *WatermillEventDispatcher) reconstructEnvelopeFromMessage(msg *message.M
 		}
 	} else {
 		metadata = make(map[string]interface{})
-	}
-
-	// Parse entity type and event type from the combined event type
-	entityType := "Generic"
-	eventTypeOnly := eventType
-	if dotIndex := strings.LastIndex(eventType, "."); dotIndex != -1 {
-		entityType = eventType[:dotIndex]
-		eventTypeOnly = eventType[dotIndex+1:]
 	}
 
 	// Deserialize the complete event from the message payload
