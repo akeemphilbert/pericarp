@@ -1,5 +1,7 @@
 package domain
 
+//go:generate moq -out mocks/logger_mock.go -pkg mocks . Logger
+
 // Logger provides structured and formatted logging capabilities for the domain layer.
 // The logger interface is designed to be implementation-agnostic, allowing different
 // logging backends (logrus, zap, slog, etc.) to be used without changing domain code.

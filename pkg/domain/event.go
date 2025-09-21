@@ -24,6 +24,13 @@ import (
 	"time"
 )
 
+type ContextKey string
+
+const (
+	UserID    ContextKey = "user_id"
+	AccountID ContextKey = "account_id"
+)
+
 // Event represents a domain event that captures something significant that happened
 // in the business domain. Events are immutable facts about what occurred and are
 // used for event sourcing, integration, and building read models.
@@ -342,11 +349,27 @@ type EntityEvent struct {
 //	user := &User{ID: "user-123", Email: "user@example.com", Name: "John Doe"}
 //	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", user)
 //	// event.EventType() returns "user.created"
-func NewEntityEvent(entityType, eventType, aggregateID, userID, accountID string, data interface{}) *EntityEvent {
+func NewEntityEvent(ctx context.Context, logger Logger, entityType, eventType, aggregateID string, data interface{}) *EntityEvent {
 	// Marshal data to JSON bytes for the payload
 	payload, err := json.Marshal(data)
 	if err != nil {
 		payload = []byte{}
+	}
+
+	var userID, accountID string
+	var ok bool
+	if ctx != nil {
+		if userID, ok = ctx.Value(UserID).(string); !ok {
+			logger.Warn(
+				"User ID not found in context",
+				"entity_type", entityType,
+				"event_type", eventType,
+				"aggregate_id", aggregateID,
+				"user_id", userID)
+		}
+		if accountID, ok = ctx.Value(AccountID).(string); !ok {
+			logger.Warn("Account ID not found in context", "entity_type", entityType, "event_type", eventType, "aggregate_id", aggregateID)
+		}
 	}
 
 	return &EntityEvent{

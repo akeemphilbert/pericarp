@@ -158,7 +158,7 @@ func NewTestEventBuilder() *TestEventBuilder {
 
 // UserCreatedEvent creates a user created event
 func (b *TestEventBuilder) UserCreatedEvent(userID, email, name string) pkgdomain.Event {
-	return pkgdomain.NewEntityEvent("user", "created", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "created", userID, map[string]interface{}{
 		"email": email,
 		"name":  name,
 	})
@@ -166,7 +166,7 @@ func (b *TestEventBuilder) UserCreatedEvent(userID, email, name string) pkgdomai
 
 // UserEmailChangedEvent creates a user email changed event
 func (b *TestEventBuilder) UserEmailChangedEvent(userID, oldEmail, newEmail string) pkgdomain.Event {
-	return pkgdomain.NewEntityEvent("user", "email_changed", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "email_changed", userID, map[string]interface{}{
 		"old_email": oldEmail,
 		"new_email": newEmail,
 	})
@@ -174,14 +174,14 @@ func (b *TestEventBuilder) UserEmailChangedEvent(userID, oldEmail, newEmail stri
 
 // UserActivatedEvent creates a user activated event
 func (b *TestEventBuilder) UserActivatedEvent(userID string) pkgdomain.Event {
-	return pkgdomain.NewEntityEvent("user", "activated", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "activated", userID, map[string]interface{}{
 		"activated_at": time.Now(),
 	})
 }
 
 // UserDeactivatedEvent creates a user deactivated event
 func (b *TestEventBuilder) UserDeactivatedEvent(userID string) pkgdomain.Event {
-	return pkgdomain.NewEntityEvent("user", "deactivated", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "deactivated", userID, map[string]interface{}{
 		"deactivated_at": time.Now(),
 	})
 }

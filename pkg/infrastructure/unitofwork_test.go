@@ -118,10 +118,10 @@ func TestUnitOfWork_RegisterAndCommit(t *testing.T) {
 	uow := NewUnitOfWork(eventStore, eventDispatcher)
 
 	// Create test events
-	event1 := domain.NewEntityEvent("Test", "Event1", "aggregate-1", "user-1", "account-1", nil)
+	event1 := domain.NewEntityEvent(nil, nil, "Test", "Event1", "aggregate-1", nil)
 	event1.SetSequenceNo(1)
 
-	event2 := domain.NewEntityEvent("Test", "Event2", "aggregate-1", "user-1", "account-1", nil)
+	event2 := domain.NewEntityEvent(nil, nil, "Test", "Event2", "aggregate-1", nil)
 	event2.SetSequenceNo(2)
 
 	// Register events
@@ -208,7 +208,7 @@ func TestUnitOfWork_Rollback(t *testing.T) {
 	uow := NewUnitOfWork(eventStore, eventDispatcher)
 
 	// Register events
-	event := domain.NewEntityEvent("Test", "Event", "aggregate-1", "user-1", "account-1", nil)
+	event := domain.NewEntityEvent(nil, nil, "Test", "Event", "aggregate-1", nil)
 	event.SetSequenceNo(1)
 
 	uow.RegisterEvents([]domain.Event{event})
@@ -251,7 +251,7 @@ func TestUnitOfWork_SaveError(t *testing.T) {
 	eventStore.SetSaveError(saveError)
 
 	// Register event
-	event := domain.NewEntityEvent("Test", "Event", "aggregate-1", "user-1", "account-1", nil)
+	event := domain.NewEntityEvent(nil, nil, "Test", "Event", "aggregate-1", nil)
 	event.SetSequenceNo(1)
 
 	uow.RegisterEvents([]domain.Event{event})
@@ -289,7 +289,7 @@ func TestUnitOfWork_DispatchError(t *testing.T) {
 	eventDispatcher.SetDispatchError(dispatchError)
 
 	// Register event
-	event := domain.NewEntityEvent("Test", "Event", "aggregate-1", "user-1", "account-1", nil)
+	event := domain.NewEntityEvent(nil, nil, "Test", "Event", "aggregate-1", nil)
 	event.SetSequenceNo(1)
 
 	uow.RegisterEvents([]domain.Event{event})
@@ -324,7 +324,7 @@ func TestUnitOfWork_DoubleCommit(t *testing.T) {
 	uow := NewUnitOfWork(eventStore, eventDispatcher)
 
 	// Register event
-	event := domain.NewEntityEvent("Test", "Event", "aggregate-1", "user-1", "account-1", nil)
+	event := domain.NewEntityEvent(nil, nil, "Test", "Event", "aggregate-1", nil)
 	event.SetSequenceNo(1)
 
 	uow.RegisterEvents([]domain.Event{event})
@@ -362,7 +362,7 @@ func TestUnitOfWork_RegisterAfterCommit(t *testing.T) {
 		}
 	}()
 
-	event := domain.NewEntityEvent("Test", "Event", "aggregate-1", "user-1", "account-1", nil)
+	event := domain.NewEntityEvent(nil, nil, "Test", "Event", "aggregate-1", nil)
 	event.SetSequenceNo(1)
 
 	uow.RegisterEvents([]domain.Event{event})

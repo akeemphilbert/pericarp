@@ -102,17 +102,17 @@ func TestOrderExample_LoadFromHistory(t *testing.T) {
 	// Arrange - create events that represent order history
 	orderID := "order-123"
 	events := []domain.Event{
-		domain.NewEntityEvent("order", "created", orderID, "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "order", "created", orderID, map[string]interface{}{
 			"customer_id": "customer-456",
 			"status":      "pending",
 		}),
-		domain.NewEntityEvent("order", "confirmed", orderID, "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "order", "confirmed", orderID, map[string]interface{}{
 			"status": "confirmed",
 		}),
 	}
 
 	// Act - reconstruct order from events
-	order := &OrderExample{BasicEntity: domain.NewEntity(orderID)}
+	order := &OrderExample{BasicEntity: *domain.NewEntity(orderID)}
 	order.LoadFromHistory(events)
 
 	// Assert

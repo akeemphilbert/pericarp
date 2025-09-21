@@ -65,7 +65,7 @@ func TestWatermillEventDispatcher_SubscribeAndDispatch(t *testing.T) {
 	}
 
 	// Create test event and envelope
-	event := domain.NewEntityEvent("Test", "Event", "test-123", "user-1", "account-1", nil)
+	event := domain.NewEntityEvent(nil, nil, "Test", "Event", "test-123", nil)
 	event.SetSequenceNo(1)
 
 	envelope := &eventEnvelope{
@@ -138,7 +138,7 @@ func TestWatermillEventDispatcher_MultipleHandlers(t *testing.T) {
 	}
 
 	// Create and dispatch test event
-	event := domain.NewEntityEvent("Test", "Event", "test-456", "user-1", "account-1", nil)
+	event := domain.NewEntityEvent(nil, nil, "Test", "Event", "test-456", nil)
 	event.SetSequenceNo(1)
 
 	envelope := &eventEnvelope{
@@ -200,9 +200,9 @@ func TestWatermillEventDispatcher_DifferentEventTypes(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Create events of different types
-	event1 := domain.NewEntityEvent("Test", "EventType1", "test-1", "user-1", "account-1", nil)
+	event1 := domain.NewEntityEvent(nil, nil, "Test", "EventType1", "test-1", nil)
 	event1.SetSequenceNo(1)
-	event2 := domain.NewEntityEvent("Test", "EventType2", "test-2", "user-1", "account-1", nil)
+	event2 := domain.NewEntityEvent(nil, nil, "Test", "EventType2", "test-2", nil)
 	event2.SetSequenceNo(1)
 
 	envelope1 := &eventEnvelope{event: event1, eventID: "env-1", timestamp: time.Now(), metadata: map[string]interface{}{}}

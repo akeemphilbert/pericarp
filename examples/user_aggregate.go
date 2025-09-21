@@ -32,7 +32,7 @@ func NewUser(id, email, name string) (*User, error) {
 	}
 
 	user := &User{
-		BasicEntity: domain.NewEntity(id),
+		BasicEntity: *domain.NewEntity(id),
 		email:       email,
 		name:        name,
 		isActive:    true,
@@ -50,7 +50,7 @@ func NewUser(id, email, name string) (*User, error) {
 		IsActive:  true,
 		CreatedAt: time.Now(),
 	}
-	event := domain.NewEntityEvent("user", "created", id, "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "created", id, eventData)
 
 	user.AddEvent(event)
 	return user, nil
@@ -94,7 +94,7 @@ func (u *User) ChangeEmail(newEmail string) error {
 		OldEmail: oldEmail,
 		NewEmail: newEmail,
 	}
-	event := domain.NewEntityEvent("user", "email_changed", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "email_changed", u.ID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -122,7 +122,7 @@ func (u *User) ChangeName(newName string) error {
 		OldName: oldName,
 		NewName: newName,
 	}
-	event := domain.NewEntityEvent("user", "name_changed", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "name_changed", u.ID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -143,7 +143,7 @@ func (u *User) Deactivate() error {
 		DeactivatedAt: time.Now(),
 		Reason:        "user_requested",
 	}
-	event := domain.NewEntityEvent("user", "deactivated", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "deactivated", u.ID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -164,7 +164,7 @@ func (u *User) Activate() error {
 		ActivatedAt: time.Now(),
 		Reason:      "admin_action",
 	}
-	event := domain.NewEntityEvent("user", "activated", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "activated", u.ID(), eventData)
 
 	u.AddEvent(event)
 	return nil

@@ -31,7 +31,7 @@ func NewUserWithEntityEvents(id, email, name string) (*UserWithEntityEvents, err
 	}
 
 	user := &UserWithEntityEvents{
-		BasicEntity: domain.NewEntity(id),
+		BasicEntity: *domain.NewEntity(id),
 		email:       email,
 		name:        name,
 		isActive:    true,
@@ -49,7 +49,7 @@ func NewUserWithEntityEvents(id, email, name string) (*UserWithEntityEvents, err
 		IsActive:  true,
 		CreatedAt: time.Now(),
 	}
-	event := domain.NewEntityEvent("user", "created", id, "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "created", id, eventData)
 
 	user.AddEvent(event)
 	return user, nil
@@ -94,7 +94,7 @@ func (u *UserWithEntityEvents) ChangeEmail(newEmail string) error {
 		OldValue: oldEmail,
 		NewValue: newEmail,
 	}
-	event := domain.NewEntityEvent("user", "email_updated", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "email_updated", u.ID(), eventData)
 
 	// Add additional context
 	event.SetMetadata("updated_by", "system")
@@ -128,7 +128,7 @@ func (u *UserWithEntityEvents) ChangeName(newName string) error {
 		OldValue: oldName,
 		NewValue: newName,
 	}
-	event := domain.NewEntityEvent("user", "name_updated", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "name_updated", u.ID(), eventData)
 
 	// Add additional context
 	event.SetMetadata("updated_by", "system")
@@ -158,7 +158,7 @@ func (u *UserWithEntityEvents) Deactivate() error {
 		Reason:        "user_requested",
 		DeactivatedAt: time.Now(),
 	}
-	event := domain.NewEntityEvent("user", "status_changed", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "status_changed", u.ID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -184,7 +184,7 @@ func (u *UserWithEntityEvents) Activate() error {
 		Reason:      "admin_action",
 		ActivatedAt: time.Now(),
 	}
-	event := domain.NewEntityEvent("user", "status_changed", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "status_changed", u.ID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -234,7 +234,7 @@ func (u *UserWithEntityEvents) UpdateProfile(newEmail, newName string) error {
 		eventData.NewName = newName
 	}
 
-	event := domain.NewEntityEvent("user", "updated", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "updated", u.ID(), eventData)
 	// Build list of updated fields
 	var updatedFields []string
 	if emailChanged {
@@ -261,7 +261,7 @@ func (u *UserWithEntityEvents) Delete(reason string) error {
 		DeletedAt:  time.Now(),
 		SoftDelete: true,
 	}
-	event := domain.NewEntityEvent("user", "deleted", u.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "deleted", u.ID(), eventData)
 
 	u.AddEvent(event)
 	return nil

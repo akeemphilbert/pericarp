@@ -61,7 +61,7 @@ func NewOrderExample(customerID string, items []OrderItemExample) (*OrderExample
 
 	orderID := uuid.New().String()
 	order := &OrderExample{
-		BasicEntity: domain.NewEntity(orderID), // Use standard Entity
+		BasicEntity: *domain.NewEntity(orderID), // Use standard Entity
 		customerID:  customerID,
 		items:       items,
 		status:      OrderStatusPending,
@@ -85,7 +85,7 @@ func NewOrderExample(customerID string, items []OrderItemExample) (*OrderExample
 		Status:      string(OrderStatusPending),
 		CreatedAt:   time.Now(),
 	}
-	event := domain.NewEntityEvent("order", "created", orderID, "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "order", "created", orderID, eventData)
 
 	order.AddEvent(event) // Use Entity's AddEvent method
 	return order, nil
@@ -107,7 +107,7 @@ func (o *OrderExample) ConfirmOrder() error {
 		ConfirmedAt: time.Now(),
 		Status:      string(OrderStatusConfirmed),
 	}
-	event := domain.NewEntityEvent("order", "confirmed", o.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "order", "confirmed", o.ID(), eventData)
 
 	o.AddEvent(event) // Use Entity's AddEvent method
 	return nil
@@ -133,7 +133,7 @@ func (o *OrderExample) CancelOrder(reason string) error {
 		NewStatus:   string(OrderStatusCancelled),
 		CancelledAt: time.Now(),
 	}
-	event := domain.NewEntityEvent("order", "cancelled", o.ID(), "", "", eventData)
+	event := domain.NewEntityEvent(nil, nil, "order", "cancelled", o.ID(), eventData)
 
 	o.AddEvent(event)
 	return nil

@@ -225,26 +225,26 @@ func TestUser_Activate(t *testing.T) {
 func TestUser_LoadFromHistory(t *testing.T) {
 	// Create events representing user history using EntityEvent
 	events := []domain.Event{
-		domain.NewEntityEvent("user", "created", "user-123", "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "user", "created", "user-123", map[string]interface{}{
 			"email":     "john@example.com",
 			"name":      "John Doe",
 			"is_active": true,
 		}),
-		domain.NewEntityEvent("user", "email_changed", "user-123", "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "user", "email_changed", "user-123", map[string]interface{}{
 			"old_email": "john@example.com",
 			"new_email": "john.doe@example.com",
 		}),
-		domain.NewEntityEvent("user", "name_changed", "user-123", "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "user", "name_changed", "user-123", map[string]interface{}{
 			"old_name": "John Doe",
 			"new_name": "John Smith",
 		}),
-		domain.NewEntityEvent("user", "deactivated", "user-123", "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "user", "deactivated", "user-123", map[string]interface{}{
 			"reason": "user_requested",
 		}),
 	}
 
 	// Create empty user and load from history
-	user := &User{BasicEntity: domain.NewEntity("user-123")}
+	user := &User{BasicEntity: *domain.NewEntity("user-123")}
 	user.LoadFromHistory(events)
 
 	// Verify final state
@@ -321,7 +321,7 @@ func TestUser_CompleteLifecycle(t *testing.T) {
 	}
 
 	// Reconstruct user from events
-	reconstructedUser := &User{BasicEntity: domain.NewEntity("user-123")}
+	reconstructedUser := &User{BasicEntity: *domain.NewEntity("user-123")}
 	reconstructedUser.LoadFromHistory(allEvents)
 
 	// Verify reconstructed state matches current state

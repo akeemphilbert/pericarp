@@ -197,22 +197,22 @@ func TestUserWithEntityEvents_UpdateProfile(t *testing.T) {
 func TestUserWithEntityEvents_LoadFromHistory(t *testing.T) {
 	// Create events representing user history using EntityEvents
 	events := []domain.Event{
-		domain.NewEntityEvent("user", "created", "user-123", "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "user", "created", "user-123", map[string]interface{}{
 			"email":     "john@example.com",
 			"name":      "John Doe",
 			"is_active": true,
 		}),
-		domain.NewEntityEvent("user", "email_updated", "user-123", "", "", map[string]interface{}{
-			"field":     "Email",
+		domain.NewEntityEvent(nil, nil, "user", "email_updated", "user-123", map[string]interface{}{
+			"field":     "email",
 			"old_value": "john@example.com",
 			"new_value": "john.doe@example.com",
 		}),
-		domain.NewEntityEvent("user", "name_updated", "user-123", "", "", map[string]interface{}{
-			"field":     "Name",
+		domain.NewEntityEvent(nil, nil, "user", "name_updated", "user-123", map[string]interface{}{
+			"field":     "name",
 			"old_value": "John Doe",
 			"new_value": "John Smith",
 		}),
-		domain.NewEntityEvent("user", "status_changed", "user-123", "", "", map[string]interface{}{
+		domain.NewEntityEvent(nil, nil, "user", "status_changed", "user-123", map[string]interface{}{
 			"old_status": "active",
 			"new_status": "inactive",
 			"reason":     "user_requested",
@@ -220,7 +220,7 @@ func TestUserWithEntityEvents_LoadFromHistory(t *testing.T) {
 	}
 
 	// Create empty user and load from history
-	user := &UserWithEntityEvents{BasicEntity: domain.NewEntity("user-123")}
+	user := &UserWithEntityEvents{BasicEntity: *domain.NewEntity("user-123")}
 	user.LoadFromHistory(events)
 
 	// Verify final state

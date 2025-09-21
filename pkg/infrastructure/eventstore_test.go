@@ -30,11 +30,11 @@ func TestGormEventStore_SaveAndLoad(t *testing.T) {
 	now := time.Now()
 
 	// Create test events
-	event1 := domain.NewEntityEvent("Test", "EventCreated", aggregateID, "user-1", "account-1", nil)
+	event1 := domain.NewEntityEvent(nil, nil, "Test", "EventCreated", aggregateID, nil)
 	event1.SetSequenceNo(1)
 	event1.CreatedTime = now
 
-	event2 := domain.NewEntityEvent("Test", "EventUpdated", aggregateID, "user-1", "account-1", nil)
+	event2 := domain.NewEntityEvent(nil, nil, "Test", "EventUpdated", aggregateID, nil)
 	event2.SetSequenceNo(2)
 	event2.CreatedTime = now.Add(time.Minute)
 

@@ -81,7 +81,7 @@ func (b *EventBuilder) UserCreatedEvent(userID, email, name string) pkgdomain.Ev
 	user, err := examples.NewUser(userID, email, name)
 	if err != nil {
 		// Return a basic event if user creation fails
-		return pkgdomain.NewEntityEvent("user", "created", userID, "", "", map[string]interface{}{
+		return pkgdomain.NewEntityEvent(nil, nil, "user", "created", userID, map[string]interface{}{
 			"email": email,
 			"name":  name,
 		})
@@ -93,7 +93,7 @@ func (b *EventBuilder) UserCreatedEvent(userID, email, name string) pkgdomain.Ev
 	}
 
 	// Fallback to basic event
-	return pkgdomain.NewEntityEvent("user", "created", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "created", userID, map[string]interface{}{
 		"email": email,
 		"name":  name,
 	})
@@ -101,7 +101,7 @@ func (b *EventBuilder) UserCreatedEvent(userID, email, name string) pkgdomain.Ev
 
 // UserEmailChangedEvent creates a user email changed event
 func (b *EventBuilder) UserEmailChangedEvent(userID, oldEmail, newEmail string) pkgdomain.Event {
-	return pkgdomain.NewEntityEvent("user", "email_changed", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "email_changed", userID, map[string]interface{}{
 		"old_email": oldEmail,
 		"new_email": newEmail,
 	})
@@ -109,7 +109,7 @@ func (b *EventBuilder) UserEmailChangedEvent(userID, oldEmail, newEmail string) 
 
 // UserActivatedEvent creates a user activated event
 func (b *EventBuilder) UserActivatedEvent(userID string) pkgdomain.Event {
-	return pkgdomain.NewEntityEvent("user", "activated", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "activated", userID, map[string]interface{}{
 		"activated_at": time.Now(),
 		"reason":       "test",
 	})
@@ -117,7 +117,7 @@ func (b *EventBuilder) UserActivatedEvent(userID string) pkgdomain.Event {
 
 // UserDeactivatedEvent creates a user deactivated event
 func (b *EventBuilder) UserDeactivatedEvent(userID string) pkgdomain.Event {
-	return pkgdomain.NewEntityEvent("user", "deactivated", userID, "", "", map[string]interface{}{
+	return pkgdomain.NewEntityEvent(nil, nil, "user", "deactivated", userID, map[string]interface{}{
 		"deactivated_at": time.Now(),
 		"reason":         "test",
 	})
