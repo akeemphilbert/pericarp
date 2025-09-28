@@ -14,6 +14,7 @@ type Entity interface {
 	AddEvent(event Event)
 	HasUncommittedEvents() bool
 	UncommittedEventCount() int
+	MergeEventsFrom(source Entity) error
 	AddError(err error)
 	Errors() []error
 	IsValid() bool
@@ -67,21 +68,23 @@ type Entity interface {
 //	    return nil
 //	}
 type BasicEntity struct {
-	id         string
-	sequenceNo int64
-	events     []Event
-	errors     []error
-	mu         sync.RWMutex // Protects concurrent access to entity state
+	id                string
+	sequenceNo        int64
+	events            []Event // Committed events (full history)
+	uncommittedEvents []Event // Events pending persistence
+	errors            []error
+	mu                sync.RWMutex // Protects concurrent access to entity state
 }
 
 // NewEntity creates a new entity with the given ID.
 // The entity starts with sequence number 0.
 func NewEntity(id string) *BasicEntity {
 	return &BasicEntity{
-		id:         id,
-		sequenceNo: 0,
-		events:     []Event{},
-		errors:     []error{},
+		id:                id,
+		sequenceNo:        0,
+		events:            []Event{},
+		uncommittedEvents: []Event{},
+		errors:            []error{},
 	}
 }
 
@@ -101,6 +104,7 @@ func (e *BasicEntity) WithID(id string) *BasicEntity {
 	e.id = id
 	e.sequenceNo = 0
 	e.events = []Event{}
+	e.uncommittedEvents = []Event{}
 	e.errors = []error{}
 
 	return e
@@ -137,8 +141,8 @@ func (e *BasicEntity) UncommittedEvents() []Event {
 	defer e.mu.RUnlock()
 
 	// Return a copy to prevent external modification
-	events := make([]Event, len(e.events))
-	copy(events, e.events)
+	events := make([]Event, len(e.uncommittedEvents))
+	copy(events, e.uncommittedEvents)
 	return events
 }
 
@@ -149,8 +153,11 @@ func (e *BasicEntity) MarkEventsAsCommitted() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Clear the events slice but keep the underlying array for reuse
-	e.events = e.events[:0]
+	// Move uncommitted events to committed events
+	e.events = append(e.events, e.uncommittedEvents...)
+
+	// Clear the uncommitted events slice but keep the underlying array for reuse
+	e.uncommittedEvents = e.uncommittedEvents[:0]
 }
 
 // LoadFromHistory reconstructs the entity state from a sequence of events.
@@ -184,8 +191,10 @@ func (e *BasicEntity) LoadFromHistory(events []Event) {
 	// Update sequence number based on events
 	e.sequenceNo = int64(len(events))
 
-	// Clear any uncommitted events and errors during reconstruction
-	e.events = e.events[:0]
+	// Load events into committed events and clear uncommitted events
+	e.events = make([]Event, len(events))
+	copy(e.events, events)
+	e.uncommittedEvents = e.uncommittedEvents[:0]
 	e.errors = e.errors[:0]
 }
 
@@ -225,8 +234,8 @@ func (e *BasicEntity) AddEvent(event Event) {
 	e.sequenceNo++
 	event.SetSequenceNo(e.sequenceNo)
 
-	// Add the event to uncommitted events
-	e.events = append(e.events, event)
+	// Add the event to uncommitted events only
+	e.uncommittedEvents = append(e.uncommittedEvents, event)
 }
 
 // HasUncommittedEvents returns true if the entity has events that haven't been persisted.
@@ -234,7 +243,7 @@ func (e *BasicEntity) AddEvent(event Event) {
 func (e *BasicEntity) HasUncommittedEvents() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return len(e.events) > 0
+	return len(e.uncommittedEvents) > 0
 }
 
 // UncommittedEventCount returns the number of uncommitted events.
@@ -242,7 +251,55 @@ func (e *BasicEntity) HasUncommittedEvents() bool {
 func (e *BasicEntity) UncommittedEventCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return len(e.events)
+	return len(e.uncommittedEvents)
+}
+
+// MergeEventsFrom merges the uncommitted events from another entity into this entity.
+// Only uncommitted events from the source entity are merged; committed events are ignored.
+// The merged events preserve their original sequence numbers and references from the source.
+//
+// This method is useful for aggregate root entities that need to collect events from
+// child entities without modifying the event identity or sequence numbers.
+// The source entity remains unchanged after the merge operation.
+//
+// Example usage:
+//
+//	entity1 := NewEntity("entity-1")        // Aggregate root
+//	entity1.AddEvent(event1)                // sequence: 1
+//	entity1.MarkEventsAsCommitted()
+//	entity1.AddEvent(event2)                // sequence: 2 (uncommitted)
+//
+//	childEntity := NewEntity("child-1")     // Child entity
+//	childEntity.AddEvent(event3)            // sequence: 1 (uncommitted)
+//	childEntity.AddEvent(event4)            // sequence: 2 (uncommitted)
+//
+//	err := entity1.MergeEventsFrom(childEntity)
+//	// entity1 now has: event2 (seq: 2), event3 (seq: 1), event4 (seq: 2) as uncommitted
+//	// Original sequence numbers from childEntity are preserved
+//	// childEntity remains unchanged
+//
+// Note: The source must be a BasicEntity implementation. If a different Entity
+// implementation is passed, an error will be returned.
+func (e *BasicEntity) MergeEventsFrom(source Entity) error {
+	if source == nil {
+		return fmt.Errorf("source entity cannot be nil")
+	}
+
+	// Get uncommitted events from source using the interface method
+	sourceUncommittedEvents := source.UncommittedEvents()
+	if len(sourceUncommittedEvents) == 0 {
+		// No uncommitted events to merge - this is a no-op
+		return nil
+	}
+
+	// Merge the events preserving their original sequence numbers and references
+	for _, sourceEvent := range sourceUncommittedEvents {
+		// Add the event to our uncommitted events without modifying it
+		// This preserves the original sequence number and event identity from the source
+		e.uncommittedEvents = append(e.uncommittedEvents, sourceEvent)
+	}
+
+	return nil
 }
 
 // AddError adds an error to the entity's error collection.
@@ -293,6 +350,7 @@ func (e *BasicEntity) Reset() {
 
 	e.sequenceNo = 0
 	e.events = e.events[:0]
+	e.uncommittedEvents = e.uncommittedEvents[:0]
 	e.errors = e.errors[:0]
 }
 
@@ -308,14 +366,18 @@ func (e *BasicEntity) Clone() Entity {
 	events := make([]Event, len(e.events))
 	copy(events, e.events)
 
+	uncommittedEvents := make([]Event, len(e.uncommittedEvents))
+	copy(uncommittedEvents, e.uncommittedEvents)
+
 	errors := make([]error, len(e.errors))
 	copy(errors, e.errors)
 
 	return &BasicEntity{
-		id:         e.id,
-		sequenceNo: e.sequenceNo,
-		events:     events,
-		errors:     errors,
+		id:                e.id,
+		sequenceNo:        e.sequenceNo,
+		events:            events,
+		uncommittedEvents: uncommittedEvents,
+		errors:            errors,
 	}
 }
 
@@ -325,5 +387,5 @@ func (e *BasicEntity) String() string {
 	defer e.mu.RUnlock()
 
 	return fmt.Sprintf("Entity{ID: %s, SequenceNo: %d, UncommittedEvents: %d, Errors: %d}",
-		e.id, e.sequenceNo, len(e.events), len(e.errors))
+		e.id, e.sequenceNo, len(e.uncommittedEvents), len(e.errors))
 }

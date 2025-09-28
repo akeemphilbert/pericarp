@@ -259,9 +259,15 @@ func TestEntity_MarkEventsAsCommitted(t *testing.T) {
 		t.Error("Entity should have uncommitted events before marking as committed")
 	}
 
+	// Verify uncommitted events are returned correctly
+	uncommittedEvents := entity.UncommittedEvents()
+	if len(uncommittedEvents) != 1 {
+		t.Errorf("Expected 1 uncommitted event, got %d", len(uncommittedEvents))
+	}
+
 	entity.MarkEventsAsCommitted()
 
-	// Verify events are cleared
+	// Verify uncommitted events are cleared
 	if entity.HasUncommittedEvents() {
 		t.Error("Entity should not have uncommitted events after marking as committed")
 	}
@@ -270,13 +276,419 @@ func TestEntity_MarkEventsAsCommitted(t *testing.T) {
 		t.Errorf("Expected 0 uncommitted events, got %d", entity.UncommittedEventCount())
 	}
 
-	// Verify sequence number is preserved
-	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected sequence number 1, got %d", entity.SequenceNo())
+	// Verify events are now in the committed events (internal events slice)
+	// We can't directly access the events slice, but we can verify through behavior
+	// when we add a new event after committing
+	newEvent := &TestEvent{
+		eventType:   "TestEvent2",
+		aggregateID: "test-123",
+		sequenceNo:  2,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 2"),
 	}
 
-	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected sequence number 1, got %d", entity.SequenceNo())
+	entity.AddEvent(newEvent)
+
+	// Should now have 1 uncommitted event (the new one)
+	if entity.UncommittedEventCount() != 1 {
+		t.Errorf("Expected 1 uncommitted event after adding new event, got %d", entity.UncommittedEventCount())
+	}
+
+	// Verify sequence number is preserved and incremented
+	if entity.SequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", entity.SequenceNo())
+	}
+}
+
+func TestEntity_CommittedVsUncommittedEvents(t *testing.T) {
+	entity := NewEntity("test-123")
+
+	// Add first event
+	event1 := &TestEvent{
+		eventType:   "TestEvent1",
+		aggregateID: "test-123",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 1"),
+	}
+
+	entity.AddEvent(event1)
+
+	// Should have 1 uncommitted event
+	if entity.UncommittedEventCount() != 1 {
+		t.Errorf("Expected 1 uncommitted event, got %d", entity.UncommittedEventCount())
+	}
+
+	// Commit the events
+	entity.MarkEventsAsCommitted()
+
+	// Should have 0 uncommitted events
+	if entity.UncommittedEventCount() != 0 {
+		t.Errorf("Expected 0 uncommitted events after commit, got %d", entity.UncommittedEventCount())
+	}
+
+	// Add second event
+	event2 := &TestEvent{
+		eventType:   "TestEvent2",
+		aggregateID: "test-123",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 2"),
+	}
+
+	entity.AddEvent(event2)
+
+	// Should have 1 uncommitted event
+	if entity.UncommittedEventCount() != 1 {
+		t.Errorf("Expected 1 uncommitted event after adding second event, got %d", entity.UncommittedEventCount())
+	}
+
+	// Verify the uncommitted event is the second one
+	uncommittedEvents := entity.UncommittedEvents()
+	if len(uncommittedEvents) != 1 {
+		t.Errorf("Expected 1 uncommitted event in slice, got %d", len(uncommittedEvents))
+	}
+
+	if uncommittedEvents[0].EventType() != "TestEvent2" {
+		t.Errorf("Expected uncommitted event to be TestEvent2, got %s", uncommittedEvents[0].EventType())
+	}
+
+	// Verify sequence number is 2
+	if entity.SequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", entity.SequenceNo())
+	}
+
+	// Commit the second event
+	entity.MarkEventsAsCommitted()
+
+	// Should have 0 uncommitted events
+	if entity.UncommittedEventCount() != 0 {
+		t.Errorf("Expected 0 uncommitted events after second commit, got %d", entity.UncommittedEventCount())
+	}
+}
+
+func TestEntity_MergeEventsFrom(t *testing.T) {
+	entity1 := NewEntity("entity-1")
+	entity2 := NewEntity("entity-2")
+
+	// Add and commit an event to entity1
+	event1 := &TestEvent{
+		eventType:   "TestEvent1",
+		aggregateID: "entity-1",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 1"),
+	}
+
+	entity1.AddEvent(event1)
+	entity1.MarkEventsAsCommitted()
+
+	// Add another uncommitted event to entity1
+	event2 := &TestEvent{
+		eventType:   "TestEvent2",
+		aggregateID: "entity-1",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 2"),
+	}
+
+	entity1.AddEvent(event2)
+
+	// Add events to entity2 (some committed, some uncommitted)
+	event3 := &TestEvent{
+		eventType:   "TestEvent3",
+		aggregateID: "entity-2",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 3"),
+	}
+
+	event4 := &TestEvent{
+		eventType:   "TestEvent4",
+		aggregateID: "entity-2",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 4"),
+	}
+
+	event5 := &TestEvent{
+		eventType:   "TestEvent5",
+		aggregateID: "entity-2",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 5"),
+	}
+
+	entity2.AddEvent(event3)
+	entity2.MarkEventsAsCommitted() // event3 is now committed
+	entity2.AddEvent(event4)        // event4 is uncommitted
+	entity2.AddEvent(event5)        // event5 is uncommitted
+
+	// Verify initial state
+	if entity1.UncommittedEventCount() != 1 {
+		t.Errorf("Expected entity1 to have 1 uncommitted event, got %d", entity1.UncommittedEventCount())
+	}
+
+	if entity2.UncommittedEventCount() != 2 {
+		t.Errorf("Expected entity2 to have 2 uncommitted events, got %d", entity2.UncommittedEventCount())
+	}
+
+	if entity1.SequenceNo() != 2 {
+		t.Errorf("Expected entity1 sequence number 2, got %d", entity1.SequenceNo())
+	}
+
+	if entity2.SequenceNo() != 3 {
+		t.Errorf("Expected entity2 sequence number 3, got %d", entity2.SequenceNo())
+	}
+
+	// Merge uncommitted events from entity2 into entity1
+	err := entity1.MergeEventsFrom(entity2)
+	if err != nil {
+		t.Errorf("MergeEventsFrom returned unexpected error: %v", err)
+	}
+
+	// Verify entity1 after merge
+	if entity1.UncommittedEventCount() != 3 {
+		t.Errorf("Expected entity1 to have 3 uncommitted events after merge, got %d", entity1.UncommittedEventCount())
+	}
+
+	// Verify entity1's sequence number remains unchanged (merge doesn't affect it)
+	if entity1.SequenceNo() != 2 {
+		t.Errorf("Expected entity1 sequence number to remain 2 after merge, got %d", entity1.SequenceNo())
+	}
+
+	// Verify entity2 is unchanged
+	if entity2.UncommittedEventCount() != 2 {
+		t.Errorf("Expected entity2 to still have 2 uncommitted events, got %d", entity2.UncommittedEventCount())
+	}
+
+	if entity2.SequenceNo() != 3 {
+		t.Errorf("Expected entity2 sequence number to remain 3, got %d", entity2.SequenceNo())
+	}
+
+	// Verify the events in entity1 preserve their original sequence numbers
+	uncommittedEvents := entity1.UncommittedEvents()
+	if len(uncommittedEvents) != 3 {
+		t.Errorf("Expected 3 uncommitted events, got %d", len(uncommittedEvents))
+	}
+
+	// First event should be event2 with original sequence 2
+	if uncommittedEvents[0].EventType() != "TestEvent2" || uncommittedEvents[0].SequenceNo() != 2 {
+		t.Errorf("Expected first event to be TestEvent2 with sequence 2, got %s with sequence %d",
+			uncommittedEvents[0].EventType(), uncommittedEvents[0].SequenceNo())
+	}
+
+	// Second event should be event4 with original sequence 2 (from entity2)
+	if uncommittedEvents[1].EventType() != "TestEvent4" || uncommittedEvents[1].SequenceNo() != 2 {
+		t.Errorf("Expected second event to be TestEvent4 with sequence 2, got %s with sequence %d",
+			uncommittedEvents[1].EventType(), uncommittedEvents[1].SequenceNo())
+	}
+
+	// Third event should be event5 with original sequence 3 (from entity2)
+	if uncommittedEvents[2].EventType() != "TestEvent5" || uncommittedEvents[2].SequenceNo() != 3 {
+		t.Errorf("Expected third event to be TestEvent5 with sequence 3, got %s with sequence %d",
+			uncommittedEvents[2].EventType(), uncommittedEvents[2].SequenceNo())
+	}
+}
+
+func TestEntity_MergeEventsFrom_NilSource(t *testing.T) {
+	entity := NewEntity("test-123")
+
+	err := entity.MergeEventsFrom(nil)
+	if err == nil {
+		t.Error("Expected error when merging from nil source, got nil")
+	}
+
+	if err.Error() != "source entity cannot be nil" {
+		t.Errorf("Expected specific error message, got: %v", err)
+	}
+}
+
+// MockEntity implements Entity interface but is not a BasicEntity
+type MockEntity struct{}
+
+func (m *MockEntity) ID() string                          { return "mock-id" }
+func (m *MockEntity) SequenceNo() int64                   { return 0 }
+func (m *MockEntity) UncommittedEvents() []Event          { return []Event{} }
+func (m *MockEntity) MarkEventsAsCommitted()              {}
+func (m *MockEntity) LoadFromHistory(events []Event)      {}
+func (m *MockEntity) AddEvent(event Event)                {}
+func (m *MockEntity) HasUncommittedEvents() bool          { return false }
+func (m *MockEntity) UncommittedEventCount() int          { return 0 }
+func (m *MockEntity) MergeEventsFrom(source Entity) error { return nil }
+func (m *MockEntity) AddError(err error)                  {}
+func (m *MockEntity) Errors() []error                     { return []error{} }
+func (m *MockEntity) IsValid() bool                       { return true }
+func (m *MockEntity) Reset()                              {}
+func (m *MockEntity) Clone() Entity                       { return &MockEntity{} }
+func (m *MockEntity) String() string                      { return "MockEntity{}" }
+
+func TestEntity_MergeEventsFrom_InvalidType(t *testing.T) {
+	entity := NewEntity("test-123")
+
+	// Create a mock Entity that's not a BasicEntity
+	mockEntity := &MockEntity{}
+
+	err := entity.MergeEventsFrom(mockEntity)
+	if err == nil {
+		t.Error("Expected error when merging from non-BasicEntity source, got nil")
+	}
+
+	if err.Error() != "source entity must be a BasicEntity" {
+		t.Errorf("Expected specific error message, got: %v", err)
+	}
+}
+
+func TestEntity_MergeEventsFrom_EmptySource(t *testing.T) {
+	entity1 := NewEntity("entity-1")
+	entity2 := NewEntity("entity-2")
+
+	// Add an event to entity1
+	event1 := &TestEvent{
+		eventType:   "TestEvent1",
+		aggregateID: "entity-1",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 1"),
+	}
+
+	entity1.AddEvent(event1)
+
+	// entity2 has no uncommitted events
+	if entity2.HasUncommittedEvents() {
+		t.Error("entity2 should have no uncommitted events")
+	}
+
+	// Merge from empty entity2
+	err := entity1.MergeEventsFrom(entity2)
+	if err != nil {
+		t.Errorf("MergeEventsFrom returned unexpected error: %v", err)
+	}
+
+	// entity1 should be unchanged
+	if entity1.UncommittedEventCount() != 1 {
+		t.Errorf("Expected entity1 to still have 1 uncommitted event, got %d", entity1.UncommittedEventCount())
+	}
+
+	if entity1.SequenceNo() != 1 {
+		t.Errorf("Expected entity1 sequence number to remain 1, got %d", entity1.SequenceNo())
+	}
+}
+
+func TestEntity_MergeEventsFrom_OnlyCommittedEventsInSource(t *testing.T) {
+	entity1 := NewEntity("entity-1")
+	entity2 := NewEntity("entity-2")
+
+	// Add event to entity2 and commit it
+	event1 := &TestEvent{
+		eventType:   "TestEvent1",
+		aggregateID: "entity-2",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 1"),
+	}
+
+	entity2.AddEvent(event1)
+	entity2.MarkEventsAsCommitted()
+
+	// entity2 should have no uncommitted events
+	if entity2.HasUncommittedEvents() {
+		t.Error("entity2 should have no uncommitted events after commit")
+	}
+
+	// Merge from entity2 (which has only committed events)
+	err := entity1.MergeEventsFrom(entity2)
+	if err != nil {
+		t.Errorf("MergeEventsFrom returned unexpected error: %v", err)
+	}
+
+	// entity1 should be unchanged
+	if entity1.HasUncommittedEvents() {
+		t.Error("entity1 should have no uncommitted events after merge")
+	}
+
+	if entity1.SequenceNo() != 0 {
+		t.Errorf("Expected entity1 sequence number to remain 0, got %d", entity1.SequenceNo())
+	}
+}
+
+func TestEntity_MergeEventsFrom_IntoEmptyEntity(t *testing.T) {
+	entity1 := NewEntity("entity-1")
+	entity2 := NewEntity("entity-2")
+
+	// Add uncommitted events to entity2
+	event1 := &TestEvent{
+		eventType:   "TestEvent1",
+		aggregateID: "entity-2",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 1"),
+	}
+
+	event2 := &TestEvent{
+		eventType:   "TestEvent2",
+		aggregateID: "entity-2",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("test data 2"),
+	}
+
+	entity2.AddEvent(event1)
+	entity2.AddEvent(event2)
+
+	// entity1 is empty
+	if entity1.HasUncommittedEvents() {
+		t.Error("entity1 should be empty")
+	}
+
+	// Merge into empty entity1
+	err := entity1.MergeEventsFrom(entity2)
+	if err != nil {
+		t.Errorf("MergeEventsFrom returned unexpected error: %v", err)
+	}
+
+	// Verify entity1 after merge
+	if entity1.UncommittedEventCount() != 2 {
+		t.Errorf("Expected entity1 to have 2 uncommitted events, got %d", entity1.UncommittedEventCount())
+	}
+
+	// entity1's sequence number should remain 0 (no events added to entity1)
+	if entity1.SequenceNo() != 0 {
+		t.Errorf("Expected entity1 sequence number to remain 0, got %d", entity1.SequenceNo())
+	}
+
+	// Verify events preserve their original sequence numbers from entity2
+	uncommittedEvents := entity1.UncommittedEvents()
+	if uncommittedEvents[0].SequenceNo() != 1 {
+		t.Errorf("Expected first event sequence number 1 (original from entity2), got %d", uncommittedEvents[0].SequenceNo())
+	}
+
+	if uncommittedEvents[1].SequenceNo() != 2 {
+		t.Errorf("Expected second event sequence number 2 (original from entity2), got %d", uncommittedEvents[1].SequenceNo())
 	}
 }
 
@@ -319,13 +731,36 @@ func TestEntity_LoadFromHistory(t *testing.T) {
 		t.Errorf("Expected sequence number 3, got %d", entity.SequenceNo())
 	}
 
-	if entity.SequenceNo() != 3 {
-		t.Errorf("Expected sequence number 3, got %d", entity.SequenceNo())
-	}
-
 	// Should not have uncommitted events after loading from history
 	if entity.HasUncommittedEvents() {
 		t.Error("Entity should not have uncommitted events after loading from history")
+	}
+
+	if entity.UncommittedEventCount() != 0 {
+		t.Errorf("Expected 0 uncommitted events after loading from history, got %d", entity.UncommittedEventCount())
+	}
+
+	// Verify that we can still add new events after loading from history
+	newEvent := &TestEvent{
+		eventType:   "NewEvent",
+		aggregateID: "test-123",
+		sequenceNo:  0,
+		createdAt:   time.Now(),
+		userID:      "test-user",
+		accountID:   "test-account",
+		data:        []byte("new event data"),
+	}
+
+	entity.AddEvent(newEvent)
+
+	// Should now have 1 uncommitted event
+	if entity.UncommittedEventCount() != 1 {
+		t.Errorf("Expected 1 uncommitted event after adding new event, got %d", entity.UncommittedEventCount())
+	}
+
+	// Sequence number should be 4
+	if entity.SequenceNo() != 4 {
+		t.Errorf("Expected sequence number 4 after adding new event, got %d", entity.SequenceNo())
 	}
 }
 

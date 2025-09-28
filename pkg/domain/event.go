@@ -29,6 +29,7 @@ type ContextKey string
 const (
 	UserID    ContextKey = "user_id"
 	AccountID ContextKey = "account_id"
+	Source    ContextKey = "source"
 )
 
 // Event represents a domain event that captures something significant that happened
