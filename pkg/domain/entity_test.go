@@ -86,8 +86,8 @@ func TestEntity_AddEvent_SetSequenceNo(t *testing.T) {
 	}
 
 	// Verify entity state
-	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected entity sequence number 1, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 1 {
+		t.Errorf("Expected entity sequence number 1, got %d", entity.GetSequenceNo())
 	}
 }
 
@@ -95,16 +95,16 @@ func TestNewEntity(t *testing.T) {
 	id := "test-entity-123"
 	entity := NewEntity(id)
 
-	if entity.ID() != id {
-		t.Errorf("Expected ID %s, got %s", id, entity.ID())
+	if entity.GetID() != id {
+		t.Errorf("Expected GetID %s, got %s", id, entity.GetID())
 	}
 
-	if entity.SequenceNo() != 0 {
-		t.Errorf("Expected sequence number 0, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 0 {
+		t.Errorf("Expected sequence number 0, got %d", entity.GetSequenceNo())
 	}
 
-	if entity.SequenceNo() != 0 {
-		t.Errorf("Expected sequence number 0, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 0 {
+		t.Errorf("Expected sequence number 0, got %d", entity.GetSequenceNo())
 	}
 
 	if entity.HasUncommittedEvents() {
@@ -131,12 +131,12 @@ func TestEntity_AddEvent(t *testing.T) {
 
 	entity.AddEvent(event1)
 
-	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected sequence number 1, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 1 {
+		t.Errorf("Expected sequence number 1, got %d", entity.GetSequenceNo())
 	}
 
-	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected sequence number 1, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 1 {
+		t.Errorf("Expected sequence number 1, got %d", entity.GetSequenceNo())
 	}
 
 	if !entity.HasUncommittedEvents() {
@@ -160,12 +160,12 @@ func TestEntity_AddEvent(t *testing.T) {
 
 	entity.AddEvent(event2)
 
-	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", entity.GetSequenceNo())
 	}
 
-	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", entity.GetSequenceNo())
 	}
 
 	// Verify that events have their sequence numbers set correctly
@@ -297,8 +297,8 @@ func TestEntity_MarkEventsAsCommitted(t *testing.T) {
 	}
 
 	// Verify sequence number is preserved and incremented
-	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", entity.GetSequenceNo())
 	}
 }
 
@@ -360,8 +360,8 @@ func TestEntity_CommittedVsUncommittedEvents(t *testing.T) {
 	}
 
 	// Verify sequence number is 2
-	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", entity.GetSequenceNo())
 	}
 
 	// Commit the second event
@@ -449,12 +449,12 @@ func TestEntity_MergeEventsFrom(t *testing.T) {
 		t.Errorf("Expected entity2 to have 2 uncommitted events, got %d", entity2.UncommittedEventCount())
 	}
 
-	if entity1.SequenceNo() != 2 {
-		t.Errorf("Expected entity1 sequence number 2, got %d", entity1.SequenceNo())
+	if entity1.GetSequenceNo() != 2 {
+		t.Errorf("Expected entity1 sequence number 2, got %d", entity1.GetSequenceNo())
 	}
 
-	if entity2.SequenceNo() != 3 {
-		t.Errorf("Expected entity2 sequence number 3, got %d", entity2.SequenceNo())
+	if entity2.GetSequenceNo() != 3 {
+		t.Errorf("Expected entity2 sequence number 3, got %d", entity2.GetSequenceNo())
 	}
 
 	// Merge uncommitted events from entity2 into entity1
@@ -469,8 +469,8 @@ func TestEntity_MergeEventsFrom(t *testing.T) {
 	}
 
 	// Verify entity1's sequence number remains unchanged (merge doesn't affect it)
-	if entity1.SequenceNo() != 2 {
-		t.Errorf("Expected entity1 sequence number to remain 2 after merge, got %d", entity1.SequenceNo())
+	if entity1.GetSequenceNo() != 2 {
+		t.Errorf("Expected entity1 sequence number to remain 2 after merge, got %d", entity1.GetSequenceNo())
 	}
 
 	// Verify entity2 is unchanged
@@ -478,8 +478,8 @@ func TestEntity_MergeEventsFrom(t *testing.T) {
 		t.Errorf("Expected entity2 to still have 2 uncommitted events, got %d", entity2.UncommittedEventCount())
 	}
 
-	if entity2.SequenceNo() != 3 {
-		t.Errorf("Expected entity2 sequence number to remain 3, got %d", entity2.SequenceNo())
+	if entity2.GetSequenceNo() != 3 {
+		t.Errorf("Expected entity2 sequence number to remain 3, got %d", entity2.GetSequenceNo())
 	}
 
 	// Verify the events in entity1 preserve their original sequence numbers
@@ -523,8 +523,8 @@ func TestEntity_MergeEventsFrom_NilSource(t *testing.T) {
 // MockEntity implements Entity interface but is not a BasicEntity
 type MockEntity struct{}
 
-func (m *MockEntity) ID() string                          { return "mock-id" }
-func (m *MockEntity) SequenceNo() int64                   { return 0 }
+func (m *MockEntity) GetID() string                       { return "mock-id" }
+func (m *MockEntity) GetSequenceNo() int64                { return 0 }
 func (m *MockEntity) UncommittedEvents() []Event          { return []Event{} }
 func (m *MockEntity) MarkEventsAsCommitted()              {}
 func (m *MockEntity) LoadFromHistory(events []Event)      {}
@@ -588,8 +588,8 @@ func TestEntity_MergeEventsFrom_EmptySource(t *testing.T) {
 		t.Errorf("Expected entity1 to still have 1 uncommitted event, got %d", entity1.UncommittedEventCount())
 	}
 
-	if entity1.SequenceNo() != 1 {
-		t.Errorf("Expected entity1 sequence number to remain 1, got %d", entity1.SequenceNo())
+	if entity1.GetSequenceNo() != 1 {
+		t.Errorf("Expected entity1 sequence number to remain 1, got %d", entity1.GetSequenceNo())
 	}
 }
 
@@ -627,8 +627,8 @@ func TestEntity_MergeEventsFrom_OnlyCommittedEventsInSource(t *testing.T) {
 		t.Error("entity1 should have no uncommitted events after merge")
 	}
 
-	if entity1.SequenceNo() != 0 {
-		t.Errorf("Expected entity1 sequence number to remain 0, got %d", entity1.SequenceNo())
+	if entity1.GetSequenceNo() != 0 {
+		t.Errorf("Expected entity1 sequence number to remain 0, got %d", entity1.GetSequenceNo())
 	}
 }
 
@@ -677,8 +677,8 @@ func TestEntity_MergeEventsFrom_IntoEmptyEntity(t *testing.T) {
 	}
 
 	// entity1's sequence number should remain 0 (no events added to entity1)
-	if entity1.SequenceNo() != 0 {
-		t.Errorf("Expected entity1 sequence number to remain 0, got %d", entity1.SequenceNo())
+	if entity1.GetSequenceNo() != 0 {
+		t.Errorf("Expected entity1 sequence number to remain 0, got %d", entity1.GetSequenceNo())
 	}
 
 	// Verify events preserve their original sequence numbers from entity2
@@ -727,8 +727,8 @@ func TestEntity_LoadFromHistory(t *testing.T) {
 
 	entity.LoadFromHistory(events)
 
-	if entity.SequenceNo() != 3 {
-		t.Errorf("Expected sequence number 3, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 3 {
+		t.Errorf("Expected sequence number 3, got %d", entity.GetSequenceNo())
 	}
 
 	// Should not have uncommitted events after loading from history
@@ -759,8 +759,8 @@ func TestEntity_LoadFromHistory(t *testing.T) {
 	}
 
 	// Sequence number should be 4
-	if entity.SequenceNo() != 4 {
-		t.Errorf("Expected sequence number 4 after adding new event, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 4 {
+		t.Errorf("Expected sequence number 4 after adding new event, got %d", entity.GetSequenceNo())
 	}
 }
 
@@ -780,15 +780,15 @@ func TestEntity_LoadFromHistoryEmptyEvents(t *testing.T) {
 	entity.AddEvent(event)
 
 	// Verify we have state before loading empty history
-	if entity.SequenceNo() != 1 {
-		t.Errorf("Expected sequence number 1 before loading empty history, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 1 {
+		t.Errorf("Expected sequence number 1 before loading empty history, got %d", entity.GetSequenceNo())
 	}
 
 	// Load empty history - this should reset the entity to initial state
 	entity.LoadFromHistory([]Event{})
 
-	if entity.SequenceNo() != 0 {
-		t.Errorf("Expected sequence number 0 after loading empty history, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 0 {
+		t.Errorf("Expected sequence number 0 after loading empty history, got %d", entity.GetSequenceNo())
 	}
 
 	if entity.HasUncommittedEvents() {
@@ -824,12 +824,12 @@ func TestEntity_Reset(t *testing.T) {
 	entity.AddEvent(event2)
 
 	// Verify state before reset
-	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2 before reset, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2 before reset, got %d", entity.GetSequenceNo())
 	}
 
-	if entity.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2 before reset, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2 before reset, got %d", entity.GetSequenceNo())
 	}
 
 	if !entity.HasUncommittedEvents() {
@@ -840,21 +840,21 @@ func TestEntity_Reset(t *testing.T) {
 	entity.Reset()
 
 	// Verify state after reset
-	if entity.SequenceNo() != 0 {
-		t.Errorf("Expected sequence number 0 after reset, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 0 {
+		t.Errorf("Expected sequence number 0 after reset, got %d", entity.GetSequenceNo())
 	}
 
-	if entity.SequenceNo() != 0 {
-		t.Errorf("Expected sequence number 0 after reset, got %d", entity.SequenceNo())
+	if entity.GetSequenceNo() != 0 {
+		t.Errorf("Expected sequence number 0 after reset, got %d", entity.GetSequenceNo())
 	}
 
 	if entity.HasUncommittedEvents() {
 		t.Error("Entity should not have uncommitted events after reset")
 	}
 
-	// ID should be preserved
-	if entity.ID() != "test-123" {
-		t.Errorf("Expected ID to be preserved after reset, got %s", entity.ID())
+	// GetID should be preserved
+	if entity.GetID() != "test-123" {
+		t.Errorf("Expected GetID to be preserved after reset, got %s", entity.GetID())
 	}
 }
 
@@ -876,12 +876,12 @@ func TestEntity_Clone(t *testing.T) {
 	clone := entity.Clone()
 
 	// Verify clone has same state
-	if clone.ID() != entity.ID() {
-		t.Errorf("Expected clone ID %s, got %s", entity.ID(), clone.ID())
+	if clone.GetID() != entity.GetID() {
+		t.Errorf("Expected clone GetID %s, got %s", entity.GetID(), clone.GetID())
 	}
 
-	if clone.SequenceNo() != entity.SequenceNo() {
-		t.Errorf("Expected clone sequence number %d, got %d", entity.SequenceNo(), clone.SequenceNo())
+	if clone.GetSequenceNo() != entity.GetSequenceNo() {
+		t.Errorf("Expected clone sequence number %d, got %d", entity.GetSequenceNo(), clone.GetSequenceNo())
 	}
 
 	if clone.UncommittedEventCount() != entity.UncommittedEventCount() {
@@ -920,7 +920,7 @@ func TestEntity_String(t *testing.T) {
 	entity.AddEvent(event)
 
 	str := entity.String()
-	expected := "Entity{ID: test-123, SequenceNo: 1, UncommittedEvents: 1, Errors: 0}"
+	expected := "Entity{GetID: test-123, GetSequenceNo: 1, UncommittedEvents: 1, Errors: 0}"
 
 	if str != expected {
 		t.Errorf("Expected string %s, got %s", expected, str)
@@ -963,12 +963,12 @@ func TestEntity_ConcurrentAccess(t *testing.T) {
 		t.Errorf("Expected %d events, got %d", expectedEventCount, entity.UncommittedEventCount())
 	}
 
-	if entity.SequenceNo() != int64(expectedEventCount) {
-		t.Errorf("Expected sequence number %d, got %d", expectedEventCount, entity.SequenceNo())
+	if entity.GetSequenceNo() != int64(expectedEventCount) {
+		t.Errorf("Expected sequence number %d, got %d", expectedEventCount, entity.GetSequenceNo())
 	}
 
-	if entity.SequenceNo() != int64(expectedEventCount) {
-		t.Errorf("Expected sequence number %d, got %d", expectedEventCount, entity.SequenceNo())
+	if entity.GetSequenceNo() != int64(expectedEventCount) {
+		t.Errorf("Expected sequence number %d, got %d", expectedEventCount, entity.GetSequenceNo())
 	}
 }
 
@@ -1007,8 +1007,8 @@ func TestEntity_ConcurrentReadWrite(t *testing.T) {
 				case <-done:
 					return
 				default:
-					_ = entity.ID()
-					_ = entity.SequenceNo()
+					_ = entity.GetID()
+					_ = entity.GetSequenceNo()
 					_ = entity.HasUncommittedEvents()
 					_ = entity.UncommittedEvents()
 				}

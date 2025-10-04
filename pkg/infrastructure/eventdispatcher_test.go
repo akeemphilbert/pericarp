@@ -94,7 +94,7 @@ func TestWatermillEventDispatcher_SubscribeAndDispatch(t *testing.T) {
 	if len(handledEvents) > 0 {
 		handledEvent := handledEvents[0]
 		if handledEvent.EventID() != envelope.EventID() {
-			t.Errorf("Expected event ID %s, got %s", envelope.EventID(), handledEvent.EventID())
+			t.Errorf("Expected event GetID %s, got %s", envelope.EventID(), handledEvent.EventID())
 		}
 		if handledEvent.Event().EventType() != event.EventType() {
 			t.Errorf("Expected event type %s, got %s", event.EventType(), handledEvent.Event().EventType())

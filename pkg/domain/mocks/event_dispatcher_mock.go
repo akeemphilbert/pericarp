@@ -22,6 +22,9 @@ var _ domain.EventDispatcher = &EventDispatcherMock{}
 //			DispatchFunc: func(ctx context.Context, envelopes []domain.Envelope) error {
 //				panic("mock out the Dispatch method")
 //			},
+//			StartFunc: func() error {
+//				panic("mock out the Start method")
+//			},
 //			SubscribeFunc: func(eventType string, handler domain.EventHandler) error {
 //				panic("mock out the Subscribe method")
 //			},
@@ -35,6 +38,9 @@ type EventDispatcherMock struct {
 	// DispatchFunc mocks the Dispatch method.
 	DispatchFunc func(ctx context.Context, envelopes []domain.Envelope) error
 
+	// StartFunc mocks the Start method.
+	StartFunc func() error
+
 	// SubscribeFunc mocks the Subscribe method.
 	SubscribeFunc func(eventType string, handler domain.EventHandler) error
 
@@ -47,6 +53,9 @@ type EventDispatcherMock struct {
 			// Envelopes is the envelopes argument value.
 			Envelopes []domain.Envelope
 		}
+		// Start holds details about calls to the Start method.
+		Start []struct {
+		}
 		// Subscribe holds details about calls to the Subscribe method.
 		Subscribe []struct {
 			// EventType is the eventType argument value.
@@ -56,6 +65,7 @@ type EventDispatcherMock struct {
 		}
 	}
 	lockDispatch  sync.RWMutex
+	lockStart     sync.RWMutex
 	lockSubscribe sync.RWMutex
 }
 
@@ -92,6 +102,33 @@ func (mock *EventDispatcherMock) DispatchCalls() []struct {
 	mock.lockDispatch.RLock()
 	calls = mock.calls.Dispatch
 	mock.lockDispatch.RUnlock()
+	return calls
+}
+
+// Start calls StartFunc.
+func (mock *EventDispatcherMock) Start() error {
+	if mock.StartFunc == nil {
+		panic("EventDispatcherMock.StartFunc: method is nil but EventDispatcher.Start was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockStart.Lock()
+	mock.calls.Start = append(mock.calls.Start, callInfo)
+	mock.lockStart.Unlock()
+	return mock.StartFunc()
+}
+
+// StartCalls gets all the calls that were made to Start.
+// Check the length with:
+//
+//	len(mockedEventDispatcher.StartCalls())
+func (mock *EventDispatcherMock) StartCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockStart.RLock()
+	calls = mock.calls.Start
+	mock.lockStart.RUnlock()
 	return calls
 }
 

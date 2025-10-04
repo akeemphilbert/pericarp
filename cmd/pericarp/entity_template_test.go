@@ -45,7 +45,7 @@ func TestEntityTemplate_Generation(t *testing.T) {
 				"Email string",
 				"Name string",
 				"func NewUser(id ksuid.KSUID, email string) (*User, error)",
-				"func (u *User) ID() string",
+				"func (u *User) GetID() string",
 				"func (u *User) Version() int",
 				"func (u *User) UncommittedEvents() []domain.Event",
 				"func (u *User) MarkEventsAsCommitted()",
@@ -192,7 +192,7 @@ func TestEntityTemplate_AggregateRootPatterns(t *testing.T) {
 		"uncommittedEvents []domain.Event",
 
 		// Required aggregate methods
-		"func (c *Customer) ID() string",
+		"func (c *Customer) GetID() string",
 		"func (c *Customer) Version() int",
 		"func (c *Customer) UncommittedEvents() []domain.Event",
 		"func (c *Customer) MarkEventsAsCommitted()",

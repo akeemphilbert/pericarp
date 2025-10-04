@@ -40,7 +40,7 @@ type MoneyExample struct {
 // NewOrderExample creates a new order using the standard Entity and EntityEvent
 func NewOrderExample(customerID string, items []OrderItemExample) (*OrderExample, error) {
 	if customerID == "" {
-		return nil, errors.New("customer ID is required")
+		return nil, errors.New("customer GetID is required")
 	}
 
 	if len(items) == 0 {
@@ -107,7 +107,7 @@ func (o *OrderExample) ConfirmOrder() error {
 		ConfirmedAt: time.Now(),
 		Status:      string(OrderStatusConfirmed),
 	}
-	event := domain.NewEntityEvent(nil, nil, "order", "confirmed", o.ID(), eventData)
+	event := domain.NewEntityEvent(nil, nil, "order", "confirmed", o.GetID(), eventData)
 
 	o.AddEvent(event) // Use Entity's AddEvent method
 	return nil
@@ -133,7 +133,7 @@ func (o *OrderExample) CancelOrder(reason string) error {
 		NewStatus:   string(OrderStatusCancelled),
 		CancelledAt: time.Now(),
 	}
-	event := domain.NewEntityEvent(nil, nil, "order", "cancelled", o.ID(), eventData)
+	event := domain.NewEntityEvent(nil, nil, "order", "cancelled", o.GetID(), eventData)
 
 	o.AddEvent(event)
 	return nil

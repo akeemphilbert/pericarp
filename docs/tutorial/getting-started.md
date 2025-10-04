@@ -65,7 +65,7 @@ import (
 
 // Greeting represents a simple greeting aggregate using the built-in Entity
 type Greeting struct {
-    domain.Entity  // Embeds ID, version, sequenceNo, and event management
+    domain.Entity  // Embeds GetID, version, sequenceNo, and event management
     message string
 }
 

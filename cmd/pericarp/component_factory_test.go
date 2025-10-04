@@ -326,7 +326,7 @@ func TestPericarpComponentFactory_filterRequiredProperties(t *testing.T) {
 
 	filtered := factory.filterRequiredProperties(properties)
 
-	assert.Len(t, filtered, 2) // Should exclude ID and optional properties
+	assert.Len(t, filtered, 2) // Should exclude GetID and optional properties
 	assert.Equal(t, "Email", filtered[0].Name)
 	assert.Equal(t, "Name", filtered[1].Name)
 }
@@ -342,7 +342,7 @@ func TestPericarpComponentFactory_ensureIDField(t *testing.T) {
 		hasIDAfter bool
 	}{
 		{
-			name: "entity without ID field",
+			name: "entity without GetID field",
 			entity: Entity{
 				Name: "User",
 				Properties: []Property{
@@ -352,7 +352,7 @@ func TestPericarpComponentFactory_ensureIDField(t *testing.T) {
 			hasIDAfter: true,
 		},
 		{
-			name: "entity with ID field",
+			name: "entity with GetID field",
 			entity: Entity{
 				Name: "User",
 				Properties: []Property{
@@ -387,7 +387,7 @@ func TestPericarpComponentFactory_ensureIDField(t *testing.T) {
 						break
 					}
 				}
-				assert.True(t, hasID, "Entity should have an ID field")
+				assert.True(t, hasID, "Entity should have an GetID field")
 			}
 		})
 	}

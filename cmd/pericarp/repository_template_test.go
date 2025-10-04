@@ -219,7 +219,7 @@ func TestRepositoryTemplate_ErrorHandling(t *testing.T) {
 
 		// Event store errors
 		"if _, err := r.eventStore.Save(ctx, events); err != nil {",
-		"return fmt.Errorf(\"failed to save events for account %s: %w\", account.ID(), err)",
+		"return fmt.Errorf(\"failed to save events for account %s: %w\", account.GetID(), err)",
 
 		// Load errors
 		"if err != nil {",
@@ -454,7 +454,7 @@ func TestRepositoryTemplate_EventSourcingPatterns(t *testing.T) {
 		// Save with event sourcing
 		"events := invoice.UncommittedEvents()",
 		"if len(events) == 0 {",
-		"r.logger.Debug(\"No uncommitted events to save for invoice %s\", invoice.ID())",
+		"r.logger.Debug(\"No uncommitted events to save for invoice %s\", invoice.GetID())",
 		"r.eventStore.Save(ctx, events)",
 		"invoice.MarkEventsAsCommitted()",
 
@@ -464,7 +464,7 @@ func TestRepositoryTemplate_EventSourcingPatterns(t *testing.T) {
 		"invoice.LoadFromHistory(events)",
 
 		// Logging
-		"r.logger.Debug(\"Saved %d events for invoice %s\", len(events), invoice.ID())",
+		"r.logger.Debug(\"Saved %d events for invoice %s\", len(events), invoice.GetID())",
 		"r.logger.Debug(\"Loaded invoice %s from %d events\", aggregateID, len(events))",
 	}
 

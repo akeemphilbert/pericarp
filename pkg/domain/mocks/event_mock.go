@@ -35,7 +35,7 @@ var _ domain.Event = &EventMock{}
 //				panic("mock out the Payload method")
 //			},
 //			SequenceNoFunc: func() int64 {
-//				panic("mock out the SequenceNo method")
+//				panic("mock out the GetSequenceNo method")
 //			},
 //			SetSequenceNoFunc: func(sequenceNo int64)  {
 //				panic("mock out the SetSequenceNo method")
@@ -251,7 +251,7 @@ func (mock *EventMock) PayloadCalls() []struct {
 // SequenceNo calls SequenceNoFunc.
 func (mock *EventMock) SequenceNo() int64 {
 	if mock.SequenceNoFunc == nil {
-		panic("EventMock.SequenceNoFunc: method is nil but Event.SequenceNo was just called")
+		panic("EventMock.SequenceNoFunc: method is nil but Event.GetSequenceNo was just called")
 	}
 	callInfo := struct {
 	}{}

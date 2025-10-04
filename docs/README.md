@@ -73,7 +73,7 @@ go build -o pericarp-demo cmd/demo/main.go
 # List users
 ./pericarp-demo list-users
 
-# Get user by ID
+# Get user by GetID
 ./pericarp-demo get-user by-id <user-id>
 ```
 

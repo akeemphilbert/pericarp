@@ -218,7 +218,7 @@ func (c CreateUserCommand) CommandType() string {
 
 func (c CreateUserCommand) Validate() error {
     if c.ID == "" {
-        return application.NewValidationError("id", "ID cannot be empty")
+        return application.NewValidationError("id", "GetID cannot be empty")
     }
     if err := validateEmail(c.Email); err != nil {
         return application.NewValidationError("email", err.Error())
@@ -241,7 +241,7 @@ func (c UpdateUserEmailCommand) CommandType() string {
 
 func (c UpdateUserEmailCommand) Validate() error {
     if c.ID == "" {
-        return application.NewValidationError("id", "ID cannot be empty")
+        return application.NewValidationError("id", "GetID cannot be empty")
     }
     if err := validateEmail(c.NewEmail); err != nil {
         return application.NewValidationError("new_email", err.Error())
@@ -260,7 +260,7 @@ func (c ActivateUserCommand) CommandType() string {
 
 func (c ActivateUserCommand) Validate() error {
     if c.ID == "" {
-        return application.NewValidationError("id", "ID cannot be empty")
+        return application.NewValidationError("id", "GetID cannot be empty")
     }
     return nil
 }
@@ -276,7 +276,7 @@ func (c DeactivateUserCommand) CommandType() string {
 
 func (c DeactivateUserCommand) Validate() error {
     if c.ID == "" {
-        return application.NewValidationError("id", "ID cannot be empty")
+        return application.NewValidationError("id", "GetID cannot be empty")
     }
     return nil
 }
@@ -418,7 +418,7 @@ import (
     "github.com/segmentio/ksuid"
 )
 
-// GetUserQuery represents a query to get a single user by ID
+// GetUserQuery represents a query to get a single user by GetID
 type GetUserQuery struct {
     ID string `json:"id"`
 }
@@ -429,7 +429,7 @@ func (q GetUserQuery) QueryType() string {
 
 func (q GetUserQuery) Validate() error {
     if q.ID == "" {
-        return application.NewValidationError("id", "ID cannot be empty")
+        return application.NewValidationError("id", "GetID cannot be empty")
     }
     return nil
 }
@@ -680,7 +680,7 @@ func createUserCmd() *cobra.Command {
                 }
 
                 fmt.Printf("✅ User created successfully!\n")
-                fmt.Printf("   ID: %s\n", userID)
+                fmt.Printf("   GetID: %s\n", userID)
                 fmt.Printf("   Email: %s\n", email)
                 fmt.Printf("   Name: %s\n", name)
                 return nil
@@ -710,7 +710,7 @@ go build -o pericarp-demo cmd/demo/main.go
 # List users
 ./pericarp-demo list-users
 
-# Get user by ID
+# Get user by GetID
 ./pericarp-demo get-user by-id <user-id>
 
 # Update user email

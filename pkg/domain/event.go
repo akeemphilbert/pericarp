@@ -49,12 +49,12 @@ const (
 //	    Email      string    `json:"email"`
 //	    Name       string    `json:"name"`
 //	    CreatedAt  time.Time `json:"created_at"`
-//	    SequenceNo int64     `json:"sequence_no"`
+//	    GetSequenceNo int64     `json:"sequence_no"`
 //	}
 //
 //	func (e UserCreatedEvent) EventType() string { return "UserCreated" }
 //	func (e UserCreatedEvent) AggregateID() string { return e.UserID }
-//	func (e UserCreatedEvent) SequenceNo() int64 { return e.SequenceNo }
+//	func (e UserCreatedEvent) GetSequenceNo() int64 { return e.GetSequenceNo }
 //	func (e UserCreatedEvent) CreatedAt() time.Time { return e.CreatedAt }
 type Event interface {
 	// EventType returns the type identifier for this event.
@@ -62,7 +62,7 @@ type Event interface {
 	// across versions (e.g., "UserCreated", "OrderShipped").
 	EventType() string
 
-	// AggregateID returns the ID of the aggregate that generated this event.
+	// AggregateID returns the GetID of the aggregate that generated this event.
 	// This is used to group events by aggregate for event sourcing.
 	AggregateID() string
 
@@ -74,11 +74,11 @@ type Event interface {
 	// This should represent the business time, not the technical persistence time.
 	CreatedAt() time.Time
 
-	// User returns the user ID associated with this event.
+	// User returns the user GetID associated with this event.
 	// This is useful for auditing and tracking which user performed the action.
 	User() string
 
-	// Account returns the account ID associated with this event.
+	// Account returns the account GetID associated with this event.
 	// This is useful for multi-tenant systems to track which account the event belongs to.
 	Account() string
 
@@ -109,7 +109,7 @@ type Envelope interface {
 	Metadata() map[string]interface{}
 
 	// EventID returns the unique identifier for this event envelope.
-	// This is different from the domain event's aggregate ID and is used
+	// This is different from the domain event's aggregate GetID and is used
 	// for deduplication and tracking at the infrastructure level.
 	EventID() string
 
@@ -200,6 +200,8 @@ type EventDispatcher interface {
 	// Handlers will receive all events of the specified type through their
 	// Handle method.
 	Subscribe(eventType string, handler EventHandler) error
+	// Start initializes the dispatcher, setting up any necessary resources
+	Start() error
 }
 
 // EventHandler processes domain events to implement various event-driven patterns.
@@ -221,7 +223,7 @@ type EventDispatcher interface {
 //	    switch event := envelope.Event().(type) {
 //	    case UserCreatedEvent:
 //	        return p.readModelRepo.Create(ctx, UserReadModel{
-//	            ID:    event.UserID,
+//	            GetID:    event.UserID,
 //	            Email: event.Email,
 //	            Name:  event.Name,
 //	        })
@@ -314,7 +316,7 @@ type UnitOfWork interface {
 // Example usage:
 //
 //	// Create a user created event
-//	user := &User{ID: "user-123", Email: "john@example.com", Name: "John Doe"}
+//	user := &User{GetID: "user-123", Email: "john@example.com", Name: "John Doe"}
 //	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", user)
 //
 //	// Access event data through the payload
@@ -340,14 +342,14 @@ type EntityEvent struct {
 // Parameters:
 //   - entityType: The type of entity (e.g., "user", "order", "product")
 //   - eventType: The type of event (e.g., "created", "updated", "deleted")
-//   - aggregateID: The ID of the aggregate that generated this event
-//   - userID: The ID of the user who triggered this event
-//   - accountID: The ID of the account this event belongs to
+//   - aggregateID: The GetID of the aggregate that generated this event
+//   - userID: The GetID of the user who triggered this event
+//   - accountID: The GetID of the account this event belongs to
 //   - data: Any serializable data to include as the event payload
 //
 // Example:
 //
-//	user := &User{ID: "user-123", Email: "user@example.com", Name: "John Doe"}
+//	user := &User{GetID: "user-123", Email: "user@example.com", Name: "John Doe"}
 //	event := NewEntityEvent("user", "created", "user-123", "admin-456", "account-789", user)
 //	// event.EventType() returns "user.created"
 func NewEntityEvent(ctx context.Context, logger Logger, entityType, eventType, aggregateID string, data interface{}) *EntityEvent {
@@ -362,14 +364,14 @@ func NewEntityEvent(ctx context.Context, logger Logger, entityType, eventType, a
 	if ctx != nil {
 		if userID, ok = ctx.Value(UserID).(string); !ok {
 			logger.Warn(
-				"User ID not found in context",
+				"User GetID not found in context",
 				"entity_type", entityType,
 				"event_type", eventType,
 				"aggregate_id", aggregateID,
 				"user_id", userID)
 		}
 		if accountID, ok = ctx.Value(AccountID).(string); !ok {
-			logger.Warn("Account ID not found in context", "entity_type", entityType, "event_type", eventType, "aggregate_id", aggregateID)
+			logger.Warn("Account GetID not found in context", "entity_type", entityType, "event_type", eventType, "aggregate_id", aggregateID)
 		}
 	}
 
@@ -392,7 +394,7 @@ func (e EntityEvent) EventType() string {
 	return e.EntityType + "." + e.Type
 }
 
-// AggregateID returns the ID of the aggregate that generated this event.
+// AggregateID returns the GetID of the aggregate that generated this event.
 func (e EntityEvent) AggregateID() string {
 	return e.AggregateId
 }
@@ -407,12 +409,12 @@ func (e EntityEvent) CreatedAt() time.Time {
 	return e.CreatedTime
 }
 
-// User returns the user ID associated with this event.
+// User returns the user GetID associated with this event.
 func (e EntityEvent) User() string {
 	return e.UserId
 }
 
-// Account returns the account ID associated with this event.
+// Account returns the account GetID associated with this event.
 func (e EntityEvent) Account() string {
 	return e.AccountId
 }
@@ -472,9 +474,9 @@ type StandardEvent struct {
 // NewStandardEventFromMap creates a new StandardEvent from a map of data.
 // The map should contain at minimum the required fields for an event:
 //   - event_type: The type of the event (e.g., "user.created")
-//   - aggregate_id: The ID of the aggregate that generated this event
-//   - user_id: The ID of the user who triggered this event
-//   - account_id: The ID of the account this event belongs to
+//   - aggregate_id: The GetID of the aggregate that generated this event
+//   - user_id: The GetID of the user who triggered this event
+//   - account_id: The GetID of the account this event belongs to
 //
 // Optional fields:
 //   - sequence_no: The sequence number (defaults to 0)
@@ -512,7 +514,7 @@ func (e StandardEvent) EventType() string {
 	return ""
 }
 
-// AggregateID returns the aggregate ID from the data map.
+// AggregateID returns the aggregate GetID from the data map.
 func (e StandardEvent) AggregateID() string {
 	if aggregateID, exists := e.data["aggregate_id"]; exists {
 		if str, ok := aggregateID.(string); ok {
@@ -553,7 +555,7 @@ func (e StandardEvent) CreatedAt() time.Time {
 	return time.Now()
 }
 
-// User returns the user ID from the data map.
+// User returns the user GetID from the data map.
 func (e StandardEvent) User() string {
 	if userID, exists := e.data["user_id"]; exists {
 		if str, ok := userID.(string); ok {
@@ -563,7 +565,7 @@ func (e StandardEvent) User() string {
 	return ""
 }
 
-// Account returns the account ID from the data map.
+// Account returns the account GetID from the data map.
 func (e StandardEvent) Account() string {
 	if accountID, exists := e.data["account_id"]; exists {
 		if str, ok := accountID.(string); ok {

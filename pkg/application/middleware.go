@@ -38,7 +38,7 @@ func LoggingMiddleware[Req any, Res any]() Middleware[Req, Res] {
 				requestType = getTypeName(p.Data)
 			}
 
-			// Only log if trace ID or user ID are present to reduce log volume
+			// Only log if trace GetID or user GetID are present to reduce log volume
 			if p.TraceID != "" || p.UserID != "" {
 				log.Info("Processing request",
 					"type", requestType,

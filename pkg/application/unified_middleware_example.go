@@ -41,7 +41,7 @@ func ExampleQueryHandler(ctx context.Context, log domain.Logger, eventStore doma
 	log.Info("Processing example query", "id", p.Data.ID, "traceId", p.TraceID)
 
 	// Process the query...
-	result := "Example result for ID: " + p.Data.ID
+	result := "Example result for GetID: " + p.Data.ID
 
 	return Response[string]{
 		Data: result,

@@ -27,7 +27,7 @@ func NewUserBuilder() *UserBuilder {
 	}
 }
 
-// WithID sets the user ID
+// WithID sets the user GetID
 func (b *UserBuilder) WithID(id string) *UserBuilder {
 	b.id = id
 	return b
@@ -137,7 +137,7 @@ func (td *TestData) ValidUser() *examples.User {
 	return user
 }
 
-// ValidUserWithID returns a valid user with specific ID
+// ValidUserWithID returns a valid user with specific GetID
 func (td *TestData) ValidUserWithID(id string) *examples.User {
 	user, _ := examples.NewUser(id, "valid@example.com", "Valid User")
 	return user

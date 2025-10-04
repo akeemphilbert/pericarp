@@ -63,7 +63,7 @@ type Money struct {
 // NewOrder creates a new order with validation
 func NewOrder(customerID string, items []OrderItem) (*Order, error) {
     if customerID == "" {
-        return nil, errors.New("customer ID is required")
+        return nil, errors.New("customer GetID is required")
     }
     
     if len(items) == 0 {
@@ -307,7 +307,7 @@ func (o *Order) ItemCount() int {
     return count
 }
 
-// Note: ID(), SequenceNo(), UncommittedEvents(), MarkEventsAsCommitted() 
+// Note: GetID(), GetSequenceNo(), UncommittedEvents(), MarkEventsAsCommitted() 
 // are inherited from the embedded Entity struct
 ```
 
@@ -436,7 +436,7 @@ func TestOrder_ConfirmOrder(t *testing.T) {
     }
     
     if confirmEvent.AggregateID() != order.ID() {
-        t.Error("Event aggregate ID should match order ID")
+        t.Error("Event aggregate GetID should match order GetID")
     }
     
     // Check event data
@@ -465,7 +465,7 @@ func TestOrder_LoadFromHistory(t *testing.T) {
     
     // Assert
     if order.ID() != orderID {
-        t.Errorf("Expected ID %s, got %s", orderID, order.ID())
+        t.Errorf("Expected GetID %s, got %s", orderID, order.ID())
     }
     
     if order.Status() != OrderStatusConfirmed {

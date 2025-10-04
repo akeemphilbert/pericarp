@@ -44,7 +44,7 @@ type RepositoryMock[T domain.AggregateRoot] struct {
 		Load []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
-			// ID is the id argument value.
+			// GetID is the id argument value.
 			ID string
 		}
 		// Save holds details about calls to the Save method.

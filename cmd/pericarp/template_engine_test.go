@@ -50,7 +50,7 @@ func TestTemplateEngine_Execute(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, result, "type User struct")
 		assert.Contains(t, result, "func NewUser(")
-		assert.Contains(t, result, "ID() string")
+		assert.Contains(t, result, "GetID() string")
 		assert.Contains(t, result, "Version() int")
 	}
 }
@@ -237,7 +237,7 @@ func TestTemplateEngine_ToJSONTag(t *testing.T) {
 	}{
 		{"UserName", true, `json:"user_name"`},
 		{"UserName", false, `json:"user_name,omitempty"`},
-		{"ID", true, `json:"id"`},
+		{"GetID", true, `json:"id"`},
 		{"Email", false, `json:"email,omitempty"`},
 	}
 

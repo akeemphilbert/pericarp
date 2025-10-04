@@ -13,8 +13,8 @@ func TestNewUserWithEntityEvents(t *testing.T) {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if user.ID() != "user-123" {
-		t.Errorf("Expected ID 'user-123', got %s", user.ID())
+	if user.GetID() != "user-123" {
+		t.Errorf("Expected GetID 'user-123', got %s", user.GetID())
 	}
 
 	if user.Email() != "john@example.com" {
@@ -236,8 +236,8 @@ func TestUserWithEntityEvents_LoadFromHistory(t *testing.T) {
 		t.Error("Expected user to be inactive")
 	}
 
-	if user.SequenceNo() != 4 {
-		t.Errorf("Expected sequence number 4, got %d", user.SequenceNo())
+	if user.GetSequenceNo() != 4 {
+		t.Errorf("Expected sequence number 4, got %d", user.GetSequenceNo())
 	}
 }
 

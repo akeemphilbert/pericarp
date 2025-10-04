@@ -33,9 +33,9 @@ func StandardEventExample() {
 
 	// Access event properties using the Event interface
 	fmt.Printf("Event Type: %s\n", event.EventType())
-	fmt.Printf("Aggregate ID: %s\n", event.AggregateID())
-	fmt.Printf("User ID: %s\n", event.User())
-	fmt.Printf("Account ID: %s\n", event.Account())
+	fmt.Printf("Aggregate GetID: %s\n", event.AggregateID())
+	fmt.Printf("User GetID: %s\n", event.User())
+	fmt.Printf("Account GetID: %s\n", event.Account())
 	fmt.Printf("Sequence No: %d\n", event.SequenceNo())
 	fmt.Printf("Created At: %s\n", event.CreatedAt().Format(time.RFC3339))
 
@@ -95,7 +95,7 @@ func StandardEventExample() {
 
 	minimalEvent := domain.NewStandardEventFromMap(minimalData)
 	fmt.Printf("Minimal Event Type: %s\n", minimalEvent.EventType())
-	fmt.Printf("Minimal Event Aggregate ID: %s\n", minimalEvent.AggregateID())
+	fmt.Printf("Minimal Event Aggregate GetID: %s\n", minimalEvent.AggregateID())
 	fmt.Printf("Minimal Event Sequence No: %d\n", minimalEvent.SequenceNo())
 
 	if trackingNumber, ok := minimalEvent.GetString("tracking_number"); ok {

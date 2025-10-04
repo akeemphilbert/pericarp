@@ -175,7 +175,7 @@ func TestVerboseLogger_ParsingAndGenerationDetails(t *testing.T) {
 	entity := Entity{
 		Name: "User",
 		Properties: []Property{
-			{Name: "ID", Type: "string"},
+			{Name: "GetID", Type: "string"},
 			{Name: "Email", Type: "string"},
 		},
 		Methods: []Method{

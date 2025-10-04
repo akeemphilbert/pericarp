@@ -97,7 +97,7 @@ type AggregateRoot interface {
 	//	        case UserEmailChangedEvent:
 	//	            u.email = e.NewEmail
 	//	        }
-	//	        u.sequenceNo = event.SequenceNo()
+	//	        u.sequenceNo = event.GetSequenceNo()
 	//	    }
 	//	    u.events = nil // Clear events after loading
 	//	}
@@ -148,14 +148,14 @@ type Repository[T AggregateRoot] interface {
 	// the aggregate sequence number against the latest sequence number in the event store.
 	Save(ctx context.Context, aggregate T) error
 
-	// Load retrieves an aggregate by its ID, reconstructing it from stored events.
+	// Load retrieves an aggregate by its GetID, reconstructing it from stored events.
 	// The repository should:
 	//   - Load all events for the aggregate from the event store
 	//   - Create a new instance of the aggregate
 	//   - Reconstruct state by calling LoadFromHistory with the events
 	//   - Return the fully reconstructed aggregate
 	//
-	// If no events exist for the given ID, the repository should return
+	// If no events exist for the given GetID, the repository should return
 	// an appropriate "not found" error.
 	//
 	// The reconstructed aggregate should have:

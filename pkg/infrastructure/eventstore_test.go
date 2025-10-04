@@ -78,7 +78,7 @@ func TestGormEventStore_SaveAndLoad(t *testing.T) {
 	for i, envelope := range loadedEnvelopes {
 		event := envelope.Event()
 		if event.AggregateID() != aggregateID {
-			t.Errorf("Loaded event %d has wrong aggregate ID: expected %s, got %s",
+			t.Errorf("Loaded event %d has wrong aggregate GetID: expected %s, got %s",
 				i, aggregateID, event.AggregateID())
 		}
 		if event.SequenceNo() != int64(i+1) {

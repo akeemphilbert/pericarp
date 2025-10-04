@@ -144,7 +144,7 @@ go get github.com/your-org/pericarp
 ```go
 // Using the built-in Entity struct for event sourcing
 type User struct {
-    domain.Entity  // Embeds ID, version, sequenceNo, and events management
+    domain.Entity  // Embeds GetID, version, sequenceNo, and events management
     email    string
     name     string
 }

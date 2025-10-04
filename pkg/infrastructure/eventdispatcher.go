@@ -25,6 +25,22 @@ type WatermillEventDispatcher struct {
 	cancel     context.CancelFunc
 }
 
+func (d *WatermillEventDispatcher) Start() error {
+	// Start the router in a goroutine to avoid blocking
+	go func() {
+		if err := d.router.Run(d.ctx); err != nil {
+			d.logger.Error("Router stopped with error", err, nil)
+		}
+	}()
+
+	// Wait for the router to be running before returning
+	<-d.router.Running()
+
+	d.logger.Info("Event dispatcher router is now running", nil)
+
+	return nil
+}
+
 // NewWatermillEventDispatcher creates a new Watermill-based event dispatcher
 func NewWatermillEventDispatcher(logger watermill.LoggerAdapter) (*WatermillEventDispatcher, error) {
 	if logger == nil {
@@ -55,13 +71,6 @@ func NewWatermillEventDispatcher(logger watermill.LoggerAdapter) (*WatermillEven
 		ctx:      ctx,
 		cancel:   cancel,
 	}
-
-	// Start the router in a goroutine
-	go func() {
-		if err := router.Run(ctx); err != nil {
-			logger.Error("Router stopped with error", err, nil)
-		}
-	}()
 
 	return dispatcher, nil
 }
@@ -119,14 +128,6 @@ func (d *WatermillEventDispatcher) dispatchSingle(ctx context.Context, envelope 
 		}
 	}
 
-	// Also publish to each handler's specific topic to ensure they receive the event
-	for i := range handlers {
-		handlerTopic := fmt.Sprintf("%s_handler_%d", eventType, i+1)
-		if err := d.pubSub.Publish(handlerTopic, msg); err != nil {
-			return fmt.Errorf("failed to publish message to handler topic %s: %w", handlerTopic, err)
-		}
-	}
-
 	d.logger.Debug("Event dispatched to wildcard and handler topics", watermill.LogFields{
 		"event_id":        envelope.EventID(),
 		"event_type":      eventType,
@@ -171,23 +172,21 @@ func (d *WatermillEventDispatcher) Subscribe(eventType string, handler domain.Ev
 	// Create a unique handler name for this subscription
 	handlerIndex := len(d.handlers[eventType])
 	handlerName := fmt.Sprintf("%s_handler_%d", eventType, handlerIndex)
-
-	// Subscribe to the specific event type topic
-	// Each handler gets its own unique topic to avoid conflicts
-	handlerTopic := fmt.Sprintf("%s_handler_%d", eventType, handlerIndex)
-	d.router.AddNoPublisherHandler(
+	d.router.AddConsumerHandler(
 		handlerName,
-		handlerTopic,
+		eventType,
 		d.pubSub,
 		func(msg *message.Message) error {
 			return d.handleMessage(msg, handler)
 		},
 	)
+	if d.router.IsRunning() {
+		return d.router.RunHandlers(context.Background())
+	}
 
 	d.logger.Info("Event handler subscribed", watermill.LogFields{
 		"event_type":   eventType,
 		"handler_name": handlerName,
-		"topic":        handlerTopic,
 	})
 
 	return nil

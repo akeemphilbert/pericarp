@@ -12,8 +12,8 @@ func TestNewUser(t *testing.T) {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if user.ID() != "user-123" {
-		t.Errorf("Expected ID 'user-123', got %s", user.ID())
+	if user.GetID() != "user-123" {
+		t.Errorf("Expected GetID 'user-123', got %s", user.GetID())
 	}
 
 	if user.Email() != "john@example.com" {
@@ -28,8 +28,8 @@ func TestNewUser(t *testing.T) {
 		t.Error("Expected user to be active")
 	}
 
-	if user.SequenceNo() != 1 {
-		t.Errorf("Expected sequence number 1, got %d", user.SequenceNo())
+	if user.GetSequenceNo() != 1 {
+		t.Errorf("Expected sequence number 1, got %d", user.GetSequenceNo())
 	}
 
 	if !user.HasUncommittedEvents() {
@@ -55,11 +55,11 @@ func TestNewUser_ValidationErrors(t *testing.T) {
 		expectedErr string
 	}{
 		{
-			name:        "empty ID",
+			name:        "empty GetID",
 			id:          "",
 			email:       "john@example.com",
 			userName:    "John Doe",
-			expectedErr: "user ID cannot be empty",
+			expectedErr: "user GetID cannot be empty",
 		},
 		{
 			name:        "empty email",
@@ -106,8 +106,8 @@ func TestUser_ChangeEmail(t *testing.T) {
 		t.Errorf("Expected email 'newemail@example.com', got %s", user.Email())
 	}
 
-	if user.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2, got %d", user.SequenceNo())
+	if user.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", user.GetSequenceNo())
 	}
 
 	events := user.UncommittedEvents()
@@ -122,7 +122,7 @@ func TestUser_ChangeEmail(t *testing.T) {
 
 func TestUser_ChangeEmail_SameEmail(t *testing.T) {
 	user, _ := NewUser("user-123", "john@example.com", "John Doe")
-	initialSequenceNo := user.SequenceNo()
+	initialSequenceNo := user.GetSequenceNo()
 	user.MarkEventsAsCommitted()
 
 	err := user.ChangeEmail("john@example.com") // Same email
@@ -130,8 +130,8 @@ func TestUser_ChangeEmail_SameEmail(t *testing.T) {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if user.SequenceNo() != initialSequenceNo {
-		t.Errorf("Expected sequence number to remain %d, got %d", initialSequenceNo, user.SequenceNo())
+	if user.GetSequenceNo() != initialSequenceNo {
+		t.Errorf("Expected sequence number to remain %d, got %d", initialSequenceNo, user.GetSequenceNo())
 	}
 
 	if user.HasUncommittedEvents() {
@@ -260,8 +260,8 @@ func TestUser_LoadFromHistory(t *testing.T) {
 		t.Error("Expected user to be inactive")
 	}
 
-	if user.SequenceNo() != 4 {
-		t.Errorf("Expected sequence number 4, got %d", user.SequenceNo())
+	if user.GetSequenceNo() != 4 {
+		t.Errorf("Expected sequence number 4, got %d", user.GetSequenceNo())
 	}
 
 	if user.HasUncommittedEvents() {
@@ -337,7 +337,7 @@ func TestUser_CompleteLifecycle(t *testing.T) {
 		t.Errorf("Reconstructed active status mismatch: expected %t, got %t", user.IsActive(), reconstructedUser.IsActive())
 	}
 
-	if reconstructedUser.SequenceNo() != int64(len(allEvents)) {
-		t.Errorf("Reconstructed sequence number mismatch: expected %d, got %d", len(allEvents), reconstructedUser.SequenceNo())
+	if reconstructedUser.GetSequenceNo() != int64(len(allEvents)) {
+		t.Errorf("Reconstructed sequence number mismatch: expected %d, got %d", len(allEvents), reconstructedUser.GetSequenceNo())
 	}
 }

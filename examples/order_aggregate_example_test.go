@@ -19,7 +19,7 @@ func TestNewOrderExample(t *testing.T) {
 	}
 
 	if order.CustomerID() != "customer-123" {
-		t.Errorf("Expected customer ID 'customer-123', got %s", order.CustomerID())
+		t.Errorf("Expected customer GetID 'customer-123', got %s", order.CustomerID())
 	}
 
 	if order.Status() != OrderStatusPending {
@@ -45,8 +45,8 @@ func TestNewOrderExample(t *testing.T) {
 		t.Errorf("Expected event type 'order.created', got %s", entityEvent.EventType())
 	}
 
-	if entityEvent.AggregateID() != order.ID() {
-		t.Error("Event aggregate ID should match order ID")
+	if entityEvent.AggregateID() != order.GetID() {
+		t.Error("Event aggregate GetID should match order GetID")
 	}
 }
 
@@ -84,8 +84,8 @@ func TestOrderExample_ConfirmOrder(t *testing.T) {
 		t.Errorf("Expected 'order.confirmed', got %s", confirmEvent.EventType())
 	}
 
-	if confirmEvent.AggregateID() != order.ID() {
-		t.Error("Event aggregate ID should match order ID")
+	if confirmEvent.AggregateID() != order.GetID() {
+		t.Error("Event aggregate GetID should match order GetID")
 	}
 
 	// Check event data
@@ -116,16 +116,16 @@ func TestOrderExample_LoadFromHistory(t *testing.T) {
 	order.LoadFromHistory(events)
 
 	// Assert
-	if order.ID() != orderID {
-		t.Errorf("Expected ID %s, got %s", orderID, order.ID())
+	if order.GetID() != orderID {
+		t.Errorf("Expected GetID %s, got %s", orderID, order.GetID())
 	}
 
 	if order.Status() != OrderStatusConfirmed {
 		t.Errorf("Expected status confirmed, got %v", order.Status())
 	}
 
-	if order.SequenceNo() != 2 {
-		t.Errorf("Expected sequence number 2, got %d", order.SequenceNo())
+	if order.GetSequenceNo() != 2 {
+		t.Errorf("Expected sequence number 2, got %d", order.GetSequenceNo())
 	}
 
 	// Should have no uncommitted events after loading from history

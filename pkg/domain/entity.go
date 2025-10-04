@@ -6,8 +6,8 @@ import (
 )
 
 type Entity interface {
-	ID() string
-	SequenceNo() int64
+	GetID() string
+	GetSequenceNo() int64
 	UncommittedEvents() []Event
 	MarkEventsAsCommitted()
 	LoadFromHistory(events []Event)
@@ -58,7 +58,7 @@ type Entity interface {
 //	    }
 //
 //	    event := UserEmailChangedEvent{
-//	        UserID:   u.ID(),
+//	        UserID:   u.GetID(),
 //	        OldEmail: u.email,
 //	        NewEmail: newEmail,
 //	    }
@@ -68,20 +68,20 @@ type Entity interface {
 //	    return nil
 //	}
 type BasicEntity struct {
-	id                string
-	sequenceNo        int64
+	ID                string `json:"id,omitempty"` // Unique identifier
+	SequenceNo        int64
 	events            []Event // Committed events (full history)
 	uncommittedEvents []Event // Events pending persistence
 	errors            []error
 	mu                sync.RWMutex // Protects concurrent access to entity state
 }
 
-// NewEntity creates a new entity with the given ID.
+// NewEntity creates a new entity with the given GetID.
 // The entity starts with sequence number 0.
 func NewEntity(id string) *BasicEntity {
 	return &BasicEntity{
-		id:                id,
-		sequenceNo:        0,
+		ID:                id,
+		SequenceNo:        0,
 		events:            []Event{},
 		uncommittedEvents: []Event{},
 		errors:            []error{},
@@ -101,8 +101,8 @@ func (e *BasicEntity) WithID(id string) *BasicEntity {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.id = id
-	e.sequenceNo = 0
+	e.ID = id
+	e.SequenceNo = 0
 	e.events = []Event{}
 	e.uncommittedEvents = []Event{}
 	e.errors = []error{}
@@ -112,25 +112,25 @@ func (e *BasicEntity) WithID(id string) *BasicEntity {
 
 // ID returns the unique identifier of the entity.
 // This implements the AggregateRoot interface.
-func (e *BasicEntity) ID() string {
+func (e *BasicEntity) GetID() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.id
+	return e.ID
 }
 
 // SequenceNo returns the current sequence number of the entity.
 // The sequence number is incremented each time an event is added and can be used
 // for ordering events within the same aggregate or for optimistic concurrency control.
-func (e *BasicEntity) SequenceNo() int64 {
+func (e *BasicEntity) GetSequenceNo() int64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.sequenceNo
+	return e.SequenceNo
 }
 
 // Version returns the current version of the entity.
 // This is an alias for SequenceNo() to implement the AggregateRoot interface.
 func (e *BasicEntity) Version() int {
-	return int(e.SequenceNo())
+	return int(e.GetSequenceNo())
 }
 
 // UncommittedEvents returns a copy of the events that have been generated
@@ -189,7 +189,7 @@ func (e *BasicEntity) LoadFromHistory(events []Event) {
 	defer e.mu.Unlock()
 
 	// Update sequence number based on events
-	e.sequenceNo = int64(len(events))
+	e.SequenceNo = int64(len(events))
 
 	// Load events into committed events and clear uncommitted events
 	e.events = make([]Event, len(events))
@@ -217,7 +217,7 @@ func (e *BasicEntity) LoadFromHistory(events []Event) {
 //
 //	    // Create and add the event
 //	    event := UserEmailChangedEvent{
-//	        UserID:   u.ID(),
+//	        UserID:   u.GetID(),
 //	        OldEmail: oldEmail,
 //	        NewEmail: newEmail,
 //	        ChangedAt: time.Now(),
@@ -231,8 +231,8 @@ func (e *BasicEntity) AddEvent(event Event) {
 	defer e.mu.Unlock()
 
 	// Increment sequence number
-	e.sequenceNo++
-	event.SetSequenceNo(e.sequenceNo)
+	e.SequenceNo++
+	event.SetSequenceNo(e.SequenceNo)
 
 	// Add the event to uncommitted events only
 	e.uncommittedEvents = append(e.uncommittedEvents, event)
@@ -348,7 +348,7 @@ func (e *BasicEntity) Reset() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.sequenceNo = 0
+	e.SequenceNo = 0
 	e.events = e.events[:0]
 	e.uncommittedEvents = e.uncommittedEvents[:0]
 	e.errors = e.errors[:0]
@@ -373,8 +373,8 @@ func (e *BasicEntity) Clone() Entity {
 	copy(errors, e.errors)
 
 	return &BasicEntity{
-		id:                e.id,
-		sequenceNo:        e.sequenceNo,
+		ID:                e.ID,
+		SequenceNo:        e.SequenceNo,
 		events:            events,
 		uncommittedEvents: uncommittedEvents,
 		errors:            errors,
@@ -386,6 +386,6 @@ func (e *BasicEntity) String() string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	return fmt.Sprintf("Entity{ID: %s, SequenceNo: %d, UncommittedEvents: %d, Errors: %d}",
-		e.id, e.sequenceNo, len(e.uncommittedEvents), len(e.errors))
+	return fmt.Sprintf("Entity{GetID: %s, GetSequenceNo: %d, UncommittedEvents: %d, Errors: %d}",
+		e.ID, e.SequenceNo, len(e.uncommittedEvents), len(e.errors))
 }

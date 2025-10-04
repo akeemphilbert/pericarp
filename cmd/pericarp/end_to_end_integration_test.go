@@ -94,7 +94,7 @@ func TestEndToEnd_CompleteProjectGeneration(t *testing.T) {
 		assert.Contains(t, contentStr, "package domain")
 		assert.Contains(t, contentStr, "type User struct")
 		assert.Contains(t, contentStr, "func NewUser(")
-		assert.Contains(t, contentStr, "ID() string")
+		assert.Contains(t, contentStr, "GetID() string")
 		assert.Contains(t, contentStr, "Version() int")
 		assert.Contains(t, contentStr, "UncommittedEvents()")
 		assert.Contains(t, contentStr, "MarkEventsAsCommitted()")

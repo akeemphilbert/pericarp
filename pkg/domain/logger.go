@@ -16,12 +16,12 @@ package domain
 //
 //	// Structured logging (preferred for production)
 //	logger.Info("User created",
-//	    "userId", user.ID(),
+//	    "userId", user.GetID(),
 //	    "email", user.Email(),
 //	    "timestamp", time.Now())
 //
 //	// Formatted logging (good for development and simple messages)
-//	logger.Infof("User %s created with email %s", user.ID(), user.Email())
+//	logger.Infof("User %s created with email %s", user.GetID(), user.Email())
 //
 // Log levels follow standard conventions:
 //   - Debug: Detailed information for diagnosing problems
@@ -43,7 +43,7 @@ type Logger interface {
 	// Info logs general information about program execution.
 	// Info messages provide insight into the normal operation of the application.
 	//
-	// Example: logger.Info("User registered", "userId", user.ID(), "email", user.Email())
+	// Example: logger.Info("User registered", "userId", user.GetID(), "email", user.Email())
 	Info(msg string, keysAndValues ...interface{})
 
 	// Warn logs warning messages for potentially harmful situations.

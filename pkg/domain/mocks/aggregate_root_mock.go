@@ -19,7 +19,7 @@ var _ domain.AggregateRoot = &AggregateRootMock{}
 //		// make and configure a mocked domain.AggregateRoot
 //		mockedAggregateRoot := &AggregateRootMock{
 //			IDFunc: func() string {
-//				panic("mock out the ID method")
+//				panic("mock out the GetID method")
 //			},
 //			LoadFromHistoryFunc: func(events []domain.Event)  {
 //				panic("mock out the LoadFromHistory method")
@@ -28,7 +28,7 @@ var _ domain.AggregateRoot = &AggregateRootMock{}
 //				panic("mock out the MarkEventsAsCommitted method")
 //			},
 //			SequenceNoFunc: func() int64 {
-//				panic("mock out the SequenceNo method")
+//				panic("mock out the GetSequenceNo method")
 //			},
 //			UncommittedEventsFunc: func() []domain.Event {
 //				panic("mock out the UncommittedEvents method")
@@ -85,7 +85,7 @@ type AggregateRootMock struct {
 // ID calls IDFunc.
 func (mock *AggregateRootMock) ID() string {
 	if mock.IDFunc == nil {
-		panic("AggregateRootMock.IDFunc: method is nil but AggregateRoot.ID was just called")
+		panic("AggregateRootMock.IDFunc: method is nil but AggregateRoot.GetID was just called")
 	}
 	callInfo := struct {
 	}{}
@@ -171,7 +171,7 @@ func (mock *AggregateRootMock) MarkEventsAsCommittedCalls() []struct {
 // SequenceNo calls SequenceNoFunc.
 func (mock *AggregateRootMock) SequenceNo() int64 {
 	if mock.SequenceNoFunc == nil {
-		panic("AggregateRootMock.SequenceNoFunc: method is nil but AggregateRoot.SequenceNo was just called")
+		panic("AggregateRootMock.SequenceNoFunc: method is nil but AggregateRoot.GetSequenceNo was just called")
 	}
 	callInfo := struct {
 	}{}

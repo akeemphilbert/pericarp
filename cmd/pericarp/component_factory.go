@@ -31,7 +31,7 @@ func NewPericarpComponentFactory(logger CliLogger) (*PericarpComponentFactory, e
 func (f *PericarpComponentFactory) GenerateEntity(entity Entity) (*GeneratedFile, error) {
 	f.logger.Debug(fmt.Sprintf("Generating entity: %s", entity.Name))
 
-	// Ensure entity has an ID field if not present
+	// Ensure entity has an GetID field if not present
 	entity = f.ensureIDField(entity)
 
 	content, err := f.templateEngine.Execute("entity.go", entity)
@@ -500,7 +500,7 @@ func (f *PericarpComponentFactory) GenerateMakefile(projectName string) (*Genera
 
 // Helper methods
 
-// ensureIDField ensures the entity has an ID field
+// ensureIDField ensures the entity has an GetID field
 func (f *PericarpComponentFactory) ensureIDField(entity Entity) Entity {
 	hasID := false
 	for _, prop := range entity.Properties {
@@ -558,7 +558,7 @@ func (f *PericarpComponentFactory) createQueryData(entity Entity) map[string]int
 	queries := []map[string]interface{}{
 		{
 			"Name":        fmt.Sprintf("Get%sByIdQuery", entity.Name),
-			"Description": fmt.Sprintf("get a %s by ID", strings.ToLower(entity.Name)),
+			"Description": fmt.Sprintf("get a %s by GetID", strings.ToLower(entity.Name)),
 			"Properties": []Property{
 				{Name: "Id", Type: "ksuid.KSUID", Required: true},
 			},
@@ -612,7 +612,7 @@ func (f *PericarpComponentFactory) createServiceData(entity Entity) map[string]i
 	}
 }
 
-// filterRequiredProperties filters properties to only required ones (excluding ID)
+// filterRequiredProperties filters properties to only required ones (excluding GetID)
 func (f *PericarpComponentFactory) filterRequiredProperties(properties []Property) []Property {
 	var required []Property
 	for _, prop := range properties {

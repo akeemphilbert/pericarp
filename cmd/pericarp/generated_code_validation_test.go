@@ -126,7 +126,7 @@ func TestGeneratedCode_StructureValidation(t *testing.T) {
 		// Check for required aggregate root methods
 		requiredMethods := []string{
 			"func NewUser(",
-			"func (u *User) ID() string",
+			"func (u *User) GetID() string",
 			"func (u *User) Version() int",
 			"func (u *User) UncommittedEvents()",
 			"func (u *User) MarkEventsAsCommitted()",

@@ -109,7 +109,7 @@ func TestConcurrencyError(t *testing.T) {
 		err := NewConcurrencyError(aggregateID, expectedVersion, actualVersion)
 
 		if err.AggregateID != aggregateID {
-			t.Errorf("expected aggregate ID '%s', got '%s'", aggregateID, err.AggregateID)
+			t.Errorf("expected aggregate GetID '%s', got '%s'", aggregateID, err.AggregateID)
 		}
 
 		if err.Expected != expectedVersion {

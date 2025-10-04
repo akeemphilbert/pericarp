@@ -45,7 +45,7 @@ func (s *InMemoryEventStore) Save(ctx context.Context, events []pkgdomain.Event)
 		envelopes[i] = envelope
 	}
 
-	// Group events by aggregate ID
+	// Group events by aggregate GetID
 	aggregateID := events[0].AggregateID()
 	s.events[aggregateID] = append(s.events[aggregateID], envelopes...)
 
@@ -220,11 +220,11 @@ func (r *InMemoryUserRepository) Save(user *examples.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.users[user.ID()] = user
+	r.users[user.GetID()] = user
 	return nil
 }
 
-// FindByID finds a user by ID
+// FindByID finds a user by GetID
 func (r *InMemoryUserRepository) FindByID(id string) (*examples.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

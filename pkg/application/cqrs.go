@@ -72,12 +72,12 @@ type Payload[T any] struct {
 //	// Command response (no data)
 //	return Response[struct{}]{
 //	    Data: struct{}{},
-//	    Metadata: map[string]any{"sequence_no": aggregate.SequenceNo()},
+//	    Metadata: map[string]any{"sequence_no": aggregate.GetSequenceNo()},
 //	}, nil
 //
 //	// Query response (with data)
 //	return Response[UserView]{
-//	    Data: UserView{ID: user.ID(), Email: user.Email()},
+//	    Data: UserView{GetID: user.GetID(), Email: user.Email()},
 //	    Metadata: map[string]any{"cached": false},
 //	}, nil
 type Response[T any] struct {
@@ -147,7 +147,7 @@ type Command interface {
 //
 //	func (q GetUserQuery) Validate() error {
 //	    if q.UserID == "" {
-//	        return errors.New("user ID is required")
+//	        return errors.New("user GetID is required")
 //	    }
 //	    return nil
 //	}
@@ -202,7 +202,7 @@ type Query interface {
 //
 //	    return Response[struct{}]{
 //	        Data: struct{}{},
-//	        Metadata: map[string]any{"userId": user.ID()},
+//	        Metadata: map[string]any{"userId": user.GetID()},
 //	    }, nil
 //	}
 //
@@ -231,10 +231,10 @@ type Query interface {
 //	    }
 //	    user.LoadFromHistory(events)
 //
-//	    view := UserView{ID: user.ID(), Email: user.Email()}
+//	    view := UserView{GetID: user.GetID(), Email: user.Email()}
 //	    return Response[UserView]{
 //	        Data: view,
-//	        Metadata: map[string]any{"sequence_no": user.SequenceNo()},
+//	        Metadata: map[string]any{"sequence_no": user.GetSequenceNo()},
 //	    }, nil
 //	}
 type Handler[Req any, Res any] func(ctx context.Context, log domain.Logger, eventStore domain.EventStore, eventDispatcher domain.EventDispatcher, p Payload[Req]) (Response[Res], error)

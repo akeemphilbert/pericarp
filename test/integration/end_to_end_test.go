@@ -159,8 +159,8 @@ func testUserLifecycle(t *testing.T, system *TestSystem) {
 	}
 
 	// Verify initial state
-	if user.ID() != userID {
-		t.Errorf("expected user ID %s, got %s", userID, user.ID())
+	if user.GetID() != userID {
+		t.Errorf("expected user GetID %s, got %s", userID, user.GetID())
 	}
 	if user.Email() != email {
 		t.Errorf("expected email %s, got %s", email, user.Email())
@@ -320,8 +320,8 @@ func testEventSourcingConsistency(t *testing.T, system *TestSystem) {
 	reconstructedUser.LoadFromHistory(loadedEvents)
 
 	// Verify reconstructed user matches original
-	if reconstructedUser.ID() != user.ID() {
-		t.Errorf("expected ID %s, got %s", user.ID(), reconstructedUser.ID())
+	if reconstructedUser.GetID() != user.GetID() {
+		t.Errorf("expected GetID %s, got %s", user.GetID(), reconstructedUser.GetID())
 	}
 	if reconstructedUser.Email() != user.Email() {
 		t.Errorf("expected email %s, got %s", user.Email(), reconstructedUser.Email())
@@ -383,7 +383,7 @@ func testConcurrentOperations(t *testing.T, system *TestSystem) {
 		}
 
 		// Load user from event store to verify persistence
-		events, err := system.EventStore.GetEvents(ctx, user.ID(), 0)
+		events, err := system.EventStore.GetEvents(ctx, user.GetID(), 0)
 		if err != nil {
 			t.Errorf("failed to load events for user %d: %v", i, err)
 			continue
@@ -398,8 +398,8 @@ func testConcurrentOperations(t *testing.T, system *TestSystem) {
 		reconstructed := &examples.User{}
 		reconstructed.LoadFromHistory(events)
 
-		if reconstructed.ID() != user.ID() {
-			t.Errorf("user %d: expected ID %s, got %s", i, user.ID(), reconstructed.ID())
+		if reconstructed.GetID() != user.GetID() {
+			t.Errorf("user %d: expected GetID %s, got %s", i, user.GetID(), reconstructed.GetID())
 		}
 	}
 }

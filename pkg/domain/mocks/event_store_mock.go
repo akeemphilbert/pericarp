@@ -59,7 +59,7 @@ type EventStoreMock struct {
 			Ctx context.Context
 			// AggregateID is the aggregateID argument value.
 			AggregateID string
-			// SequenceNo is the sequenceNo argument value.
+			// GetSequenceNo is the sequenceNo argument value.
 			SequenceNo int64
 		}
 		// Save holds details about calls to the Save method.

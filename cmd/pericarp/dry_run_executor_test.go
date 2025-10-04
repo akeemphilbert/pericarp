@@ -118,7 +118,7 @@ func TestDryRunExecutor_Execute(t *testing.T) {
 			files: []*GeneratedFile{
 				{
 					Path:    "internal/domain/user.go",
-					Content: "package domain\n\ntype User struct {\n\tID string\n}",
+					Content: "package domain\n\ntype User struct {\n\tGetID string\n}",
 				},
 				{
 					Path:    "internal/application/commands.go",
@@ -226,8 +226,8 @@ func TestDryRunExecutor_PreviewProjectStructure(t *testing.T) {
 			model: &DomainModel{
 				ProjectName: "user-service",
 				Entities: []Entity{
-					{Name: "User", Properties: []Property{{Name: "ID", Type: "string"}}},
-					{Name: "Order", Properties: []Property{{Name: "ID", Type: "string"}}},
+					{Name: "User", Properties: []Property{{Name: "GetID", Type: "string"}}},
+					{Name: "Order", Properties: []Property{{Name: "GetID", Type: "string"}}},
 				},
 			},
 			dest:    "/tmp/user-service",
@@ -239,7 +239,7 @@ func TestDryRunExecutor_PreviewProjectStructure(t *testing.T) {
 				ProjectName: "inventory-service",
 				Entities: []Entity{
 					{Name: "Product", Properties: []Property{
-						{Name: "ID", Type: "string"},
+						{Name: "GetID", Type: "string"},
 						{Name: "Name", Type: "string"},
 						{Name: "Price", Type: "float64"},
 					}},

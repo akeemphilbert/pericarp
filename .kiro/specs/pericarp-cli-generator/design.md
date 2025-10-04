@@ -567,7 +567,7 @@ func New{{.Name}}({{range $i, $prop := .RequiredProperties}}{{if $i}}, {{end}}{{
     return {{.Name | lower}}, nil
 }
 
-// ID returns the {{.Name | lower}}'s ID as a string
+// GetID returns the {{.Name | lower}}'s GetID as a string
 func ({{.Name | lower | slice 0 1}} *{{.Name}}) ID() string {
     return {{.Name | lower | slice 0 1}}.id.String()
 }

@@ -148,7 +148,7 @@ func testBasicSaveAndLoad(t *testing.T, eventStore pkgdomain.EventStore) {
 	// Verify event content
 	for i, loadedEvent := range loadedEvents {
 		if loadedEvent.AggregateID() != events[i].AggregateID() {
-			t.Errorf("event %d: expected aggregate ID %s, got %s", i, events[i].AggregateID(), loadedEvent.AggregateID())
+			t.Errorf("event %d: expected aggregate GetID %s, got %s", i, events[i].AggregateID(), loadedEvent.AggregateID())
 		}
 		if loadedEvent.Type() != events[i].Type() {
 			t.Errorf("event %d: expected type %s, got %s", i, events[i].Type(), loadedEvent.Type())

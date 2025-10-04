@@ -192,7 +192,7 @@ func (te *TemplateEngine) toSnakeCase(s string) string {
 	}
 
 	// Handle common abbreviations
-	if s == "ID" {
+	if s == "GetID" {
 		return "id"
 	}
 

@@ -22,7 +22,7 @@ type User struct {
 // the initial domain event.
 func NewUser(id, email, name string) (*User, error) {
 	if id == "" {
-		return nil, errors.New("user ID cannot be empty")
+		return nil, errors.New("user GetID cannot be empty")
 	}
 	if email == "" {
 		return nil, errors.New("email cannot be empty")
@@ -94,7 +94,7 @@ func (u *User) ChangeEmail(newEmail string) error {
 		OldEmail: oldEmail,
 		NewEmail: newEmail,
 	}
-	event := domain.NewEntityEvent(nil, nil, "user", "email_changed", u.ID(), eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "email_changed", u.GetID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -122,7 +122,7 @@ func (u *User) ChangeName(newName string) error {
 		OldName: oldName,
 		NewName: newName,
 	}
-	event := domain.NewEntityEvent(nil, nil, "user", "name_changed", u.ID(), eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "name_changed", u.GetID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -143,7 +143,7 @@ func (u *User) Deactivate() error {
 		DeactivatedAt: time.Now(),
 		Reason:        "user_requested",
 	}
-	event := domain.NewEntityEvent(nil, nil, "user", "deactivated", u.ID(), eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "deactivated", u.GetID(), eventData)
 
 	u.AddEvent(event)
 	return nil
@@ -164,7 +164,7 @@ func (u *User) Activate() error {
 		ActivatedAt: time.Now(),
 		Reason:      "admin_action",
 	}
-	event := domain.NewEntityEvent(nil, nil, "user", "activated", u.ID(), eventData)
+	event := domain.NewEntityEvent(nil, nil, "user", "activated", u.GetID(), eventData)
 
 	u.AddEvent(event)
 	return nil
