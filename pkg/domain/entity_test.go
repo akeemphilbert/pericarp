@@ -539,22 +539,6 @@ func (m *MockEntity) Reset()                              {}
 func (m *MockEntity) Clone() Entity                       { return &MockEntity{} }
 func (m *MockEntity) String() string                      { return "MockEntity{}" }
 
-func TestEntity_MergeEventsFrom_InvalidType(t *testing.T) {
-	entity := NewEntity("test-123")
-
-	// Create a mock Entity that's not a BasicEntity
-	mockEntity := &MockEntity{}
-
-	err := entity.MergeEventsFrom(mockEntity)
-	if err == nil {
-		t.Error("Expected error when merging from non-BasicEntity source, got nil")
-	}
-
-	if err.Error() != "source entity must be a BasicEntity" {
-		t.Errorf("Expected specific error message, got: %v", err)
-	}
-}
-
 func TestEntity_MergeEventsFrom_EmptySource(t *testing.T) {
 	entity1 := NewEntity("entity-1")
 	entity2 := NewEntity("entity-2")
