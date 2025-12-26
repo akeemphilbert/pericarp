@@ -19,7 +19,7 @@ type FileStore struct {
 	baseDir string
 	mu      sync.RWMutex
 	// Cache for in-memory access
-	cache map[string][]*domain.EventEnvelope[any]
+	cache map[string][]domain.EventEnvelope[any]
 }
 
 // NewFileStore creates a new file-based event store.
@@ -36,7 +36,7 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 
 	store := &FileStore{
 		baseDir: baseDir,
-		cache:   make(map[string][]*domain.EventEnvelope[any]),
+		cache:   make(map[string][]domain.EventEnvelope[any]),
 	}
 
 	// Load existing events from disk
@@ -85,20 +85,20 @@ func (f *FileStore) loadAllFromDisk() error {
 }
 
 // loadFromFile loads events from a single file.
-func (f *FileStore) loadFromFile(filePath string) ([]*domain.EventEnvelope[any], error) {
+func (f *FileStore) loadFromFile(filePath string) ([]domain.EventEnvelope[any], error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []*domain.EventEnvelope[any]{}, nil
+			return []domain.EventEnvelope[any]{}, nil
 		}
 		return nil, err
 	}
 
 	if len(data) == 0 {
-		return []*domain.EventEnvelope[any]{}, nil
+		return []domain.EventEnvelope[any]{}, nil
 	}
 
-	var events []*domain.EventEnvelope[any]
+	var events []domain.EventEnvelope[any]
 	if err := json.Unmarshal(data, &events); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal events: %w", err)
 	}
@@ -107,7 +107,7 @@ func (f *FileStore) loadFromFile(filePath string) ([]*domain.EventEnvelope[any],
 }
 
 // saveToFile saves events to a file.
-func (f *FileStore) saveToFile(aggregateID string, events []*domain.EventEnvelope[any]) error {
+func (f *FileStore) saveToFile(aggregateID string, events []domain.EventEnvelope[any]) error {
 	filePath := f.getFilePath(aggregateID)
 
 	// Create directory if it doesn't exist
@@ -135,7 +135,7 @@ func (f *FileStore) saveToFile(aggregateID string, events []*domain.EventEnvelop
 }
 
 // Append appends events to the store for the given aggregate.
-func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVersion int, events ...*domain.EventEnvelope[any]) error {
+func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVersion int, events ...domain.EventEnvelope[any]) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -145,9 +145,6 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 
 	// Validate events
 	for _, event := range events {
-		if event == nil {
-			return fmt.Errorf("%w: nil event provided", domain.ErrInvalidEvent)
-		}
 		if event.AggregateID != aggregateID {
 			return fmt.Errorf("%w: aggregate ID mismatch", domain.ErrInvalidEvent)
 		}
@@ -198,16 +195,13 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 }
 
 // GetEvents retrieves all events for the given aggregate ID.
-func (f *FileStore) GetEvents(ctx context.Context, aggregateID string) ([]*domain.EventEnvelope[any], error) {
+func (f *FileStore) GetEvents(ctx context.Context, aggregateID string) ([]domain.EventEnvelope[any], error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
 	// Check cache first
 	if events, exists := f.cache[aggregateID]; exists {
-		// Return a copy
-		result := make([]*domain.EventEnvelope[any], len(events))
-		copy(result, events)
-		return result, nil
+		return events, nil
 	}
 
 	// Load from disk
@@ -220,20 +214,17 @@ func (f *FileStore) GetEvents(ctx context.Context, aggregateID string) ([]*domai
 	// Cache the result
 	f.cache[aggregateID] = events
 
-	// Return a copy
-	result := make([]*domain.EventEnvelope[any], len(events))
-	copy(result, events)
-	return result, nil
+	return events, nil
 }
 
 // GetEventsFromVersion retrieves events starting from the specified version.
-func (f *FileStore) GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]*domain.EventEnvelope[any], error) {
+func (f *FileStore) GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]domain.EventEnvelope[any], error) {
 	events, err := f.GetEvents(ctx, aggregateID)
 	if err != nil {
 		return nil, err
 	}
 
-	result := make([]*domain.EventEnvelope[any], 0)
+	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
 		if event.Version >= fromVersion {
 			result = append(result, event)
@@ -244,7 +235,7 @@ func (f *FileStore) GetEventsFromVersion(ctx context.Context, aggregateID string
 }
 
 // GetEventsRange retrieves events within a version range.
-func (f *FileStore) GetEventsRange(ctx context.Context, aggregateID string, fromVersion, toVersion int) ([]*domain.EventEnvelope[any], error) {
+func (f *FileStore) GetEventsRange(ctx context.Context, aggregateID string, fromVersion, toVersion int) ([]domain.EventEnvelope[any], error) {
 	events, err := f.GetEvents(ctx, aggregateID)
 	if err != nil {
 		return nil, err
@@ -255,7 +246,7 @@ func (f *FileStore) GetEventsRange(ctx context.Context, aggregateID string, from
 		fromVersion = 1
 	}
 
-	result := make([]*domain.EventEnvelope[any], 0)
+	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
 		if event.Version < fromVersion {
 			continue
@@ -271,16 +262,13 @@ func (f *FileStore) GetEventsRange(ctx context.Context, aggregateID string, from
 }
 
 // GetEventByID retrieves a specific event by its ID.
-func (f *FileStore) GetEventByID(ctx context.Context, eventID string) (*domain.EventEnvelope[any], error) {
+func (f *FileStore) GetEventByID(ctx context.Context, eventID string) (domain.EventEnvelope[any], error) {
 	f.mu.RLock()
 	// Search through all cached aggregates
 	for _, events := range f.cache {
 		for _, event := range events {
 			if event.ID == eventID {
-				// Return a copy
-				result := *event
-				f.mu.RUnlock()
-				return &result, nil
+				return event, nil
 			}
 		}
 	}
@@ -290,9 +278,9 @@ func (f *FileStore) GetEventByID(ctx context.Context, eventID string) (*domain.E
 	entries, err := os.ReadDir(f.baseDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, domain.ErrEventNotFound
+			return domain.EventEnvelope[any]{}, domain.ErrEventNotFound
 		}
-		return nil, err
+		return domain.EventEnvelope[any]{}, err
 	}
 
 	for _, entry := range entries {
@@ -314,14 +302,12 @@ func (f *FileStore) GetEventByID(ctx context.Context, eventID string) (*domain.E
 				f.cache[aggregateID] = events
 				f.mu.Unlock()
 
-				// Return a copy
-				result := *event
-				return &result, nil
+				return event, nil
 			}
 		}
 	}
 
-	return nil, domain.ErrEventNotFound
+	return domain.EventEnvelope[any]{}, domain.ErrEventNotFound
 }
 
 // GetCurrentVersion returns the current version for the aggregate.
@@ -344,6 +330,6 @@ func (f *FileStore) Close() error {
 	defer f.mu.Unlock()
 
 	// Clear cache
-	f.cache = make(map[string][]*domain.EventEnvelope[any])
+	f.cache = make(map[string][]domain.EventEnvelope[any])
 	return nil
 }

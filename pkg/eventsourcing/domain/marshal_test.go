@@ -117,7 +117,7 @@ func TestMarshalEventToJSON(t *testing.T) {
 	})
 }
 
-func Testdomain_UnmarshalEventFromJSON(t *testing.T) {
+func TestDomainUnmarshalEventFromJSON(t *testing.T) {
 	t.Parallel()
 
 	t.Run("unmarshals envelope from JSON", func(t *testing.T) {

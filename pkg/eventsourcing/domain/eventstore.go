@@ -23,25 +23,25 @@ type EventStore interface {
 	// Append appends one or more events to the event store for a given aggregate.
 	// It returns an error if the expected version doesn't match (optimistic concurrency control).
 	// If expectedVersion is -1, no version check is performed.
-	Append(ctx context.Context, aggregateID string, expectedVersion int, events ...*EventEnvelope[any]) error
+	Append(ctx context.Context, aggregateID string, expectedVersion int, events ...EventEnvelope[any]) error
 
 	// GetEvents retrieves all events for a given aggregate ID.
 	// Returns an empty slice if no events are found.
-	GetEvents(ctx context.Context, aggregateID string) ([]*EventEnvelope[any], error)
+	GetEvents(ctx context.Context, aggregateID string) ([]EventEnvelope[any], error)
 
 	// GetEventsFromVersion retrieves events for an aggregate starting from a specific version.
 	// Returns an empty slice if no events are found.
-	GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]*EventEnvelope[any], error)
+	GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]EventEnvelope[any], error)
 
 	// GetEventsRange retrieves events for an aggregate within a version range.
 	// If fromVersion is -1, it defaults to version 1 (the first event).
 	// If toVersion is -1, it retrieves all events from fromVersion to the end.
 	// Returns an empty slice if no events are found in the range.
-	GetEventsRange(ctx context.Context, aggregateID string, fromVersion, toVersion int) ([]*EventEnvelope[any], error)
+	GetEventsRange(ctx context.Context, aggregateID string, fromVersion, toVersion int) ([]EventEnvelope[any], error)
 
 	// GetEventByID retrieves a specific event by its ID.
 	// Returns ErrEventNotFound if the event doesn't exist.
-	GetEventByID(ctx context.Context, eventID string) (*EventEnvelope[any], error)
+	GetEventByID(ctx context.Context, eventID string) (EventEnvelope[any], error)
 
 	// GetCurrentVersion returns the current version number for an aggregate.
 	// Returns 0 if the aggregate doesn't exist.
@@ -53,8 +53,8 @@ type EventStore interface {
 
 // ToAnyEnvelope converts an EventEnvelope[T] to EventEnvelope[any] for storage.
 // This allows storing events with different payload types together in the event store.
-func ToAnyEnvelope[T any](envelope *EventEnvelope[T]) *EventEnvelope[any] {
-	return &EventEnvelope[any]{
+func ToAnyEnvelope[T any](envelope EventEnvelope[T]) EventEnvelope[any] {
+	return EventEnvelope[any]{
 		ID:          envelope.ID,
 		AggregateID: envelope.AggregateID,
 		EventType:   envelope.EventType,

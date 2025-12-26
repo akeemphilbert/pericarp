@@ -29,14 +29,14 @@ type EventEnvelope[T any] struct {
 // NewEventEnvelope creates a new EventEnvelope with the given payload and metadata.
 // If the payload implements the Event interface, the AggregateID is extracted from it.
 // Otherwise, the provided aggregateID parameter is used.
-func NewEventEnvelope[T any](payload T, aggregateID, eventType string) *EventEnvelope[T] {
+func NewEventEnvelope[T any](payload T, aggregateID, eventType string) EventEnvelope[T] {
 	// Extract AggregateID from payload if it implements Event interface
 	if event, ok := any(payload).(Event); ok {
 		aggregateID = event.GetAggregateID()
 	}
 
 	id := ksuid.New().String()
-	return &EventEnvelope[T]{
+	return EventEnvelope[T]{
 		ID:          id,
 		AggregateID: aggregateID,
 		EventType:   eventType,
@@ -48,7 +48,7 @@ func NewEventEnvelope[T any](payload T, aggregateID, eventType string) *EventEnv
 }
 
 // NewEventEnvelopeWithVersion creates a new EventEnvelope with a specific version.
-func NewEventEnvelopeWithVersion[T any](payload T, aggregateID, eventType string, version int) *EventEnvelope[T] {
+func NewEventEnvelopeWithVersion[T any](payload T, aggregateID, eventType string, version int) EventEnvelope[T] {
 	envelope := NewEventEnvelope(payload, aggregateID, eventType)
 	envelope.Version = version
 	return envelope

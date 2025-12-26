@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 )
 
 func TestEventStore_GetEventsRange(t *testing.T) {
@@ -167,7 +168,7 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 		t.Parallel()
 
 		baseDir := t.TempDir()
-		store, err := NewFileStore(baseDir)
+		store, err := infrastructure.NewFileStore(baseDir)
 		if err != nil {
 			t.Fatalf("failed to create file store: %v", err)
 		}
@@ -177,7 +178,7 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 		aggregateID := "range-test"
 
 		// Append multiple events
-		events := []*domain.EventEnvelope[any]{
+		events := []domain.EventEnvelope[any]{
 			createTestEvent(aggregateID, "event-1", "test.created", 0),
 			createTestEvent(aggregateID, "event-2", "test.updated", 0),
 			createTestEvent(aggregateID, "event-3", "test.updated", 0),

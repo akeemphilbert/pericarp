@@ -179,7 +179,7 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 		aggregateID := "range-test"
 
 		// Append multiple events
-		events := []*domain.EventEnvelope[any]{
+		events := []domain.EventEnvelope[any]{
 			createTestEvent(aggregateID, "event-1", "test.created", 0),
 			createTestEvent(aggregateID, "event-2", "test.updated", 0),
 			createTestEvent(aggregateID, "event-3", "test.updated", 0),

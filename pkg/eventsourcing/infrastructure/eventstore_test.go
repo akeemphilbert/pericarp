@@ -19,7 +19,7 @@ func TestEventStore_Append(t *testing.T) {
 		setupStore      func(t *testing.T) domain.EventStore
 		aggregateID     string
 		expectedVersion int
-		events          []*domain.EventEnvelope[any]
+		events          []domain.EventEnvelope[any]
 		wantErr         bool
 		errType         error
 	}{
@@ -28,7 +28,7 @@ func TestEventStore_Append(t *testing.T) {
 			setupStore:      setupMemoryStore,
 			aggregateID:     "agg-1",
 			expectedVersion: -1,
-			events: []*domain.EventEnvelope[any]{
+			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-1", "event-1", "test.created", 0),
 			},
 			wantErr: false,
@@ -38,7 +38,7 @@ func TestEventStore_Append(t *testing.T) {
 			setupStore:      setupMemoryStore,
 			aggregateID:     "agg-2",
 			expectedVersion: -1,
-			events: []*domain.EventEnvelope[any]{
+			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-2", "event-1", "test.created", 0),
 				createTestEvent("agg-2", "event-2", "test.updated", 0),
 			},
@@ -49,7 +49,7 @@ func TestEventStore_Append(t *testing.T) {
 			setupStore:      setupMemoryStoreWithEvents,
 			aggregateID:     "agg-3",
 			expectedVersion: 1,
-			events: []*domain.EventEnvelope[any]{
+			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-3", "event-2", "test.updated", 0),
 			},
 			wantErr: false,
@@ -59,27 +59,18 @@ func TestEventStore_Append(t *testing.T) {
 			setupStore:      setupMemoryStoreWithEvents,
 			aggregateID:     "agg-3",
 			expectedVersion: 0,
-			events: []*domain.EventEnvelope[any]{
+			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-3", "event-2", "test.updated", 0),
 			},
 			wantErr: true,
 			errType: domain.ErrConcurrencyConflict,
 		},
 		{
-			name:            "append nil event",
-			setupStore:      setupMemoryStore,
-			aggregateID:     "agg-4",
-			expectedVersion: -1,
-			events:          []*domain.EventEnvelope[any]{nil},
-			wantErr:         true,
-			errType:         domain.ErrInvalidEvent,
-		},
-		{
 			name:            "append event with mismatched aggregate ID",
 			setupStore:      setupMemoryStore,
 			aggregateID:     "agg-5",
 			expectedVersion: -1,
-			events: []*domain.EventEnvelope[any]{
+			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-6", "event-1", "test.created", 0),
 			},
 			wantErr: true,
@@ -90,7 +81,7 @@ func TestEventStore_Append(t *testing.T) {
 			setupStore:      setupMemoryStore,
 			aggregateID:     "agg-7",
 			expectedVersion: -1,
-			events:          []*domain.EventEnvelope[any]{},
+			events:          []domain.EventEnvelope[any]{},
 			wantErr:         false,
 		},
 	}
@@ -313,10 +304,6 @@ func TestEventStore_GetEventByID(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if event == nil {
-				t.Fatal("expected event, got nil")
-			}
-
 			if event.ID != tt.eventID {
 				t.Errorf("expected event ID %s, got %s", tt.eventID, event.ID)
 			}
@@ -415,7 +402,7 @@ func setupMemoryStoreWithMultipleEvents(t *testing.T) domain.EventStore {
 	store := infrastructure.NewMemoryStore()
 	ctx := context.Background()
 
-	events := []*domain.EventEnvelope[any]{
+	events := []domain.EventEnvelope[any]{
 		createTestEvent("agg-4", "event-1", "test.created", 0),
 		createTestEvent("agg-4", "event-2", "test.updated", 0),
 		createTestEvent("agg-4", "event-3", "test.updated", 0),
@@ -428,8 +415,8 @@ func setupMemoryStoreWithMultipleEvents(t *testing.T) domain.EventStore {
 	return store
 }
 
-func createTestEvent(aggregateID, eventID, eventType string, version int) *domain.EventEnvelope[any] {
-	return &domain.EventEnvelope[any]{
+func createTestEvent(aggregateID, eventID, eventType string, version int) domain.EventEnvelope[any] {
+	return domain.EventEnvelope[any]{
 		ID:          eventID,
 		AggregateID: aggregateID,
 		EventType:   eventType,

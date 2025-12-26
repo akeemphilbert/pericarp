@@ -14,22 +14,22 @@ import (
 // as it doesn't persist data across restarts.
 type MemoryStore struct {
 	mu         sync.RWMutex
-	events     map[string][]*domain.EventEnvelope[any] // aggregateID -> events
-	eventsByID map[string]*domain.EventEnvelope[any]   // eventID -> event
-	versions   map[string]int                          // aggregateID -> current version
+	events     map[string][]domain.EventEnvelope[any] // aggregateID -> events
+	eventsByID map[string]domain.EventEnvelope[any]   // eventID -> event
+	versions   map[string]int                         // aggregateID -> current version
 }
 
 // NewMemoryStore creates a new in-memory event store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		events:     make(map[string][]*domain.EventEnvelope[any]),
-		eventsByID: make(map[string]*domain.EventEnvelope[any]),
+		events:     make(map[string][]domain.EventEnvelope[any]),
+		eventsByID: make(map[string]domain.EventEnvelope[any]),
 		versions:   make(map[string]int),
 	}
 }
 
 // Append appends events to the store for the given aggregate.
-func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVersion int, events ...*domain.EventEnvelope[any]) error {
+func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVersion int, events ...domain.EventEnvelope[any]) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -39,9 +39,6 @@ func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVe
 
 	// Validate events
 	for _, event := range events {
-		if event == nil {
-			return fmt.Errorf("%w: nil event provided", domain.ErrInvalidEvent)
-		}
 		if event.AggregateID != aggregateID {
 			return fmt.Errorf("%w: aggregate ID mismatch", domain.ErrInvalidEvent)
 		}
@@ -59,7 +56,7 @@ func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVe
 	// Append events
 	eventList := m.events[aggregateID]
 	if eventList == nil {
-		eventList = make([]*domain.EventEnvelope[any], 0)
+		eventList = make([]domain.EventEnvelope[any], 0)
 	}
 
 	// Assign versions sequentially
@@ -77,33 +74,30 @@ func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVe
 }
 
 // GetEvents retrieves all events for the given aggregate ID.
-func (m *MemoryStore) GetEvents(ctx context.Context, aggregateID string) ([]*domain.EventEnvelope[any], error) {
+func (m *MemoryStore) GetEvents(ctx context.Context, aggregateID string) ([]domain.EventEnvelope[any], error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	events := m.events[aggregateID]
 	if events == nil {
-		return []*domain.EventEnvelope[any]{}, nil
+		return []domain.EventEnvelope[any]{}, nil
 	}
 
-	// Return a copy to prevent external modification
-	result := make([]*domain.EventEnvelope[any], len(events))
-	copy(result, events)
-	return result, nil
+	return events, nil
 }
 
 // GetEventsFromVersion retrieves events starting from the specified version.
-func (m *MemoryStore) GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]*domain.EventEnvelope[any], error) {
+func (m *MemoryStore) GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]domain.EventEnvelope[any], error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	events := m.events[aggregateID]
 	if events == nil {
-		return []*domain.EventEnvelope[any]{}, nil
+		return []domain.EventEnvelope[any]{}, nil
 	}
 
 	// Find the first event with version >= fromVersion
-	result := make([]*domain.EventEnvelope[any], 0)
+	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
 		if event.Version >= fromVersion {
 			result = append(result, event)
@@ -114,13 +108,13 @@ func (m *MemoryStore) GetEventsFromVersion(ctx context.Context, aggregateID stri
 }
 
 // GetEventsRange retrieves events within a version range.
-func (m *MemoryStore) GetEventsRange(ctx context.Context, aggregateID string, fromVersion, toVersion int) ([]*domain.EventEnvelope[any], error) {
+func (m *MemoryStore) GetEventsRange(ctx context.Context, aggregateID string, fromVersion, toVersion int) ([]domain.EventEnvelope[any], error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	events := m.events[aggregateID]
 	if events == nil {
-		return []*domain.EventEnvelope[any]{}, nil
+		return []domain.EventEnvelope[any]{}, nil
 	}
 
 	// Default fromVersion to 1 if -1
@@ -128,7 +122,7 @@ func (m *MemoryStore) GetEventsRange(ctx context.Context, aggregateID string, fr
 		fromVersion = 1
 	}
 
-	result := make([]*domain.EventEnvelope[any], 0)
+	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
 		if event.Version < fromVersion {
 			continue
@@ -144,18 +138,17 @@ func (m *MemoryStore) GetEventsRange(ctx context.Context, aggregateID string, fr
 }
 
 // GetEventByID retrieves a specific event by its ID.
-func (m *MemoryStore) GetEventByID(ctx context.Context, eventID string) (*domain.EventEnvelope[any], error) {
+func (m *MemoryStore) GetEventByID(ctx context.Context, eventID string) (domain.EventEnvelope[any], error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	event, exists := m.eventsByID[eventID]
 	if !exists {
-		return nil, domain.ErrEventNotFound
+		return domain.EventEnvelope[any]{}, domain.ErrEventNotFound
 	}
 
 	// Return a copy to prevent external modification
-	result := *event
-	return &result, nil
+	return event, nil
 }
 
 // GetCurrentVersion returns the current version for the aggregate.
@@ -172,8 +165,8 @@ func (m *MemoryStore) Close() error {
 	defer m.mu.Unlock()
 
 	// Clear all data
-	m.events = make(map[string][]*domain.EventEnvelope[any])
-	m.eventsByID = make(map[string]*domain.EventEnvelope[any])
+	m.events = make(map[string][]domain.EventEnvelope[any])
+	m.eventsByID = make(map[string]domain.EventEnvelope[any])
 	m.versions = make(map[string]int)
 
 	return nil

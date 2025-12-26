@@ -29,7 +29,7 @@ func TestFileStore_Integration(t *testing.T) {
 		aggregateID := "test-aggregate"
 
 		// Append initial events
-		events := []*domain.EventEnvelope[any]{
+		events := []domain.EventEnvelope[any]{
 			createTestEvent(aggregateID, "event-1", "test.created", 0),
 			createTestEvent(aggregateID, "event-2", "test.updated", 0),
 		}
@@ -127,10 +127,10 @@ func TestFileStore_Integration(t *testing.T) {
 		ctx := context.Background()
 
 		// Append events for multiple aggregates
-		agg1Events := []*domain.EventEnvelope[any]{
+		agg1Events := []domain.EventEnvelope[any]{
 			createTestEvent("agg-1", "event-1", "test.created", 0),
 		}
-		agg2Events := []*domain.EventEnvelope[any]{
+		agg2Events := []domain.EventEnvelope[any]{
 			createTestEvent("agg-2", "event-2", "test.created", 0),
 			createTestEvent("agg-2", "event-3", "test.updated", 0),
 		}
