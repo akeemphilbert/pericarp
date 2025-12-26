@@ -6,21 +6,22 @@ This directory contains the public API packages that users of the Pericarp libra
 
 The public API is organized into logical packages:
 
-- **domain**: Domain entities, events, value objects, and repository interfaces
-- **application**: Command/query handlers, application services, and CQRS bus
-- **infrastructure**: Event store implementations, database access, and external integrations
+- **eventsourcing**: Event sourcing primitives including events, event stores, and event handling
+- **application**: Command/query handlers, application services, and CQRS bus (future)
+- **infrastructure**: Event store implementations, database access, and external integrations (future)
+- **auth**: Authentication and authorization primitives (future)
 
 ## Usage
 
 ```go
 import (
-    "github.com/wepala/pericarp/pkg/domain"
-    "github.com/wepala/pericarp/pkg/application"
-    "github.com/wepala/pericarp/pkg/infrastructure"
+    "github.com/akeemphilbert/pericarp/pkg/eventsourcing"
+    "github.com/akeemphilbert/pericarp/pkg/application"
+    "github.com/akeemphilbert/pericarp/pkg/infrastructure"
 )
 ```
 
 ## Note
 
-This directory structure follows golang-standards/project-layout. The actual implementation will be added in subsequent tasks.
+This directory structure follows golang-standards/project-layout. Packages are organized by domain concern to allow for clean separation and future expansion.
 

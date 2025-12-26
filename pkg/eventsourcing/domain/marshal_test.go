@@ -117,7 +117,7 @@ func TestMarshalEventToJSON(t *testing.T) {
 	})
 }
 
-func TestUnmarshalEventFromJSON(t *testing.T) {
+func Testdomain_UnmarshalEventFromJSON(t *testing.T) {
 	t.Parallel()
 
 	t.Run("unmarshals envelope from JSON", func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestUnmarshalEventFromJSON(t *testing.T) {
 		t.Parallel()
 		invalidJSON := []byte(`{invalid json}`)
 
-		_, err := UnmarshalEventFromJSON[*UserCreatedEvent](invalidJSON)
+		_, err := domain.UnmarshalEventFromJSON[*UserCreatedEvent](invalidJSON)
 		if err == nil {
 			t.Error("Expected error for invalid JSON")
 		}
@@ -180,7 +180,7 @@ func TestUnmarshalEventFromJSON(t *testing.T) {
 			"version": 1
 		}`)
 
-		envelope, err := UnmarshalEventFromJSON[*UserCreatedEvent](jsonData)
+		envelope, err := domain.UnmarshalEventFromJSON[*UserCreatedEvent](jsonData)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -208,17 +208,17 @@ func TestJSONRoundTrip(t *testing.T) {
 			OccurredAt:  time.Now(),
 		}
 
-		originalEnvelope := NewEventEnvelope(originalEvent, "", "user.created")
+		originalEnvelope := domain.NewEventEnvelope(originalEvent, "", "user.created")
 		originalEnvelope.Metadata["source"] = "test"
 
 		// Marshal
-		data, err := MarshalEventToJSON(originalEnvelope)
+		data, err := domain.MarshalEventToJSON(originalEnvelope)
 		if err != nil {
 			t.Fatalf("Unexpected error marshaling: %v", err)
 		}
 
 		// Unmarshal
-		unmarshaledEnvelope, err := UnmarshalEventFromJSON[*UserCreatedEvent](data)
+		unmarshaledEnvelope, err := domain.UnmarshalEventFromJSON[*UserCreatedEvent](data)
 		if err != nil {
 			t.Fatalf("Unexpected error unmarshaling: %v", err)
 		}
@@ -249,14 +249,14 @@ func TestJSONRoundTrip(t *testing.T) {
 			TotalAmount: 99.99,
 		}
 
-		originalEnvelope := NewEventEnvelope(originalEvent, "order-123", "order.placed")
+		originalEnvelope := domain.NewEventEnvelope(originalEvent, "order-123", "order.placed")
 
-		data, err := MarshalEventToJSON(originalEnvelope)
+		data, err := domain.MarshalEventToJSON(originalEnvelope)
 		if err != nil {
 			t.Fatalf("Unexpected error marshaling: %v", err)
 		}
 
-		unmarshaledEnvelope, err := UnmarshalEventFromJSON[*OrderPlacedEvent](data)
+		unmarshaledEnvelope, err := domain.UnmarshalEventFromJSON[*OrderPlacedEvent](data)
 		if err != nil {
 			t.Fatalf("Unexpected error unmarshaling: %v", err)
 		}
@@ -274,17 +274,17 @@ func TestMetadataPreservation(t *testing.T) {
 	t.Parallel()
 
 	event := &UserCreatedEvent{AggregateID: "user-123"}
-	envelope := NewEventEnvelope(event, "", "user.created")
+	envelope := domain.NewEventEnvelope(event, "", "user.created")
 	envelope.Metadata["key1"] = "value1"
 	envelope.Metadata["key2"] = 42
 	envelope.Metadata["key3"] = true
 
-	data, err := MarshalEventToJSON(envelope)
+	data, err := domain.MarshalEventToJSON(envelope)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	unmarshaledEnvelope, err := UnmarshalEventFromJSON[*UserCreatedEvent](data)
+	unmarshaledEnvelope, err := domain.UnmarshalEventFromJSON[*UserCreatedEvent](data)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -308,13 +308,13 @@ func TestTypeSafetyAfterUnmarshaling(t *testing.T) {
 		Email:       "john@example.com",
 	}
 
-	envelope := NewEventEnvelope(event, "", "user.created")
-	data, err := MarshalEventToJSON(envelope)
+	envelope := domain.NewEventEnvelope(event, "", "user.created")
+	data, err := domain.MarshalEventToJSON(envelope)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	unmarshaledEnvelope, err := UnmarshalEventFromJSON[*UserCreatedEvent](data)
+	unmarshaledEnvelope, err := domain.UnmarshalEventFromJSON[*UserCreatedEvent](data)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}

@@ -1,5 +1,5 @@
-module github.com/wepala/pericarp
+module github.com/akeemphilbert/pericarp
 
 go 1.21
 
-require github.com/segmentio/ksuid v1.0.4 // indirect
+require github.com/segmentio/ksuid v1.0.4

@@ -11,8 +11,8 @@ import (
     "context"
     "log"
     
-    "github.com/wepala/pericarp/pkg/domain"
-    "github.com/wepala/pericarp/pkg/application"
+    "github.com/akeemphilbert/pericarp/pkg/eventsourcing"
+    "github.com/akeemphilbert/pericarp/pkg/application"
     "go.uber.org/fx"
 )
 
@@ -38,9 +38,43 @@ func main() {
 
 ## Installation
 
+### Prerequisites
+
+- Go 1.21 or later
+- Go modules enabled (default in Go 1.16+)
+
+### Install Latest Version
+
+Install the latest version of Pericarp with a single command:
+
 ```bash
-go get github.com/wepala/pericarp
+go get github.com/akeemphilbert/pericarp
 ```
+
+### Install Specific Version
+
+To install a specific version, use the version tag:
+
+```bash
+# Install a specific version (e.g., v1.0.0)
+go get github.com/akeemphilbert/pericarp@v1.0.0
+
+# Install the latest version from a specific branch
+go get github.com/akeemphilbert/pericarp@main
+```
+
+### Verify Installation
+
+After installation, verify the package is available:
+
+```bash
+go list -m github.com/akeemphilbert/pericarp
+```
+
+### Documentation
+
+- 📦 [pkg.go.dev](https://pkg.go.dev/github.com/akeemphilbert/pericarp) - Official Go package documentation
+- 📖 [GitHub Repository](https://github.com/akeemphilbert/pericarp) - Source code and issues
 
 ## Project Structure
 
@@ -49,7 +83,7 @@ The project follows the [golang-standards/project-layout](https://github.com/gol
 ```
 pericarp/
 ├── pkg/              # Public API packages
-│   ├── domain/       # Domain entities, events, value objects
+│   ├── eventsourcing/ # Event sourcing primitives (events, event stores)
 │   ├── application/  # Command/query handlers, CQRS bus
 │   └── infrastructure/ # Event store, database implementations
 ├── internal/         # Private implementation packages
@@ -107,4 +141,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## Support
 
 - 📖 [Documentation](docs/)
-- 🐛 [Issues](https://github.com/wepala/pericarp/issues)
+- 🐛 [Issues](https://github.com/akeemphilbert/pericarp/issues)
