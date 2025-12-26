@@ -60,7 +60,7 @@ func ToAnyEnvelope[T any](envelope EventEnvelope[T]) EventEnvelope[any] {
 		EventType:   envelope.EventType,
 		Payload:     envelope.Payload,
 		Created:     envelope.Created,
-		Version:     envelope.Version,
+		SequenceNo:  envelope.SequenceNo,
 		Metadata:    envelope.Metadata,
 	}
 }

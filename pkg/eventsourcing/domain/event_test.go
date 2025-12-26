@@ -68,7 +68,7 @@ func TestNewEventEnvelope(t *testing.T) {
 			Name:        "John Doe",
 		}
 
-		envelope := domain.NewEventEnvelope(event, "", "user.created")
+		envelope := domain.NewEventEnvelope(event, "", "user.created", 0)
 
 		if envelope.AggregateID != "user-123" {
 			t.Errorf("Expected AggregateID 'user-123', got %q", envelope.AggregateID)
@@ -85,8 +85,8 @@ func TestNewEventEnvelope(t *testing.T) {
 		if envelope.Created.IsZero() {
 			t.Error("Expected non-zero timestamp")
 		}
-		if envelope.Version != 1 {
-			t.Errorf("Expected Version 1, got %d", envelope.Version)
+		if envelope.SequenceNo != 1 {
+			t.Errorf("Expected Version 1, got %d", envelope.SequenceNo)
 		}
 		if envelope.Metadata == nil {
 			t.Error("Expected non-nil Metadata map")
@@ -101,7 +101,7 @@ func TestNewEventEnvelope(t *testing.T) {
 			TotalAmount: 99.99,
 		}
 
-		envelope := domain.NewEventEnvelope(event, "order-123", "order.placed")
+		envelope := domain.NewEventEnvelope(event, "order-123", "order.placed", 0)
 
 		if envelope.AggregateID != "order-123" {
 			t.Errorf("Expected AggregateID 'order-123', got %q", envelope.AggregateID)
@@ -118,24 +118,24 @@ func TestNewEventEnvelope(t *testing.T) {
 		}
 
 		// When event implements interface, AggregateID from event is used
-		envelope := domain.NewEventEnvelope(event, "provided-id", "user.created")
+		envelope := domain.NewEventEnvelope(event, "provided-id", "user.created", 0)
 		if envelope.AggregateID != "user-123" {
 			t.Errorf("Expected AggregateID from event 'user-123', got %q", envelope.AggregateID)
 		}
 	})
 }
 
-func TestNewEventEnvelopeWithVersion(t *testing.T) {
+func TestNewEventEnvelopeWithSequenceNo(t *testing.T) {
 	t.Parallel()
 
 	event := &UserCreatedEvent{
 		AggregateID: "user-123",
 	}
 
-	envelope := domain.NewEventEnvelopeWithVersion(event, "", "user.created", 5)
+	envelope := domain.NewEventEnvelope(event, "", "user.created", 5)
 
-	if envelope.Version != 5 {
-		t.Errorf("Expected Version 5, got %d", envelope.Version)
+	if envelope.SequenceNo != 5 {
+		t.Errorf("Expected SequenceNo 5, got %d", envelope.SequenceNo)
 	}
 	if envelope.AggregateID != "user-123" {
 		t.Errorf("Expected AggregateID 'user-123', got %q", envelope.AggregateID)
@@ -150,8 +150,8 @@ func TestEventEnvelopeKSUID(t *testing.T) {
 		event1 := &UserCreatedEvent{AggregateID: "user-1"}
 		event2 := &UserCreatedEvent{AggregateID: "user-2"}
 
-		envelope1 := domain.NewEventEnvelope(event1, "", "user.created")
-		envelope2 := domain.NewEventEnvelope(event2, "", "user.created")
+		envelope1 := domain.NewEventEnvelope(event1, "", "user.created", 0)
+		envelope2 := domain.NewEventEnvelope(event2, "", "user.created", 0)
 
 		if envelope1.ID == envelope2.ID {
 			t.Error("Expected different KSUIDs for different envelopes")
@@ -168,7 +168,7 @@ func TestEventEnvelopeTimestamp(t *testing.T) {
 
 	event := &UserCreatedEvent{AggregateID: "user-123"}
 	before := time.Now()
-	envelope := domain.NewEventEnvelope(event, "", "user.created")
+	envelope := domain.NewEventEnvelope(event, "", "user.created", 0)
 	after := time.Now()
 
 	if envelope.Created.Before(before) || envelope.Created.After(after) {
@@ -186,7 +186,7 @@ func TestEventEnvelopeTypeSafety(t *testing.T) {
 			Email:       "john@example.com",
 		}
 
-		envelope := domain.NewEventEnvelope(event, "", "user.created")
+		envelope := domain.NewEventEnvelope(event, "", "user.created", 0)
 
 		// Type-safe access - no assertion needed
 		if envelope.Payload.Email != "john@example.com" {
@@ -203,8 +203,8 @@ func TestEventEnvelopeTypeSafety(t *testing.T) {
 		userEvent := &UserCreatedEvent{AggregateID: "user-123"}
 		orderEvent := &OrderPlacedEvent{OrderID: "order-123"}
 
-		userEnvelope := domain.NewEventEnvelope(userEvent, "", "user.created")
-		orderEnvelope := domain.NewEventEnvelope(orderEvent, "order-123", "order.placed")
+		userEnvelope := domain.NewEventEnvelope(userEvent, "", "user.created", 0)
+		orderEnvelope := domain.NewEventEnvelope(orderEvent, "order-123", "order.placed", 0)
 
 		// Type safety prevents mixing
 		_ = userEnvelope.Payload.UserID
@@ -220,7 +220,7 @@ func TestEventEnvelopeMetadata(t *testing.T) {
 	t.Parallel()
 
 	event := &UserCreatedEvent{AggregateID: "user-123"}
-	envelope := domain.NewEventEnvelope(event, "", "user.created")
+	envelope := domain.NewEventEnvelope(event, "", "user.created", 0)
 
 	if envelope.Metadata == nil {
 		t.Error("Expected non-nil Metadata map")

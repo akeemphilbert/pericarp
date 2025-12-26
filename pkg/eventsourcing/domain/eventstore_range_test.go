@@ -21,85 +21,85 @@ func TestEventStore_GetEventsRange(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "get events from version 1 to 2",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 1,
-			toVersion:   2,
-			wantCount:   2,
-			wantErr:     false,
+			name:           "get events from version 1 to 2",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 1,
+			toSequenceNo:   2,
+			wantCount:      2,
+			wantErr:        false,
 		},
 		{
-			name:        "get events from version 2 to 3",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 2,
-			toVersion:   3,
-			wantCount:   2,
-			wantErr:     false,
+			name:           "get events from version 2 to 3",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 2,
+			toSequenceNo:   3,
+			wantCount:      2,
+			wantErr:        false,
 		},
 		{
-			name:        "get events with default fromVersion (1)",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: -1,
-			toVersion:   2,
-			wantCount:   2,
-			wantErr:     false,
+			name:           "get events with default fromVersion (1)",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: -1,
+			toSequenceNo:   2,
+			wantCount:      2,
+			wantErr:        false,
 		},
 		{
-			name:        "get events with toVersion -1 (all remaining)",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 2,
-			toVersion:   -1,
-			wantCount:   2,
-			wantErr:     false,
+			name:           "get events with toVersion -1 (all remaining)",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 2,
+			toSequenceNo:   -1,
+			wantCount:      2,
+			wantErr:        false,
 		},
 		{
-			name:        "get events with both defaults (all events)",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: -1,
-			toVersion:   -1,
-			wantCount:   3,
-			wantErr:     false,
+			name:           "get events with both defaults (all events)",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: -1,
+			toSequenceNo:   -1,
+			wantCount:      3,
+			wantErr:        false,
 		},
 		{
-			name:        "get events with range beyond existing",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 10,
-			toVersion:   20,
-			wantCount:   0,
-			wantErr:     false,
+			name:           "get events with range beyond existing",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 10,
+			toSequenceNo:   20,
+			wantCount:      0,
+			wantErr:        false,
 		},
 		{
-			name:        "get events with toVersion before fromVersion",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 3,
-			toVersion:   1,
-			wantCount:   0,
-			wantErr:     false,
+			name:           "get events with toVersion before fromVersion",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 3,
+			toSequenceNo:   1,
+			wantCount:      0,
+			wantErr:        false,
 		},
 		{
-			name:        "get events for non-existent aggregate",
-			setupStore:  setupMemoryStore,
-			aggregateID: "agg-nonexistent",
-			fromVersion: 1,
-			toVersion:   10,
-			wantCount:   0,
-			wantErr:     false,
+			name:           "get events for non-existent aggregate",
+			setupStore:     setupMemoryStore,
+			aggregateID:    "agg-nonexistent",
+			fromSequenceNo: 1,
+			toSequenceNo:   10,
+			wantCount:      0,
+			wantErr:        false,
 		},
 		{
-			name:        "get single event in range",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 2,
-			toVersion:   2,
-			wantCount:   1,
-			wantErr:     false,
+			name:           "get single event in range",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 2,
+			toSequenceNo:   2,
+			wantCount:      1,
+			wantErr:        false,
 		},
 	}
 
@@ -138,23 +138,23 @@ func TestEventStore_GetEventsRange(t *testing.T) {
 			if expectedTo == -1 {
 				// Check that all events from fromVersion onwards are included
 				for _, event := range events {
-					if event.Version < expectedFrom {
-						t.Errorf("event version %d is less than fromVersion %d", event.Version, expectedFrom)
+					if event.SequenceNo < expectedFrom {
+						t.Errorf("event version %d is less than fromVersion %d", event.SequenceNo, expectedFrom)
 					}
 				}
 			} else {
 				for _, event := range events {
-					if event.Version < expectedFrom || event.Version > expectedTo {
-						t.Errorf("event version %d is outside range [%d, %d]", event.Version, expectedFrom, expectedTo)
+					if event.SequenceNo < expectedFrom || event.SequenceNo > expectedTo {
+						t.Errorf("event version %d is outside range [%d, %d]", event.SequenceNo, expectedFrom, expectedTo)
 					}
 				}
 			}
 
 			// Verify events are in order
 			for i := 1; i < len(events); i++ {
-				if events[i].Version <= events[i-1].Version {
+				if events[i].SequenceNo <= events[i-1].SequenceNo {
 					t.Errorf("events not in version order: event %d has version %d, previous has %d",
-						i, events[i].Version, events[i-1].Version)
+						i, events[i].SequenceNo, events[i-1].SequenceNo)
 				}
 			}
 		})
@@ -200,11 +200,11 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 			t.Fatalf("expected 2 events in range, got %d", len(rangeEvents))
 		}
 
-		if rangeEvents[0].Version != 2 {
-			t.Errorf("expected first event version 2, got %d", rangeEvents[0].Version)
+		if rangeEvents[0].SequenceNo != 2 {
+			t.Errorf("expected first event version 2, got %d", rangeEvents[0].SequenceNo)
 		}
-		if rangeEvents[1].Version != 3 {
-			t.Errorf("expected second event version 3, got %d", rangeEvents[1].Version)
+		if rangeEvents[1].SequenceNo != 3 {
+			t.Errorf("expected second event version 3, got %d", rangeEvents[1].SequenceNo)
 		}
 
 		// Test with default fromVersion

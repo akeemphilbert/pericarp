@@ -167,9 +167,9 @@ func TestEventStore_GetEvents(t *testing.T) {
 
 			// Verify events are in order
 			for i := 1; i < len(events); i++ {
-				if events[i].Version <= events[i-1].Version {
+				if events[i].SequenceNo <= events[i-1].SequenceNo {
 					t.Errorf("events not in version order: event %d has version %d, previous has %d",
-						i, events[i].Version, events[i-1].Version)
+						i, events[i].SequenceNo, events[i-1].SequenceNo)
 				}
 			}
 		})
@@ -241,8 +241,8 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 
 			// Verify all events are >= fromVersion
 			for _, event := range events {
-				if event.Version < tt.fromVersion {
-					t.Errorf("event version %d is less than fromVersion %d", event.Version, tt.fromVersion)
+				if event.SequenceNo < tt.fromVersion {
+					t.Errorf("event version %d is less than fromVersion %d", event.SequenceNo, tt.fromVersion)
 				}
 			}
 		})

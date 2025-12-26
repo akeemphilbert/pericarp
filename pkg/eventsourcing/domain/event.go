@@ -22,14 +22,15 @@ type EventEnvelope[T any] struct {
 	EventType   string                 `json:"event_type"`
 	Payload     T                      `json:"payload"`
 	Created     time.Time              `json:"timestamp"`
-	Version     int                    `json:"version"`
+	SequenceNo  int                    `json:"sequence_no"`
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // NewEventEnvelope creates a new EventEnvelope with the given payload and metadata.
 // If the payload implements the Event interface, the AggregateID is extracted from it.
 // Otherwise, the provided aggregateID parameter is used.
-func NewEventEnvelope[T any](payload T, aggregateID, eventType string) EventEnvelope[T] {
+// sequenceNo is the sequence number for this event within the aggregate's event stream.
+func NewEventEnvelope[T any](payload T, aggregateID, eventType string, sequenceNo int) EventEnvelope[T] {
 	// Extract AggregateID from payload if it implements Event interface
 	if event, ok := any(payload).(Event); ok {
 		aggregateID = event.GetAggregateID()
@@ -42,16 +43,9 @@ func NewEventEnvelope[T any](payload T, aggregateID, eventType string) EventEnve
 		EventType:   eventType,
 		Payload:     payload,
 		Created:     time.Now(),
-		Version:     1,
+		SequenceNo:  sequenceNo,
 		Metadata:    make(map[string]interface{}),
 	}
-}
-
-// NewEventEnvelopeWithVersion creates a new EventEnvelope with a specific version.
-func NewEventEnvelopeWithVersion[T any](payload T, aggregateID, eventType string, version int) EventEnvelope[T] {
-	envelope := NewEventEnvelope(payload, aggregateID, eventType)
-	envelope.Version = version
-	return envelope
 }
 
 // MarshalJSON implements json.Marshaler for EventEnvelope.

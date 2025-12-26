@@ -138,23 +138,23 @@ func TestEventStore_GetEventsRange(t *testing.T) {
 			if expectedTo == -1 {
 				// Check that all events from fromVersion onwards are included
 				for _, event := range events {
-					if event.Version < expectedFrom {
-						t.Errorf("event version %d is less than fromVersion %d", event.Version, expectedFrom)
+					if event.SequenceNo < expectedFrom {
+						t.Errorf("event version %d is less than fromVersion %d", event.SequenceNo, expectedFrom)
 					}
 				}
 			} else {
 				for _, event := range events {
-					if event.Version < expectedFrom || event.Version > expectedTo {
-						t.Errorf("event version %d is outside range [%d, %d]", event.Version, expectedFrom, expectedTo)
+					if event.SequenceNo < expectedFrom || event.SequenceNo > expectedTo {
+						t.Errorf("event version %d is outside range [%d, %d]", event.SequenceNo, expectedFrom, expectedTo)
 					}
 				}
 			}
 
 			// Verify events are in order
 			for i := 1; i < len(events); i++ {
-				if events[i].Version <= events[i-1].Version {
+				if events[i].SequenceNo <= events[i-1].SequenceNo {
 					t.Errorf("events not in version order: event %d has version %d, previous has %d",
-						i, events[i].Version, events[i-1].Version)
+						i, events[i].SequenceNo, events[i-1].SequenceNo)
 				}
 			}
 		})
@@ -199,11 +199,11 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 			t.Fatalf("expected 2 events in range, got %d", len(rangeEvents))
 		}
 
-		if rangeEvents[0].Version != 2 {
-			t.Errorf("expected first event version 2, got %d", rangeEvents[0].Version)
+		if rangeEvents[0].SequenceNo != 2 {
+			t.Errorf("expected first event version 2, got %d", rangeEvents[0].SequenceNo)
 		}
-		if rangeEvents[1].Version != 3 {
-			t.Errorf("expected second event version 3, got %d", rangeEvents[1].Version)
+		if rangeEvents[1].SequenceNo != 3 {
+			t.Errorf("expected second event version 3, got %d", rangeEvents[1].SequenceNo)
 		}
 
 		// Test with default fromVersion

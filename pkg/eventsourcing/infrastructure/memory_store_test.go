@@ -42,11 +42,11 @@ func TestMemoryStore_Integration(t *testing.T) {
 		}
 
 		// Verify versions were assigned correctly
-		if retrieved[0].Version != 1 {
-			t.Errorf("expected first event version 1, got %d", retrieved[0].Version)
+		if retrieved[0].SequenceNo != 1 {
+			t.Errorf("expected first event version 1, got %d", retrieved[0].SequenceNo)
 		}
-		if retrieved[1].Version != 2 {
-			t.Errorf("expected second event version 2, got %d", retrieved[1].Version)
+		if retrieved[1].SequenceNo != 2 {
+			t.Errorf("expected second event version 2, got %d", retrieved[1].SequenceNo)
 		}
 
 		// Get current version

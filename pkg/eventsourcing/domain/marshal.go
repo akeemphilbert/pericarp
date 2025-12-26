@@ -7,8 +7,9 @@ import (
 // WrapEvent wraps a typed payload in a generic EventEnvelope.
 // If the payload implements the Event interface, the AggregateID is extracted from it.
 // Otherwise, the provided aggregateID parameter is used.
-func WrapEvent[T any](payload T, aggregateID, eventType string) (EventEnvelope[T], error) {
-	return NewEventEnvelope(payload, aggregateID, eventType), nil
+// sequenceNo is the sequence number for this event within the aggregate's event stream.
+func WrapEvent[T any](payload T, aggregateID, eventType string, sequenceNo int) (EventEnvelope[T], error) {
+	return NewEventEnvelope(payload, aggregateID, eventType, sequenceNo), nil
 }
 
 // MarshalEventToJSON marshals a generic EventEnvelope to JSON.

@@ -62,7 +62,7 @@ func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVe
 	// Assign versions sequentially
 	nextVersion := currentVersion + 1
 	for i, event := range events {
-		event.Version = nextVersion + i
+		event.SequenceNo = nextVersion + i
 		eventList = append(eventList, event)
 		m.eventsByID[event.ID] = event
 	}
@@ -99,7 +99,7 @@ func (m *MemoryStore) GetEventsFromVersion(ctx context.Context, aggregateID stri
 	// Find the first event with version >= fromVersion
 	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
-		if event.Version >= fromVersion {
+		if event.SequenceNo >= fromVersion {
 			result = append(result, event)
 		}
 	}
@@ -124,11 +124,11 @@ func (m *MemoryStore) GetEventsRange(ctx context.Context, aggregateID string, fr
 
 	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
-		if event.Version < fromVersion {
+		if event.SequenceNo < fromVersion {
 			continue
 		}
 		// If toVersion is -1, include all events from fromVersion onwards
-		if toVersion != -1 && event.Version > toVersion {
+		if toVersion != -1 && event.SequenceNo > toVersion {
 			break
 		}
 		result = append(result, event)

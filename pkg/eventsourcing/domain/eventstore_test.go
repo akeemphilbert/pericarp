@@ -24,20 +24,20 @@ func TestEventStore_Append(t *testing.T) {
 		errType         error
 	}{
 		{
-			name:            "append single event to new aggregate",
-			setupStore:      setupMemoryStore,
-			aggregateID:     "agg-1",
-			expectedVersion: -1,
+			name:               "append single event to new aggregate",
+			setupStore:         setupMemoryStore,
+			aggregateID:        "agg-1",
+			expectedSequenceNo: -1,
 			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-1", "event-1", "test.created", 0),
 			},
 			wantErr: false,
 		},
 		{
-			name:            "append multiple events",
-			setupStore:      setupMemoryStore,
-			aggregateID:     "agg-2",
-			expectedVersion: -1,
+			name:               "append multiple events",
+			setupStore:         setupMemoryStore,
+			aggregateID:        "agg-2",
+			expectedSequenceNo: -1,
 			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-2", "event-1", "test.created", 0),
 				createTestEvent("agg-2", "event-2", "test.updated", 0),
@@ -45,20 +45,20 @@ func TestEventStore_Append(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:            "append with version check success",
-			setupStore:      setupMemoryStoreWithEvents,
-			aggregateID:     "agg-3",
-			expectedVersion: 1,
+			name:               "append with version check success",
+			setupStore:         setupMemoryStoreWithEvents,
+			aggregateID:        "agg-3",
+			expectedSequenceNo: 1,
 			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-3", "event-2", "test.updated", 0),
 			},
 			wantErr: false,
 		},
 		{
-			name:            "append with version check failure",
-			setupStore:      setupMemoryStoreWithEvents,
-			aggregateID:     "agg-3",
-			expectedVersion: 0,
+			name:               "append with version check failure",
+			setupStore:         setupMemoryStoreWithEvents,
+			aggregateID:        "agg-3",
+			expectedSequenceNo: 0,
 			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-3", "event-2", "test.updated", 0),
 			},
@@ -66,10 +66,10 @@ func TestEventStore_Append(t *testing.T) {
 			errType: domain.ErrConcurrencyConflict,
 		},
 		{
-			name:            "append event with mismatched aggregate ID",
-			setupStore:      setupMemoryStore,
-			aggregateID:     "agg-5",
-			expectedVersion: -1,
+			name:               "append event with mismatched aggregate ID",
+			setupStore:         setupMemoryStore,
+			aggregateID:        "agg-5",
+			expectedSequenceNo: -1,
 			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-6", "event-1", "test.created", 0),
 			},
@@ -77,12 +77,12 @@ func TestEventStore_Append(t *testing.T) {
 			errType: domain.ErrInvalidEvent,
 		},
 		{
-			name:            "append empty events slice",
-			setupStore:      setupMemoryStore,
-			aggregateID:     "agg-7",
-			expectedVersion: -1,
-			events:          []domain.EventEnvelope[any]{},
-			wantErr:         false,
+			name:               "append empty events slice",
+			setupStore:         setupMemoryStore,
+			aggregateID:        "agg-7",
+			expectedSequenceNo: -1,
+			events:             []domain.EventEnvelope[any]{},
+			wantErr:            false,
 		},
 	}
 
@@ -167,9 +167,9 @@ func TestEventStore_GetEvents(t *testing.T) {
 
 			// Verify events are in order
 			for i := 1; i < len(events); i++ {
-				if events[i].Version <= events[i-1].Version {
+				if events[i].SequenceNo <= events[i-1].SequenceNo {
 					t.Errorf("events not in version order: event %d has version %d, previous has %d",
-						i, events[i].Version, events[i-1].Version)
+						i, events[i].SequenceNo, events[i-1].SequenceNo)
 				}
 			}
 		})
@@ -188,28 +188,28 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "get events from version 1",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 1,
-			wantCount:   3,
-			wantErr:     false,
+			name:           "get events from version 1",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 1,
+			wantCount:      3,
+			wantErr:        false,
 		},
 		{
-			name:        "get events from version 2",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 2,
-			wantCount:   2,
-			wantErr:     false,
+			name:           "get events from version 2",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 2,
+			wantCount:      2,
+			wantErr:        false,
 		},
 		{
-			name:        "get events from version beyond existing",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			fromVersion: 10,
-			wantCount:   0,
-			wantErr:     false,
+			name:           "get events from version beyond existing",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			fromSequenceNo: 10,
+			wantCount:      0,
+			wantErr:        false,
 		},
 	}
 
@@ -241,8 +241,8 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 
 			// Verify all events are >= fromVersion
 			for _, event := range events {
-				if event.Version < tt.fromVersion {
-					t.Errorf("event version %d is less than fromVersion %d", event.Version, tt.fromVersion)
+				if event.SequenceNo < tt.fromVersion {
+					t.Errorf("event version %d is less than fromVersion %d", event.SequenceNo, tt.fromVersion)
 				}
 			}
 		})
@@ -326,25 +326,25 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name:        "get version for existing aggregate",
-			setupStore:  setupMemoryStoreWithEvents,
-			aggregateID: "agg-3",
-			wantVersion: 1,
-			wantErr:     false,
+			name:           "get version for existing aggregate",
+			setupStore:     setupMemoryStoreWithEvents,
+			aggregateID:    "agg-3",
+			wantSequenceNo: 1,
+			wantErr:        false,
 		},
 		{
-			name:        "get version for non-existent aggregate",
-			setupStore:  setupMemoryStore,
-			aggregateID: "agg-nonexistent",
-			wantVersion: 0,
-			wantErr:     false,
+			name:           "get version for non-existent aggregate",
+			setupStore:     setupMemoryStore,
+			aggregateID:    "agg-nonexistent",
+			wantSequenceNo: 0,
+			wantErr:        false,
 		},
 		{
-			name:        "get version for aggregate with multiple events",
-			setupStore:  setupMemoryStoreWithMultipleEvents,
-			aggregateID: "agg-4",
-			wantVersion: 3,
-			wantErr:     false,
+			name:           "get version for aggregate with multiple events",
+			setupStore:     setupMemoryStoreWithMultipleEvents,
+			aggregateID:    "agg-4",
+			wantSequenceNo: 3,
+			wantErr:        false,
 		},
 	}
 
@@ -422,7 +422,7 @@ func createTestEvent(aggregateID, eventID, eventType string, version int) domain
 		EventType:   eventType,
 		Payload:     map[string]interface{}{"test": "data"},
 		Created:     time.Now(),
-		Version:     version,
+		SequenceNo:  version,
 		Metadata:    make(map[string]interface{}),
 	}
 }
@@ -438,7 +438,7 @@ func TestToAnyEnvelope(t *testing.T) {
 	t.Run("conversion preserves all fields", func(t *testing.T) {
 		t.Parallel()
 
-		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-1", "test.created")
+		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-1", "test.created", 0)
 
 		// Convert to EventEnvelope[any]
 		anyEnvelope := domain.ToAnyEnvelope(original)

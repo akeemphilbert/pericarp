@@ -169,7 +169,7 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 	// Check current version
 	currentVersion := 0
 	if len(currentEvents) > 0 {
-		currentVersion = currentEvents[len(currentEvents)-1].Version
+		currentVersion = currentEvents[len(currentEvents)-1].SequenceNo
 	}
 
 	if expectedVersion != -1 && currentVersion != expectedVersion {
@@ -179,7 +179,7 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 	// Append events with sequential versions
 	nextVersion := currentVersion + 1
 	for i, event := range events {
-		event.Version = nextVersion + i
+		event.SequenceNo = nextVersion + i
 		currentEvents = append(currentEvents, event)
 	}
 
@@ -226,7 +226,7 @@ func (f *FileStore) GetEventsFromVersion(ctx context.Context, aggregateID string
 
 	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
-		if event.Version >= fromVersion {
+		if event.SequenceNo >= fromVersion {
 			result = append(result, event)
 		}
 	}
@@ -248,11 +248,11 @@ func (f *FileStore) GetEventsRange(ctx context.Context, aggregateID string, from
 
 	result := make([]domain.EventEnvelope[any], 0)
 	for _, event := range events {
-		if event.Version < fromVersion {
+		if event.SequenceNo < fromVersion {
 			continue
 		}
 		// If toVersion is -1, include all events from fromVersion onwards
-		if toVersion != -1 && event.Version > toVersion {
+		if toVersion != -1 && event.SequenceNo > toVersion {
 			break
 		}
 		result = append(result, event)
@@ -321,7 +321,7 @@ func (f *FileStore) GetCurrentVersion(ctx context.Context, aggregateID string) (
 		return 0, nil
 	}
 
-	return events[len(events)-1].Version, nil
+	return events[len(events)-1].SequenceNo, nil
 }
 
 // Close closes the file store and releases resources.
