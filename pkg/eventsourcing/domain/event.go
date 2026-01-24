@@ -74,3 +74,13 @@ func (e *EventEnvelope[T]) UnmarshalJSON(data []byte) error {
 	*e = EventEnvelope[T](*aux.Alias)
 	return nil
 }
+
+// BasicTripleEvent is a standard triple event payload that other strongly typed
+// triple events can use in composition. It represents a subject-predicate-object
+// relationship with an original identifier.
+type BasicTripleEvent struct {
+	Subject   string `json:"subject"`
+	Predicate string `json:"predicate"`
+	Object    string `json:"object"`
+	Original  int64  `json:"original"`
+}
