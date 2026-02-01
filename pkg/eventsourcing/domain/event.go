@@ -10,7 +10,8 @@ import (
 // Event is an optional interface that events can implement for convenience.
 // It provides a way to extract the aggregate ID from an event.
 type Event interface {
-	GetAggregateID() string
+	GetID() string
+	GetSequenceNo() int
 }
 
 // EventEnvelope is a generic struct that wraps event payloads with metadata
@@ -33,7 +34,7 @@ type EventEnvelope[T any] struct {
 func NewEventEnvelope[T any](payload T, aggregateID, eventType string, sequenceNo int) EventEnvelope[T] {
 	// Extract AggregateID from payload if it implements Event interface
 	if event, ok := any(payload).(Event); ok {
-		aggregateID = event.GetAggregateID()
+		aggregateID = event.GetID()
 	}
 
 	id := ksuid.New().String()

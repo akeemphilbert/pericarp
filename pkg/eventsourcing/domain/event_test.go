@@ -40,8 +40,8 @@ func TestEventInterface(t *testing.T) {
 		}
 
 		var e domain.Event = event
-		if e.GetAggregateID() != "user-123" {
-			t.Errorf("Expected AggregateID 'user-123', got %q", e.GetAggregateID())
+		if e.GetID() != "user-123" {
+			t.Errorf("Expected AggregateID 'user-123', got %q", e.GetID())
 		}
 	})
 
