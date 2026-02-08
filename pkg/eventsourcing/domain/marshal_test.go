@@ -19,7 +19,7 @@ func TestWrapEvent(t *testing.T) {
 			Email:       "john@example.com",
 		}
 
-		envelope, err := domain.WrapEvent(event, "", "user.created")
+		envelope, err := domain.WrapEvent(event, "", "user.created", 0)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -39,7 +39,7 @@ func TestWrapEvent(t *testing.T) {
 			CustomerID: "customer-456",
 		}
 
-		envelope, err := domain.WrapEvent(event, "order-123", "order.placed")
+		envelope, err := domain.WrapEvent(event, "order-123", "order.placed", 0)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}

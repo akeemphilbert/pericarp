@@ -17,8 +17,12 @@ type UserCreatedEvent struct {
 }
 
 // Implement Event interface
-func (e *UserCreatedEvent) GetAggregateID() string {
+func (e *UserCreatedEvent) GetID() string {
 	return e.AggregateID
+}
+
+func (e *UserCreatedEvent) GetSequenceNo() int {
+	return 0
 }
 
 type OrderPlacedEvent struct {
