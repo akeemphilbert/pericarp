@@ -35,7 +35,7 @@ func TestEventStore_GetEventsRange(t *testing.T) {
 			aggregateID: "agg-4",
 			fromVersion: 2,
 			toVersion:   3,
-			wantCount:   2,
+			wantCount:   1,
 			wantErr:     false,
 		},
 		{
@@ -53,7 +53,7 @@ func TestEventStore_GetEventsRange(t *testing.T) {
 			aggregateID: "agg-4",
 			fromVersion: 2,
 			toVersion:   -1,
-			wantCount:   2,
+			wantCount:   1,
 			wantErr:     false,
 		},
 		{
@@ -62,7 +62,7 @@ func TestEventStore_GetEventsRange(t *testing.T) {
 			aggregateID: "agg-4",
 			fromVersion: -1,
 			toVersion:   -1,
-			wantCount:   3,
+			wantCount:   2,
 			wantErr:     false,
 		},
 		{
@@ -181,9 +181,9 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 		// Append multiple events
 		events := []domain.EventEnvelope[any]{
 			createTestEvent(aggregateID, "event-1", "test.created", 0),
-			createTestEvent(aggregateID, "event-2", "test.updated", 0),
-			createTestEvent(aggregateID, "event-3", "test.updated", 0),
-			createTestEvent(aggregateID, "event-4", "test.updated", 0),
+			createTestEvent(aggregateID, "event-2", "test.updated", 1),
+			createTestEvent(aggregateID, "event-3", "test.updated", 2),
+			createTestEvent(aggregateID, "event-4", "test.updated", 3),
 		}
 
 		if err := store.Append(ctx, aggregateID, -1, events...); err != nil {
@@ -223,8 +223,8 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 			t.Fatalf("failed to get events range: %v", err)
 		}
 
-		if len(allFromVersion2) != 3 {
-			t.Fatalf("expected 3 events from version 2 onwards, got %d", len(allFromVersion2))
+		if len(allFromVersion2) != 2 {
+			t.Fatalf("expected 2 events from version 2 onwards, got %d", len(allFromVersion2))
 		}
 	})
 }

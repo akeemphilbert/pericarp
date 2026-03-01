@@ -6,10 +6,10 @@ Documentation is organized using the [Diataxis framework](https://diataxis.fr/):
 
 | Document | Purpose |
 |----------|---------|
-| [Tutorial](tutorial.md) | Learn by building — event-sourced aggregates and OAuth authentication from scratch |
-| [How-To Guides](how-to.md) | Task-oriented recipes — pattern matching, concurrency control, OAuth flows, authorization checks, session management |
-| [Reference](reference.md) | Complete API documentation — every exported type, function, and interface |
-| [Explanation](explanation.md) | Design decisions — generics strategy, Watchable pattern, ontology choices, BFF security model |
+| [Tutorial](tutorial.md) | Learn by building — event-sourced aggregates, OAuth authentication, and Casbin authorization from scratch |
+| [How-To Guides](how-to.md) | Task-oriented recipes — pattern matching, concurrency control, OAuth flows, Casbin and PDP authorization |
+| [Reference](reference.md) | Complete API documentation — every exported type, function, and interface, including Casbin |
+| [Explanation](explanation.md) | Design decisions — generics strategy, Watchable pattern, ontology choices, BFF security, ODRL-to-Casbin mapping |
 
 ## Quick Start
 

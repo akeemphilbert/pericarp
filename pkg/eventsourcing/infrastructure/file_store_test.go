@@ -31,7 +31,7 @@ func TestFileStore_Integration(t *testing.T) {
 		// Append initial events
 		events := []domain.EventEnvelope[any]{
 			createTestEvent(aggregateID, "event-1", "test.created", 0),
-			createTestEvent(aggregateID, "event-2", "test.updated", 0),
+			createTestEvent(aggregateID, "event-2", "test.updated", 1),
 		}
 
 		if err := store.Append(ctx, aggregateID, -1, events...); err != nil {
@@ -48,12 +48,12 @@ func TestFileStore_Integration(t *testing.T) {
 			t.Fatalf("expected 2 events, got %d", len(retrieved))
 		}
 
-		// Verify versions were assigned correctly
-		if retrieved[0].SequenceNo != 1 {
-			t.Errorf("expected first event version 1, got %d", retrieved[0].SequenceNo)
+		// Verify versions were preserved correctly
+		if retrieved[0].SequenceNo != 0 {
+			t.Errorf("expected first event version 0, got %d", retrieved[0].SequenceNo)
 		}
-		if retrieved[1].SequenceNo != 2 {
-			t.Errorf("expected second event version 2, got %d", retrieved[1].SequenceNo)
+		if retrieved[1].SequenceNo != 1 {
+			t.Errorf("expected second event version 1, got %d", retrieved[1].SequenceNo)
 		}
 
 		// Close and reopen to test persistence
@@ -102,9 +102,9 @@ func TestFileStore_Integration(t *testing.T) {
 			t.Fatalf("failed to append initial event: %v", err)
 		}
 
-		// Try to append with wrong version
-		event2 := createTestEvent(aggregateID, "event-2", "test.updated", 0)
-		err = store.Append(ctx, aggregateID, 0, event2)
+		// Try to append with wrong version (current version is 0, not 5)
+		event2 := createTestEvent(aggregateID, "event-2", "test.updated", 1)
+		err = store.Append(ctx, aggregateID, 5, event2)
 		if err == nil {
 			t.Fatal("expected concurrency conflict error, got nil")
 		}
@@ -132,7 +132,7 @@ func TestFileStore_Integration(t *testing.T) {
 		}
 		agg2Events := []domain.EventEnvelope[any]{
 			createTestEvent("agg-2", "event-2", "test.created", 0),
-			createTestEvent("agg-2", "event-3", "test.updated", 0),
+			createTestEvent("agg-2", "event-3", "test.updated", 1),
 		}
 
 		if err := store.Append(ctx, "agg-1", -1, agg1Events...); err != nil {

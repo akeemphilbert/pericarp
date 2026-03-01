@@ -500,6 +500,110 @@ func (h *AuthHandler) RequireAuth(next http.Handler) http.Handler {
 }
 ```
 
+## 9. Add Authorization with Casbin
+
+Now that authentication is in place, let's add authorization so we can control what authenticated agents are allowed to do. Pericarp offers two implementations of the `AuthorizationChecker` interface:
+
+- **`PolicyDecisionPoint`** — bring-your-own `PermissionStore`. You implement the read model; the PDP evaluates it using ODRL semantics.
+- **`CasbinAuthorizationChecker`** — batteries-included. Uses the [Casbin](https://casbin.org/) enforcement engine with an embedded RBAC model that maps ODRL semantics directly to Casbin policies.
+
+This tutorial uses the Casbin path because it requires no additional infrastructure.
+
+### 9.1 Set Up the Casbin Authorization Checker
+
+Create a checker by passing a Casbin adapter for policy persistence. For learning, we'll use a nil adapter (in-memory only). In production, use a GORM or database adapter.
+
+```go
+import (
+    casbinauth "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/casbin"
+)
+
+// In-memory only (no persistence) — fine for learning
+checker, err := casbinauth.NewCasbinAuthorizationChecker(nil)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+Under the hood, the constructor loads an embedded RBAC model with deny-override policy effects, configures domain matching for global vs account-scoped roles, and creates a Casbin enforcer.
+
+### 9.2 Define Roles and Assign Permissions
+
+Use convenience methods to build up a role with permissions and a prohibition:
+
+```go
+// Grant the "editor" role permission to read and modify documents
+checker.AddPermission("editor", "odrl:read", "documents")
+checker.AddPermission("editor", "odrl:modify", "documents")
+
+// Prohibit the "editor" role from deleting documents
+checker.AddProhibition("editor", "odrl:delete", "documents")
+
+// Assign the "editor" role to our agent
+checker.AssignRole("agent-1", "editor")
+```
+
+### 9.3 Check Authorization
+
+Call `IsAuthorized` to evaluate whether the agent can perform an action:
+
+```go
+ctx := context.Background()
+
+// Agent can read (via the editor role)
+allowed, _ := checker.IsAuthorized(ctx, "agent-1", "odrl:read", "documents")
+fmt.Println("read:", allowed) // true
+
+// Agent cannot delete (prohibition overrides any permission)
+allowed, _ = checker.IsAuthorized(ctx, "agent-1", "odrl:delete", "documents")
+fmt.Println("delete:", allowed) // false
+
+// Agent cannot transfer (no permission granted — default deny)
+allowed, _ = checker.IsAuthorized(ctx, "agent-1", "odrl:transfer", "documents")
+fmt.Println("transfer:", allowed) // false
+```
+
+The evaluation order follows ODRL semantics: prohibitions override permissions, and ungranted actions are denied by default.
+
+### 9.4 Add Account-Scoped Roles
+
+For multi-tenant applications, assign roles within a specific account:
+
+```go
+// Give agent-1 the "admin" role only within account-42
+checker.AssignAccountRole("agent-1", "admin", "account-42")
+checker.AddPermission("admin", "odrl:delete", "documents")
+
+// Check authorization within account-42 — considers both global and account roles
+allowed, _ = checker.IsAuthorizedInAccount(ctx, "agent-1", "account-42", "odrl:delete", "documents")
+fmt.Println("delete in account-42:", allowed) // true (admin can delete, editor prohibition is on editor role)
+
+// Global check still uses only global roles
+allowed, _ = checker.IsAuthorized(ctx, "agent-1", "odrl:delete", "documents")
+fmt.Println("delete globally:", allowed) // false (editor prohibition)
+```
+
+### 9.5 Wire Authorization into the Auth Service
+
+Inject the checker into `DefaultAuthenticationService` so that `ValidateSession` returns the agent's effective permissions:
+
+```go
+authService := authapp.NewDefaultAuthenticationService(
+    providers,
+    agentRepo,
+    credentialRepo,
+    sessionRepo,
+    tokenStore,
+    checker, // CasbinAuthorizationChecker implements AuthorizationChecker
+)
+
+// When validating a session, permissions are resolved automatically
+info, err := authService.ValidateSession(ctx, sessionID)
+// info.Permissions now contains the agent's effective permissions
+```
+
+If you pass `nil` instead of a checker, `ValidateSession` skips permission resolution and returns an empty permissions slice.
+
 ## Next Steps
 
 - Read the [How-To Guides](how-to.md) for specific recipes (pattern matching, file store setup, OAuth providers, authorization checks)

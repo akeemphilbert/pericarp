@@ -59,16 +59,14 @@ func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVe
 		eventList = make([]domain.EventEnvelope[any], 0)
 	}
 
-	// Assign versions sequentially
-	nextVersion := currentVersion + 1
-	for i, event := range events {
-		event.SequenceNo = nextVersion + i
+	// Append events preserving their SequenceNo as set by the domain
+	for _, event := range events {
 		eventList = append(eventList, event)
 		m.eventsByID[event.ID] = event
 	}
 
 	m.events[aggregateID] = eventList
-	m.versions[aggregateID] = nextVersion + len(events) - 1
+	m.versions[aggregateID] = events[len(events)-1].SequenceNo
 
 	return nil
 }

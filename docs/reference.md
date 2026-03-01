@@ -1176,3 +1176,169 @@ Creates a session manager backed by `gorilla/sessions`. The `store` parameter ac
 var ErrSessionNotFound  = errors.New("session: not found")
 var ErrFlowDataNotFound = errors.New("session: flow data not found")
 ```
+
+---
+
+## Package `auth/infrastructure/casbin`
+
+`import "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/casbin"`
+
+Casbin-backed implementation of `AuthorizationChecker` with RBAC, domain support, and deny-override policy effects.
+
+### Types
+
+#### `CasbinAuthorizationChecker`
+
+```go
+type CasbinAuthorizationChecker struct { /* unexported fields */ }
+```
+
+Implements `application.AuthorizationChecker` using Casbin's enforcement engine. Uses an embedded RBAC model that maps ODRL semantics to Casbin policies with domain-based scoping for multi-tenancy.
+
+### Constructors
+
+#### `NewCasbinAuthorizationChecker`
+
+```go
+func NewCasbinAuthorizationChecker(adapter persist.Adapter) (*CasbinAuthorizationChecker, error)
+```
+
+Creates a checker with the embedded ODRL-compatible Casbin model and the given adapter for policy persistence. The adapter parameter accepts any `github.com/casbin/casbin/v3/persist.Adapter` implementation (GORM, file, PostgreSQL, etc.). Pass `nil` for in-memory only (no persistence).
+
+Internally, the constructor:
+1. Loads the embedded RBAC model with deny-override policy effects
+2. Creates a Casbin enforcer with the model and adapter
+3. Registers a domain matching function so that `"*"` policies match any request domain
+
+#### `NewCasbinAuthorizationCheckerFromEnforcer`
+
+```go
+func NewCasbinAuthorizationCheckerFromEnforcer(enforcer *casbin.Enforcer) *CasbinAuthorizationChecker
+```
+
+Wraps a pre-configured Casbin enforcer. The caller is responsible for configuring the model, adapter, and domain matching function. Use this when you need a custom Casbin model or non-standard configuration.
+
+### AuthorizationChecker Methods
+
+These methods implement the `application.AuthorizationChecker` interface.
+
+#### `IsAuthorized`
+
+```go
+func (c *CasbinAuthorizationChecker) IsAuthorized(ctx context.Context, agentID, action, target string) (bool, error)
+```
+
+Checks whether the agent is authorized using only global roles and policies. Calls `Enforce(agentID, "*", action, target)` internally.
+
+#### `IsAuthorizedInAccount`
+
+```go
+func (c *CasbinAuthorizationChecker) IsAuthorizedInAccount(ctx context.Context, agentID, accountID, action, target string) (bool, error)
+```
+
+Checks whether the agent is authorized within an account context. Both global and account-scoped roles are considered via the domain matching function. Calls `Enforce(agentID, accountID, action, target)` internally.
+
+#### `GetPermissions`
+
+```go
+func (c *CasbinAuthorizationChecker) GetPermissions(ctx context.Context, agentID string) ([]application.Permission, error)
+```
+
+Returns all effective permissions (`eft=allow`) for the agent, including permissions inherited through global role assignments.
+
+#### `GetProhibitions`
+
+```go
+func (c *CasbinAuthorizationChecker) GetProhibitions(ctx context.Context, agentID string) ([]application.Permission, error)
+```
+
+Returns all effective prohibitions (`eft=deny`) for the agent, including prohibitions inherited through global role assignments.
+
+### Convenience Methods
+
+These methods manage Casbin policies and grouping policies directly.
+
+#### `AddPermission`
+
+```go
+func (c *CasbinAuthorizationChecker) AddPermission(assignee, action, target string) error
+```
+
+Adds a global permission. Creates a Casbin policy: `(assignee, "*", action, target, "allow")`.
+
+#### `AddProhibition`
+
+```go
+func (c *CasbinAuthorizationChecker) AddProhibition(assignee, action, target string) error
+```
+
+Adds a global prohibition. Creates a Casbin policy: `(assignee, "*", action, target, "deny")`.
+
+#### `RemovePermission`
+
+```go
+func (c *CasbinAuthorizationChecker) RemovePermission(assignee, action, target string) error
+```
+
+Removes a global permission policy.
+
+#### `RemoveProhibition`
+
+```go
+func (c *CasbinAuthorizationChecker) RemoveProhibition(assignee, action, target string) error
+```
+
+Removes a global prohibition policy.
+
+#### `AssignRole`
+
+```go
+func (c *CasbinAuthorizationChecker) AssignRole(agentID, roleID string) error
+```
+
+Assigns a global role to an agent. Creates a Casbin grouping policy: `(agentID, roleID, "*")`. Global roles apply in all domain contexts.
+
+#### `AssignAccountRole`
+
+```go
+func (c *CasbinAuthorizationChecker) AssignAccountRole(agentID, roleID, accountID string) error
+```
+
+Assigns a role to an agent within a specific account. Creates a Casbin grouping policy: `(agentID, roleID, accountID)`. Account-scoped roles only apply when checking authorization in that account.
+
+#### `RevokeRole`
+
+```go
+func (c *CasbinAuthorizationChecker) RevokeRole(agentID, roleID string) error
+```
+
+Removes a global role assignment.
+
+#### `RevokeAccountRole`
+
+```go
+func (c *CasbinAuthorizationChecker) RevokeAccountRole(agentID, roleID, accountID string) error
+```
+
+Removes an account-scoped role assignment.
+
+### Embedded Casbin Model
+
+The checker uses the following embedded model:
+
+```ini
+[request_definition]
+r = sub, dom, act, obj
+
+[policy_definition]
+p = sub, dom, act, obj, eft
+
+[role_definition]
+g = _, _, _
+
+[policy_effect]
+e = some(where (p.eft == allow)) && !some(where (p.eft == deny))
+
+[matchers]
+m = g(r.sub, p.sub, r.dom) && r.act == p.act && (r.obj == p.obj || p.obj == "*") && (r.dom == p.dom || p.dom == "*")
+```

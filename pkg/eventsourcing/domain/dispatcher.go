@@ -284,7 +284,8 @@ func RegisterType[T any](d *EventDispatcher, eventType string, factory func() T)
 	defer d.mu.Unlock()
 
 	d.typeRegistry[eventType] = func() interface{} {
-		return factory()
+		v := factory()
+		return &v
 	}
 
 	return nil

@@ -268,21 +268,31 @@ providers := authapp.OAuthProviderRegistry{
 
 ### How to check authorization for an agent
 
-Use the `PolicyDecisionPoint` to evaluate ODRL-based permissions:
+Pericarp provides two implementations of `AuthorizationChecker`. Choose the one that fits your stack.
+
+**Option A: Casbin (batteries-included)**
+
+```go
+import casbinauth "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/casbin"
+
+checker, err := casbinauth.NewCasbinAuthorizationChecker(gormAdapter)
+
+allowed, err := checker.IsAuthorized(ctx, "agent-123", "odrl:read", "document-456")
+allowed, err  = checker.IsAuthorizedInAccount(ctx, "agent-123", "account-789", "odrl:modify", "document-456")
+```
+
+**Option B: PolicyDecisionPoint (bring your own store)**
 
 ```go
 import authapp "github.com/akeemphilbert/pericarp/pkg/auth/application"
 
-pdp := authapp.NewPolicyDecisionPoint(permissionStore)
+pdp := authapp.NewPolicyDecisionPoint(permissionStore) // you implement PermissionStore
 
-// Global check
 allowed, err := pdp.IsAuthorized(ctx, "agent-123", "odrl:read", "document-456")
-
-// Account-scoped check (considers both global and account roles)
-allowed, err := pdp.IsAuthorizedInAccount(ctx, "agent-123", "account-789", "odrl:modify", "document-456")
+allowed, err  = pdp.IsAuthorizedInAccount(ctx, "agent-123", "account-789", "odrl:modify", "document-456")
 ```
 
-The evaluation order is: prohibitions first (deny overrides), then permissions, then default deny.
+Both follow the same evaluation order: prohibitions first (deny overrides), then permissions, then default deny.
 
 ### How to check authorization within a session
 
@@ -353,6 +363,108 @@ agent.AssignRole("role-editor")
 account, _ := new(entities.Account).With("account-1", "Acme Corp")
 account.AddMember("agent-1", "role-editor")
 ```
+
+---
+
+## Authorization
+
+### How to set up the Casbin authorization checker
+
+```go
+import (
+    casbinauth "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/casbin"
+    "github.com/casbin/casbin/v3/persist"
+)
+
+// Option A: With an adapter (e.g., GORM, file, PostgreSQL)
+checker, err := casbinauth.NewCasbinAuthorizationChecker(gormAdapter)
+
+// Option B: Without an adapter (in-memory only, useful for tests)
+checker, err := casbinauth.NewCasbinAuthorizationChecker(nil)
+```
+
+If you already have a pre-configured Casbin enforcer with your own model:
+
+```go
+import casbinlib "github.com/casbin/casbin/v3"
+
+enforcer, _ := casbinlib.NewEnforcer("my_model.conf", "my_policy.csv")
+checker := casbinauth.NewCasbinAuthorizationCheckerFromEnforcer(enforcer)
+```
+
+### How to manage permissions and prohibitions
+
+```go
+// Add a global permission (creates a Casbin policy: assignee, *, action, target, allow)
+checker.AddPermission("editor", "odrl:read", "documents")
+
+// Add a global prohibition (creates a Casbin policy: assignee, *, action, target, deny)
+checker.AddProhibition("editor", "odrl:delete", "documents")
+
+// Remove a permission or prohibition
+checker.RemovePermission("editor", "odrl:read", "documents")
+checker.RemoveProhibition("editor", "odrl:delete", "documents")
+```
+
+All convenience methods operate on global (`"*"`) domain policies. For domain-specific policies, use `NewCasbinAuthorizationCheckerFromEnforcer` and interact with the enforcer directly.
+
+### How to assign global and account-scoped roles
+
+```go
+// Global role — applies in all account contexts
+checker.AssignRole("agent-1", "editor")
+
+// Account-scoped role — applies only within a specific account
+checker.AssignAccountRole("agent-1", "admin", "account-42")
+
+// Revoke roles
+checker.RevokeRole("agent-1", "editor")
+checker.RevokeAccountRole("agent-1", "admin", "account-42")
+```
+
+Under the hood, global roles use domain `"*"` in Casbin grouping policies. A custom domain matching function ensures global roles match any request domain, while account-scoped roles match only their specific account.
+
+### How to query an agent's effective permissions
+
+```go
+// Get all effective permissions (eft=allow), including inherited via roles
+permissions, err := checker.GetPermissions(ctx, "agent-1")
+for _, p := range permissions {
+    fmt.Printf("%s can %s on %s\n", p.Assignee, p.Action, p.Target)
+}
+
+// Get all effective prohibitions (eft=deny), including inherited via roles
+prohibitions, err := checker.GetProhibitions(ctx, "agent-1")
+for _, p := range prohibitions {
+    fmt.Printf("%s cannot %s on %s\n", p.Assignee, p.Action, p.Target)
+}
+```
+
+Both methods resolve role inheritance — if an agent holds a role, the role's permissions/prohibitions are included in the result.
+
+### How to use the PolicyDecisionPoint with a custom store
+
+For users who prefer full control over the data model instead of Casbin:
+
+```go
+import authapp "github.com/akeemphilbert/pericarp/pkg/auth/application"
+
+// 1. Implement PermissionStore against your storage layer
+type myStore struct { /* your read model */ }
+
+func (s *myStore) GetPermissionsForAssignee(ctx context.Context, assigneeID string) ([]authapp.Permission, error) { ... }
+func (s *myStore) GetProhibitionsForAssignee(ctx context.Context, assigneeID string) ([]authapp.Permission, error) { ... }
+func (s *myStore) GetRolesForAgent(ctx context.Context, agentID string) ([]string, error) { ... }
+func (s *myStore) GetRolesForAgentInAccount(ctx context.Context, agentID, accountID string) ([]string, error) { ... }
+
+// 2. Create the PDP
+pdp := authapp.NewPolicyDecisionPoint(&myStore{})
+
+// 3. Check authorization — same interface as CasbinAuthorizationChecker
+allowed, err := pdp.IsAuthorized(ctx, "agent-1", "odrl:read", "documents")
+```
+
+The PDP collects all assignee IDs (agent + roles), checks prohibitions first (deny overrides), then permissions, then defaults to deny.
 
 ### How to link multiple identity providers to one agent
 

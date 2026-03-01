@@ -180,6 +180,9 @@ func TestBaseEntity_ClearUncommittedEvents(t *testing.T) {
 func TestBaseEntity_ApplyEvent(t *testing.T) {
 	t.Parallel()
 
+	// Create a shared event for the duplicate event test case — same event (same ID) applied twice
+	duplicateTestEvent := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0))
+
 	tests := []struct {
 		name           string
 		setup          func(*BaseEntity) error
@@ -216,13 +219,9 @@ func TestBaseEntity_ApplyEvent(t *testing.T) {
 		{
 			name: "duplicate event",
 			setup: func(e *BaseEntity) error {
-				event := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0))
-				return e.ApplyEvent(context.Background(), event)
+				return e.ApplyEvent(context.Background(), duplicateTestEvent)
 			},
-			event: func() domain.EventEnvelope[any] {
-				evt := domain.NewEventEnvelope("payload", "test-id", "test.event", 0)
-				return toAnyEvent(evt)
-			}(),
+			event:          duplicateTestEvent,
 			ctx:            context.Background(),
 			wantErr:        true,
 			wantErrType:    ErrDuplicateEvent,

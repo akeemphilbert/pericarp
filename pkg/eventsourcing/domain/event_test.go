@@ -72,7 +72,7 @@ func TestNewEventEnvelope(t *testing.T) {
 			Name:        "John Doe",
 		}
 
-		envelope := domain.NewEventEnvelope(event, "", "user.created", 0)
+		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 
 		if envelope.AggregateID != "user-123" {
 			t.Errorf("Expected AggregateID 'user-123', got %q", envelope.AggregateID)

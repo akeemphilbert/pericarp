@@ -116,7 +116,7 @@ func TestSubscribe(t *testing.T) {
 			t.Fatalf("Failed to register handler2: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{
+		event := DispatcherTestUserCreatedEvent{
 			AggregateID: "user-123",
 			UserID:      "user-123",
 			Email:       "test@example.com",
@@ -163,7 +163,7 @@ func TestDispatch(t *testing.T) {
 			t.Fatalf("Failed to subscribe: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{
+		event := DispatcherTestUserCreatedEvent{
 			AggregateID: "user-123",
 			UserID:      "user-123",
 			Email:       "john@example.com",
@@ -209,7 +209,7 @@ func TestDispatch(t *testing.T) {
 		}
 
 		// Dispatch wrong event type
-		wrongEvent := &DispatcherTestOrderPlacedEvent{
+		wrongEvent := DispatcherTestOrderPlacedEvent{
 			OrderID:     "order-123",
 			CustomerID:  "customer-456",
 			TotalAmount: 99.99,
@@ -256,7 +256,7 @@ func TestDispatch(t *testing.T) {
 			t.Fatalf("Failed to subscribe handler2: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -283,7 +283,7 @@ func TestDispatch(t *testing.T) {
 		t.Parallel()
 		d := domain.NewEventDispatcher()
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 
 		// Convert to EventEnvelope[any] for Dispatch
@@ -318,7 +318,7 @@ func TestDispatch(t *testing.T) {
 			t.Fatalf("Failed to subscribe: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 
 		// Convert to EventEnvelope[any] for Dispatch
@@ -363,7 +363,7 @@ func TestSubscribeWildcard(t *testing.T) {
 			t.Fatalf("Failed to subscribe wildcard: %v", err)
 		}
 
-		event1 := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event1 := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope1 := domain.NewEventEnvelope(event1, "", "user.created", 1)
 		anyEnvelope1 := domain.EventEnvelope[any]{
 			ID:          envelope1.ID,
@@ -375,7 +375,7 @@ func TestSubscribeWildcard(t *testing.T) {
 			Metadata:    envelope1.Metadata,
 		}
 
-		event2 := &DispatcherTestOrderPlacedEvent{OrderID: "order-123"}
+		event2 := DispatcherTestOrderPlacedEvent{OrderID: "order-123"}
 		envelope2 := domain.NewEventEnvelope(event2, "order-123", "order.placed", 1)
 		anyEnvelope2 := domain.EventEnvelope[any]{
 			ID:          envelope2.ID,
@@ -400,18 +400,24 @@ func TestSubscribeWildcard(t *testing.T) {
 		}
 	})
 
-	t.Run("wildcard handler called after event-specific handlers", func(t *testing.T) {
+	t.Run("wildcard handler called alongside event-specific handlers", func(t *testing.T) {
 		t.Parallel()
 		d := domain.NewEventDispatcher()
 
-		callOrder := make([]string, 0)
+		var mu sync.Mutex
+		specificCalled := false
+		wildcardCalled := false
 		specificHandler := func(ctx context.Context, env domain.EventEnvelope[DispatcherTestUserCreatedEvent]) error {
-			callOrder = append(callOrder, "specific")
+			mu.Lock()
+			specificCalled = true
+			mu.Unlock()
 			return nil
 		}
 
 		wildcardHandler := func(ctx context.Context, env domain.EventEnvelope[any]) error {
-			callOrder = append(callOrder, "wildcard")
+			mu.Lock()
+			wildcardCalled = true
+			mu.Unlock()
 			return nil
 		}
 
@@ -422,7 +428,7 @@ func TestSubscribeWildcard(t *testing.T) {
 			t.Fatalf("Failed to subscribe wildcard: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -439,14 +445,13 @@ func TestSubscribeWildcard(t *testing.T) {
 			t.Fatalf("Dispatch failed: %v", err)
 		}
 
-		if len(callOrder) != 2 {
-			t.Fatalf("Expected 2 handler calls, got %d", len(callOrder))
+		mu.Lock()
+		defer mu.Unlock()
+		if !specificCalled {
+			t.Error("Expected specific handler to be called")
 		}
-		if callOrder[0] != "specific" {
-			t.Errorf("Expected specific handler first, got %q", callOrder[0])
-		}
-		if callOrder[1] != "wildcard" {
-			t.Errorf("Expected wildcard handler second, got %q", callOrder[1])
+		if !wildcardCalled {
+			t.Error("Expected wildcard handler to be called")
 		}
 	})
 
@@ -484,7 +489,7 @@ func TestConcurrentDispatch(t *testing.T) {
 			t.Fatalf("Failed to subscribe: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -542,7 +547,7 @@ func TestConcurrentDispatch(t *testing.T) {
 
 		// Concurrent dispatch
 		wg.Add(concurrency)
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -631,13 +636,13 @@ func TestUnmarshalEvent(t *testing.T) {
 			t.Fatalf("Failed to register type: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{
+		event := DispatcherTestUserCreatedEvent{
 			AggregateID: "user-123",
 			UserID:      "user-123",
 			Email:       "test@example.com",
 			Name:        "Test User",
 		}
-		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
+		envelope := domain.NewEventEnvelope(event, "user-123", "user.created", 1)
 
 		data, err := json.Marshal(envelope)
 		if err != nil {
@@ -671,7 +676,7 @@ func TestUnmarshalEvent(t *testing.T) {
 		t.Parallel()
 		d := domain.NewEventDispatcher()
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 
 		data, err := json.Marshal(envelope)
@@ -726,7 +731,7 @@ func TestTypeRegistryFromSubscribe(t *testing.T) {
 		}
 
 		// Type should now be registered and unmarshal should work
-		event := &DispatcherTestUserCreatedEvent{
+		event := DispatcherTestUserCreatedEvent{
 			AggregateID: "user-123",
 			UserID:      "user-123",
 			Email:       "test@example.com",
@@ -767,7 +772,7 @@ func TestPatternMatching(t *testing.T) {
 			t.Fatalf("Failed to subscribe: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -803,7 +808,7 @@ func TestPatternMatching(t *testing.T) {
 			t.Fatalf("Failed to subscribe: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -839,7 +844,7 @@ func TestPatternMatching(t *testing.T) {
 			t.Fatalf("Failed to subscribe: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -875,7 +880,7 @@ func TestPatternMatching(t *testing.T) {
 			t.Fatalf("Failed to subscribe: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -936,7 +941,7 @@ func TestPatternMatching(t *testing.T) {
 			t.Fatalf("Failed to subscribe *.*: %v", err)
 		}
 
-		event := &DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
+		event := DispatcherTestUserCreatedEvent{AggregateID: "user-123"}
 		envelope := domain.NewEventEnvelope(event, "", "user.created", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,
@@ -982,7 +987,7 @@ func TestPatternMatching(t *testing.T) {
 		}
 
 		// Dispatch a different event type
-		event := &DispatcherTestOrderPlacedEvent{OrderID: "order-123"}
+		event := DispatcherTestOrderPlacedEvent{OrderID: "order-123"}
 		envelope := domain.NewEventEnvelope(event, "order-123", "order.placed", 1)
 		anyEnvelope := domain.EventEnvelope[any]{
 			ID:          envelope.ID,

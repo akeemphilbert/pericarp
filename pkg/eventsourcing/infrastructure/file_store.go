@@ -176,10 +176,8 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 		return fmt.Errorf("%w: expected version %d, got %d", domain.ErrConcurrencyConflict, expectedVersion, currentVersion)
 	}
 
-	// Append events with sequential versions
-	nextVersion := currentVersion + 1
-	for i, event := range events {
-		event.SequenceNo = nextVersion + i
+	// Append events preserving their SequenceNo as set by the domain
+	for _, event := range events {
 		currentEvents = append(currentEvents, event)
 	}
 
@@ -268,6 +266,7 @@ func (f *FileStore) GetEventByID(ctx context.Context, eventID string) (domain.Ev
 	for _, events := range f.cache {
 		for _, event := range events {
 			if event.ID == eventID {
+				f.mu.RUnlock()
 				return event, nil
 			}
 		}

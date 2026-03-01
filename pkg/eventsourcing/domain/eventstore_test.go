@@ -40,7 +40,7 @@ func TestEventStore_Append(t *testing.T) {
 			expectedVersion: -1,
 			events: []domain.EventEnvelope[any]{
 				createTestEvent("agg-2", "event-1", "test.created", 0),
-				createTestEvent("agg-2", "event-2", "test.updated", 0),
+				createTestEvent("agg-2", "event-2", "test.updated", 1),
 			},
 			wantErr: false,
 		},
@@ -48,9 +48,9 @@ func TestEventStore_Append(t *testing.T) {
 			name:            "append with version check success",
 			setupStore:      setupMemoryStoreWithEvents,
 			aggregateID:     "agg-3",
-			expectedVersion: 1,
+			expectedVersion: 0,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-3", "event-2", "test.updated", 0),
+				createTestEvent("agg-3", "event-2", "test.updated", 1),
 			},
 			wantErr: false,
 		},
@@ -58,9 +58,9 @@ func TestEventStore_Append(t *testing.T) {
 			name:            "append with version check failure",
 			setupStore:      setupMemoryStoreWithEvents,
 			aggregateID:     "agg-3",
-			expectedVersion: 0,
+			expectedVersion: 5,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-3", "event-2", "test.updated", 0),
+				createTestEvent("agg-3", "event-2", "test.updated", 1),
 			},
 			wantErr: true,
 			errType: domain.ErrConcurrencyConflict,
@@ -192,7 +192,7 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			setupStore:  setupMemoryStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			fromVersion: 1,
-			wantCount:   3,
+			wantCount:   2,
 			wantErr:     false,
 		},
 		{
@@ -200,7 +200,7 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			setupStore:  setupMemoryStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			fromVersion: 2,
-			wantCount:   2,
+			wantCount:   1,
 			wantErr:     false,
 		},
 		{
@@ -329,7 +329,7 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 			name:        "get version for existing aggregate",
 			setupStore:  setupMemoryStoreWithEvents,
 			aggregateID: "agg-3",
-			wantVersion: 1,
+			wantVersion: 0,
 			wantErr:     false,
 		},
 		{
@@ -343,7 +343,7 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 			name:        "get version for aggregate with multiple events",
 			setupStore:  setupMemoryStoreWithMultipleEvents,
 			aggregateID: "agg-4",
-			wantVersion: 3,
+			wantVersion: 2,
 			wantErr:     false,
 		},
 	}
@@ -404,8 +404,8 @@ func setupMemoryStoreWithMultipleEvents(t *testing.T) domain.EventStore {
 
 	events := []domain.EventEnvelope[any]{
 		createTestEvent("agg-4", "event-1", "test.created", 0),
-		createTestEvent("agg-4", "event-2", "test.updated", 0),
-		createTestEvent("agg-4", "event-3", "test.updated", 0),
+		createTestEvent("agg-4", "event-2", "test.updated", 1),
+		createTestEvent("agg-4", "event-3", "test.updated", 2),
 	}
 
 	if err := store.Append(ctx, "agg-4", -1, events...); err != nil {

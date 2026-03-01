@@ -265,6 +265,47 @@ The `PolicyDecisionPoint` follows the XACML PDP pattern adapted for ODRL:
 
 Account-scoped evaluation (`IsAuthorizedInAccount`) adds account-level roles to the assignee set alongside global roles. This allows a single agent to have different permissions in different accounts without duplicating policies.
 
+## Why Casbin for Enforcement?
+
+The `PolicyDecisionPoint` implements authorization using ODRL semantics, but it requires consumers to build a `PermissionStore` — a read model that resolves permissions, prohibitions, and role assignments from their storage layer. This is flexible but requires non-trivial infrastructure.
+
+`CasbinAuthorizationChecker` offers a batteries-included alternative by delegating enforcement to the [Casbin](https://casbin.org/) engine. Casbin provides a battle-tested policy engine with an adapter ecosystem (GORM, PostgreSQL, Redis, file-based, and more). Rather than building a custom read model, you plug in a Casbin adapter and get persistence for free.
+
+### How ODRL Maps to Casbin
+
+The embedded Casbin model maps ODRL concepts directly:
+
+| ODRL Concept | Casbin Representation |
+|---|---|
+| Permission (allow) | Policy with `eft=allow` |
+| Prohibition (deny) | Policy with `eft=deny` |
+| Prohibition overrides permission | `deny-override` policy effect |
+| Global role assignment | Grouping policy with `domain="*"` |
+| Account-scoped role assignment | Grouping policy with `domain=accountID` |
+
+The policy effect expression `some(where (p.eft == allow)) && !some(where (p.eft == deny))` ensures that if any matching policy denies access, the request is denied — matching ODRL's prohibition-overrides-permission semantics.
+
+### Domain Matching Semantics
+
+The `*` wildcard enables global roles. A custom domain matching function is registered so that:
+
+- A policy/grouping with domain `"*"` matches any request domain — global roles and policies apply everywhere.
+- A policy/grouping with a specific domain (e.g., `"account-42"`) matches only when the request domain is `"account-42"`.
+
+When calling `IsAuthorized`, the request domain is `"*"` (global context). When calling `IsAuthorizedInAccount`, the request domain is the specific account ID, and the matcher considers both global (`"*"`) and account-specific policies.
+
+### Two Implementation Paths
+
+| Aspect | PolicyDecisionPoint | CasbinAuthorizationChecker |
+|---|---|---|
+| **Setup** | Implement `PermissionStore` | Pass a Casbin adapter |
+| **Role resolution** | Manual (via `GetRolesForAgent`) | Built-in (Casbin's RBAC) |
+| **Persistence** | You build the read model | Casbin adapter ecosystem |
+| **Flexibility** | Full control over data model | Constrained to Casbin's model |
+| **Best for** | Custom projections, CQRS read models | Standard RBAC, rapid prototyping |
+
+Choose `PolicyDecisionPoint` when you already have a CQRS projection that stores permissions or need a custom data model. Choose `CasbinAuthorizationChecker` when you want a working authorization system with minimal setup.
+
 ## Dependencies
 
 Pericarp has three external dependencies:
