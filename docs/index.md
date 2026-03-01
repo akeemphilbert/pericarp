@@ -1,3 +1,9 @@
+---
+layout: default
+title: Home
+nav_order: 1
+---
+
 # Pericarp Documentation
 
 Pericarp is a Go library implementing Event Sourcing, DDD, and CQRS primitives with built-in authentication and authorization. It provides base types for aggregate roots, event envelopes, event stores, a unit of work, an event dispatcher, a command dispatcher, and a complete auth package with OAuth 2.0/OIDC support and ODRL-based policy evaluation.
@@ -7,7 +13,7 @@ Documentation is organized using the [Diataxis framework](https://diataxis.fr/):
 | Document | Purpose |
 |----------|---------|
 | [Tutorial](tutorial.md) | Learn by building — event-sourced aggregates and OAuth authentication from scratch |
-| [How-To Guides](how-to.md) | Task-oriented recipes — pattern matching, concurrency control, OAuth flows, authorization checks, session management |
+| [How-To Guides](how-to.md) | Task-oriented recipes — pattern matching, concurrency control, OAuth flows, authorization checks |
 | [Reference](reference.md) | Complete API documentation — every exported type, function, and interface |
 | [Explanation](explanation.md) | Design decisions — generics strategy, Watchable pattern, ontology choices, BFF security model |
 

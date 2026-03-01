@@ -1,0 +1,19 @@
+remote_theme: just-the-docs/just-the-docs
+
+title: Pericarp
+description: A Go library for Event Sourcing, DDD, and CQRS with built-in authentication and authorization.
+
+url: https://akeemphilbert.github.io
+baseurl: /pericarp
+
+search_enabled: true
+
+aux_links:
+  "GitHub":
+    - "https://github.com/akeemphilbert/pericarp"
+  "pkg.go.dev":
+    - "https://pkg.go.dev/github.com/akeemphilbert/pericarp"
+
+aux_links_new_tab: true
+
+footer_content: "Pericarp is distributed under the MIT License."

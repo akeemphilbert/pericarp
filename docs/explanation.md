@@ -1,3 +1,9 @@
+---
+layout: default
+title: Design Decisions
+nav_order: 5
+---
+
 # Explanation: Design Decisions in Pericarp
 
 This document explains the architectural decisions and trade-offs behind Pericarp's design.
@@ -179,9 +185,90 @@ Every stateful component in Pericarp is protected by `sync.RWMutex`:
 
 The dispatchers specifically release the registry lock before invoking handlers/receivers. This prevents deadlocks when a handler registers new handlers during execution.
 
+## Authentication Architecture
+
+### The BFF (Backend-for-Frontend) Pattern
+
+Pericarp's authentication module is built around the Backend-for-Frontend pattern, where the backend serves as a secure proxy between the browser and identity providers. This is a deliberate architectural choice over alternatives like implicit flow or client-side token handling.
+
+The key insight: **the browser never sees tokens.** The backend initiates the OAuth flow, exchanges the authorization code for tokens server-to-server, stores tokens encrypted server-side, and gives the browser only an opaque session ID in an `HttpOnly` cookie. Even if an XSS vulnerability exists in the frontend, there are no tokens to steal.
+
+### Why PKCE for Authorization Code Flow
+
+The authorization code flow with PKCE (Proof Key for Code Exchange) prevents authorization code interception attacks. Without PKCE, an attacker who intercepts the authorization code (via a malicious browser extension or open redirect) could exchange it for tokens. PKCE binds the code to the client that initiated the flow:
+
+1. The backend generates a random `code_verifier` (32 bytes, base64url) and its SHA-256 hash as the `code_challenge`
+2. The `code_challenge` goes in the authorization URL, the `code_verifier` stays server-side
+3. At exchange time, the backend sends the `code_verifier` — the provider verifies it matches the original challenge
+4. An attacker who intercepts the code cannot exchange it without the `code_verifier`
+
+### State Validation and Timing Attacks
+
+The OAuth `state` parameter prevents CSRF attacks by binding the authorization request to the user's session. Pericarp uses `crypto/subtle.ConstantTimeCompare` for state validation rather than `==` or `!=`. Regular string comparison leaks timing information — an attacker could determine the correct state value byte-by-byte by measuring response times. Constant-time comparison takes the same amount of time regardless of where strings differ.
+
+### Flow Data Lifecycle
+
+The temporary OAuth flow data (state, code_verifier, nonce) follows a strict lifecycle:
+
+1. Created when the login handler initiates the flow
+2. Stored server-side in a separate short-lived session (10-minute TTL)
+3. Retrieved and **immediately cleared** during the callback (one-time use)
+4. If the callback never happens, the data expires automatically
+
+This prevents replay attacks and ensures stale PKCE data cannot accumulate.
+
+### Session Cookie Security
+
+The HTTP session cookie uses three security flags that work together:
+
+- **`HttpOnly=true`** — JavaScript cannot read the cookie. Prevents XSS from stealing session IDs.
+- **`Secure=true`** — Cookie is only sent over HTTPS. Prevents network sniffing.
+- **`SameSite=Lax`** — Cookie is sent on top-level navigations but not on cross-origin subrequests. Prevents CSRF while allowing OAuth redirects to work.
+
+`SameSite=Lax` (not `Strict`) is necessary because the OAuth callback is a cross-origin redirect from the identity provider back to your application. `Strict` would block the cookie on this redirect.
+
+## Authorization Model
+
+### Why ODRL?
+
+Pericarp uses the [Open Digital Rights Language (ODRL)](https://www.w3.org/TR/odrl-vocab/) vocabulary for access control rather than inventing a custom permissions model. ODRL provides:
+
+- **Permissions, prohibitions, and duties** — three distinct rule types. Most RBAC systems only have "allow" rules. ODRL adds "deny" (prohibitions) and "obligations" (duties), enabling richer access control.
+- **Prohibition precedence** — prohibitions override permissions. If an agent has both `odrl:read` permission and `odrl:read` prohibition on the same target, the prohibition wins. This is critical for security: deny rules must always take priority.
+- **Standard vocabulary** — ODRL actions (`odrl:read`, `odrl:modify`, `odrl:delete`) are a W3C standard. Using standard terms enables interoperability and avoids reinventing terminology.
+- **Policy composition** — policies can be typed as Sets (general), Offers (proposed), or Agreements (mutual). This maps naturally to policy lifecycle workflows.
+
+### Ontology Choices
+
+The auth domain uses three established ontologies, each for its strength:
+
+- **FOAF (Friend of a Friend)** for agent typing — `foaf:Person`, `foaf:Organization`, `foaf:Group`, `foaf:Agent`. FOAF is the de facto standard for describing people and organizations on the web.
+- **W3C ORG** for organizational relationships — `org:hasRole`, `org:hasMember`, `org:memberOf`. ORG provides precise semantics for role assignment and membership, including temporal tracking (`org:hadRole` for revoked roles).
+- **Schema.org** for authentication — `schema:credential`, `schema:session`, `schema:provider`. Schema.org covers identity and authentication concepts that FOAF and ORG do not.
+
+### Triple Events for Cross-Aggregate Relationships
+
+Relationships between aggregates (agent-to-role, agent-to-account, session-to-account) are recorded as enriched triple events using `BasicTripleEvent` (subject-predicate-object). This is deliberate:
+
+1. **Aggregates are independent** — an Agent aggregate should not hold a direct reference to a Role aggregate. That would create tight coupling and complicate eventual consistency.
+2. **Full audit trail** — triple events capture who was assigned what role, when, and by whom. Revocations are tracked separately (`org:hadRole`) rather than deleting the assignment.
+3. **Semantic precision** — using RDF-style triples with standard predicates gives each relationship a precise meaning that can be reasoned about.
+
+### The PolicyDecisionPoint
+
+The `PolicyDecisionPoint` follows the XACML PDP pattern adapted for ODRL:
+
+1. **Collect assignees** — the agent itself plus all roles they hold (global + account-scoped, deduplicated)
+2. **Evaluate prohibitions** — check all assignees for matching prohibitions. If any match, deny immediately.
+3. **Evaluate permissions** — check all assignees for matching permissions. If any match, allow.
+4. **Default deny** — if no rules match, access is denied.
+
+Account-scoped evaluation (`IsAuthorizedInAccount`) adds account-level roles to the assignee set alongside global roles. This allows a single agent to have different permissions in different accounts without duplicating policies.
+
 ## Dependencies
 
-Pericarp has only two external dependencies:
+Pericarp has three external dependencies:
 
-- **`github.com/segmentio/ksuid`** — generates time-sortable unique IDs for events and commands. KSUIDs are preferred over UUIDs because they sort chronologically, which is valuable in an event log.
+- **`github.com/segmentio/ksuid`** — generates time-sortable unique IDs for events, commands, and session IDs. KSUIDs are preferred over UUIDs because they sort chronologically, which is valuable in an event log. As session IDs, they are opaque and leak no information.
 - **`golang.org/x/sync`** — provides `errgroup` for the EventDispatcher's parallel handler execution.
+- **`github.com/gorilla/sessions`** — HTTP session management for the auth infrastructure layer. Provides cookie-based session handling with pluggable backends (cookie, filesystem, Redis, database).

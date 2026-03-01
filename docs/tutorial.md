@@ -1,3 +1,9 @@
+---
+layout: default
+title: Tutorial
+nav_order: 2
+---
+
 # Tutorial: Building an Event-Sourced Aggregate with Pericarp
 
 This tutorial walks you through building a complete event-sourced User aggregate from scratch. By the end, you will have a working aggregate that records events, persists them to a store, dispatches them to handlers, and processes commands through a command dispatcher.
@@ -322,8 +328,180 @@ func LoadUser(ctx context.Context, store domain.EventStore, id string) (*User, e
 }
 ```
 
+## 8. Add Authentication with OAuth 2.0 / OIDC
+
+Pericarp's auth package provides a complete OAuth 2.0 Authorization Code Flow with PKCE. This section walks through integrating it into a backend service using the Backend-for-Frontend (BFF) pattern.
+
+### 8.1 Register an OAuth Provider
+
+Implement the `OAuthProvider` interface for your identity provider. The library is provider-agnostic — you supply the provider, it handles the flow.
+
+```go
+package auth
+
+import (
+    authapp "github.com/akeemphilbert/pericarp/pkg/auth/application"
+)
+
+// GoogleProvider implements authapp.OAuthProvider for Google.
+type GoogleProvider struct {
+    clientID     string
+    clientSecret string
+    tokenURL     string
+    authURL      string
+}
+
+func (g *GoogleProvider) Name() string { return "google" }
+
+func (g *GoogleProvider) AuthCodeURL(state, codeChallenge, nonce, redirectURI string) string {
+    // Build the Google authorization URL with PKCE and nonce parameters
+    return fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code"+
+        "&scope=openid+email+profile&state=%s&code_challenge=%s"+
+        "&code_challenge_method=S256&nonce=%s",
+        g.authURL, g.clientID, redirectURI, state, codeChallenge, nonce)
+}
+
+// Exchange, RefreshToken, RevokeToken, ValidateIDToken — implement per provider docs
+```
+
+### 8.2 Create the Authentication Service
+
+Wire the provider registry and repositories into the `DefaultAuthenticationService`:
+
+```go
+import (
+    authapp "github.com/akeemphilbert/pericarp/pkg/auth/application"
+)
+
+providers := authapp.OAuthProviderRegistry{
+    "google": &GoogleProvider{...},
+    "github": &GitHubProvider{...},
+}
+
+authService := authapp.NewDefaultAuthenticationService(
+    providers,
+    agentRepo,       // repositories.AgentRepository
+    credentialRepo,  // repositories.CredentialRepository
+    sessionRepo,     // repositories.AuthSessionRepository
+    tokenStore,      // authapp.TokenStore
+    authzChecker,    // authapp.AuthorizationChecker (or nil)
+)
+```
+
+### 8.3 Implement the Login Handler
+
+The login handler initiates the OAuth flow, stores PKCE data server-side, and redirects:
+
+```go
+func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
+    provider := r.URL.Query().Get("provider")
+
+    // 1. Generate PKCE parameters and authorization URL
+    authReq, err := h.authService.InitiateAuthFlow(r.Context(), provider, h.callbackURL)
+    if err != nil {
+        http.Error(w, "Failed to initiate auth flow", http.StatusBadRequest)
+        return
+    }
+
+    // 2. Store flow data server-side (state, code_verifier, nonce)
+    h.sessionManager.SetFlowData(w, r, session.FlowData{
+        State:        authReq.State,
+        CodeVerifier: authReq.CodeVerifier,
+        Nonce:        authReq.Nonce,
+        Provider:     authReq.Provider,
+        RedirectURI:  h.callbackURL,
+        CreatedAt:    time.Now(),
+    })
+
+    // 3. Redirect to identity provider
+    http.Redirect(w, r, authReq.AuthURL, http.StatusFound)
+}
+```
+
+### 8.4 Handle the Callback
+
+The callback handler validates the state, exchanges the code, and creates a session:
+
+```go
+func (h *AuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context()
+
+    // 1. Retrieve and clear flow data (one-time use)
+    flowData, err := h.sessionManager.GetFlowData(w, r)
+    if err != nil {
+        http.Error(w, "Invalid or expired flow", http.StatusBadRequest)
+        return
+    }
+
+    // 2. Validate state parameter (constant-time comparison)
+    if err := h.authService.ValidateState(ctx, r.URL.Query().Get("state"), flowData.State); err != nil {
+        http.Error(w, "Invalid state", http.StatusForbidden)
+        return
+    }
+
+    // 3. Exchange authorization code for tokens (server-to-server)
+    result, err := h.authService.ExchangeCode(ctx, r.URL.Query().Get("code"),
+        flowData.CodeVerifier, flowData.Provider, flowData.RedirectURI)
+    if err != nil {
+        http.Error(w, "Code exchange failed", http.StatusInternalServerError)
+        return
+    }
+
+    // 4. Find or create the agent and credential
+    agent, credential, err := h.authService.FindOrCreateAgent(ctx, result.UserInfo)
+    if err != nil {
+        http.Error(w, "Failed to resolve user", http.StatusInternalServerError)
+        return
+    }
+
+    // 5. Create authenticated session
+    authSession, err := h.authService.CreateSession(ctx, agent.GetID(),
+        credential.GetID(), r.RemoteAddr, r.UserAgent(), 24*time.Hour)
+    if err != nil {
+        http.Error(w, "Failed to create session", http.StatusInternalServerError)
+        return
+    }
+
+    // 6. Set HTTP session cookie (opaque session ID only)
+    h.sessionManager.CreateHTTPSession(w, r, session.SessionData{
+        SessionID: authSession.GetID(),
+        AgentID:   agent.GetID(),
+        ExpiresAt: authSession.ExpiresAt(),
+        CreatedAt: authSession.CreatedAt(),
+    })
+
+    http.Redirect(w, r, "/dashboard", http.StatusFound)
+}
+```
+
+### 8.5 Protect API Routes
+
+Validate the session on every authenticated request:
+
+```go
+func (h *AuthHandler) RequireAuth(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        sessionData, err := h.sessionManager.GetHTTPSession(r)
+        if err != nil {
+            http.Error(w, "Unauthorized", http.StatusUnauthorized)
+            return
+        }
+
+        info, err := h.authService.ValidateSession(r.Context(), sessionData.SessionID)
+        if err != nil {
+            http.Error(w, "Session invalid", http.StatusUnauthorized)
+            return
+        }
+
+        // Add session info to context for downstream handlers
+        ctx := context.WithValue(r.Context(), "session", info)
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+```
+
 ## Next Steps
 
-- Read the [How-To Guides](how-to.md) for specific recipes (pattern matching, file store setup, error handling)
+- Read the [How-To Guides](how-to.md) for specific recipes (pattern matching, file store setup, OAuth providers, authorization checks)
 - Read the [Explanation](explanation.md) to understand the design decisions behind Pericarp
 - Browse the [Reference](reference.md) for complete API documentation

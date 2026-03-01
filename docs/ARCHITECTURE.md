@@ -1,3 +1,9 @@
+---
+layout: default
+title: Architecture
+nav_order: 6
+---
+
 # Pericarp Architecture
 
 This document describes the architecture and design decisions of the Pericarp library.
@@ -10,18 +16,49 @@ Pericarp is a Go library implementing Domain-Driven Design (DDD), Command Query 
 
 ```
 pericarp/
-├── pkg/                    # Public API packages
-│   ├── domain/             # Domain entities, events, value objects, repository interfaces
-│   ├── application/        # Command/query handlers, application services, CQRS bus
-│   └── infrastructure/     # Event store implementations, database access, external integrations
+├── pkg/
+│   ├── ddd/                            # BaseEntity — embed in aggregate roots
+│   │   └── entity.go
+│   ├── eventsourcing/
+│   │   ├── domain/                     # Core interfaces and types
+│   │   │   ├── event.go                # EventEnvelope[T], BasicTripleEvent
+│   │   │   ├── eventstore.go           # EventStore interface, sentinel errors
+│   │   │   ├── event_dispatcher.go     # EventDispatcher (subscribe + dispatch)
+│   │   │   ├── event_type.go           # Event type constants and helpers
+│   │   │   └── entity.go              # Entity interface (for UnitOfWork)
+│   │   ├── infrastructure/             # EventStore implementations
+│   │   │   ├── memory_eventstore.go    # In-memory (testing)
+│   │   │   └── file_eventstore.go      # File-based JSON (development)
+│   │   └── application/                # Application services
+│   │       └── unit_of_work.go         # SimpleUnitOfWork
+│   ├── cqrs/                           # Command dispatching
+│   │   └── command_dispatcher.go       # CommandDispatcher, Watchable
+│   └── auth/                           # Authentication and authorization
+│       ├── domain/
+│       │   ├── entities/               # Aggregate roots
+│       │   │   ├── agent.go            # Agent (FOAF-typed actors)
+│       │   │   ├── account.go          # Account (multi-tenant workspace)
+│       │   │   ├── role.go             # Role (W3C ORG)
+│       │   │   ├── policy.go           # Policy (ODRL access control)
+│       │   │   ├── credential.go       # Credential (OAuth provider link)
+│       │   │   ├── auth_session.go     # AuthSession (authenticated session)
+│       │   │   ├── ontology.go         # FOAF, ORG, ODRL, Schema.org constants
+│       │   │   └── *_events.go         # Domain event definitions
+│       │   └── repositories/           # Repository interfaces
+│       │       └── repositories.go     # All repository contracts
+│       ├── application/                # Application services
+│       │   ├── authentication_service.go  # OAuth flow orchestration
+│       │   ├── authorization_service.go   # PolicyDecisionPoint (ODRL)
+│       │   └── pkce.go                    # PKCE helpers (RFC 7636)
+│       └── infrastructure/
+│           └── session/                # HTTP session management
+│               ├── session_manager.go  # SessionManager interface
+│               └── gorilla_session_manager.go  # gorilla/sessions implementation
 ├── internal/               # Private implementation packages
-│   ├── store/              # Private store implementations
-│   ├── handler/            # Private handler logic
-│   └── examples/           # Example implementations (not for export)
 ├── cmd/pericarp/           # CLI tools/demos
 ├── examples/               # Runnable examples for users
 ├── test/                   # Integration tests
-├── docs/                   # Documentation
+├── docs/                   # Documentation (Diataxis framework)
 ├── scripts/                # Build/automation scripts
 └── configs/                # Configuration templates
 ```
@@ -82,22 +119,51 @@ Dependencies point inward:
 The event store is responsible for:
 - Persisting domain events
 - Retrieving events for aggregate reconstruction
-- Supporting multiple database backends (SQLite, PostgreSQL)
+- Optimistic concurrency control via `expectedVersion`
+- Supporting multiple backends (MemoryStore for tests, FileStore for dev, database for prod)
 
 ### Event Dispatcher
 
 The event dispatcher:
-- Publishes events to subscribers
-- Supports async event processing
-- Integrates with Watermill for event streaming
+- Publishes events to subscribers via pattern matching (`user.created`, `user.*`, `*.created`, `*.*`)
+- Executes handlers in parallel via `errgroup`
+- Supports wildcard catch-all handlers
 
 ### Aggregate Root
 
-The base aggregate root provides:
-- Event management
-- Version tracking
-- Sequence number management
-- Event sourcing capabilities
+The base aggregate root (`ddd.BaseEntity`) provides:
+- Event recording and sequence number management
+- Uncommitted event tracking for UnitOfWork integration
+- Event replay for state reconstruction
+- Thread-safe access via `sync.RWMutex`
+
+### Authentication (OAuth 2.0 / OIDC)
+
+The auth package implements the Backend-for-Frontend (BFF) pattern:
+- **AuthenticationService** — orchestrates the OAuth Authorization Code Flow with PKCE
+- **OAuthProvider** — provider-agnostic interface (implement once per IdP)
+- **Credential** aggregate — links external identities to agents via Schema.org vocabulary
+- **AuthSession** aggregate — tracks authenticated sessions with expiration and account scoping
+- **SessionManager** — HTTP cookie management (gorilla/sessions) with secure defaults
+- **TokenStore** — encrypted server-side token storage interface
+
+### Authorization (ODRL)
+
+The auth package implements ODRL-based access control:
+- **PolicyDecisionPoint** — evaluates permissions and prohibitions following ODRL semantics (prohibitions override permissions, default deny)
+- **Policy** aggregate — defines permissions, prohibitions, and duties using ODRL vocabulary
+- **Role** aggregate — named roles assigned to agents globally or per-account
+- **Account** aggregate — multi-tenant workspace with member management
+
+### Ontology
+
+The auth domain uses three established ontologies:
+- **FOAF** — agent typing (Person, Organization, Group, Software Agent)
+- **W3C ORG** — organizational relationships (roles, membership, temporal tracking)
+- **ODRL** — access control (permissions, prohibitions, duties, policy types)
+- **Schema.org** — authentication concepts (credentials, sessions, providers)
+
+Cross-aggregate relationships are modeled as enriched triple events (`BasicTripleEvent`) using these standard predicates.
 
 ## Testing Strategy
 

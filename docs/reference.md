@@ -1,3 +1,9 @@
+---
+layout: default
+title: API Reference
+nav_order: 4
+---
+
 # API Reference
 
 Complete reference for all exported types, functions, and interfaces in Pericarp.
@@ -610,3 +616,563 @@ func (d *QueuedCommandDispatcher) Close() error
 ```
 
 Releases resources. Currently a no-op for both implementations.
+
+---
+
+## Package `auth/domain/entities`
+
+`import "github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"`
+
+Domain aggregates for authentication, authorization, and identity management.
+
+### Aggregates
+
+#### `Agent`
+
+```go
+type Agent struct {
+    *ddd.BaseEntity
+    // unexported fields
+}
+```
+
+Represents an authenticated party in the system. Uses FOAF vocabulary for agent typing.
+
+**Agent Types** (constants):
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `AgentTypePerson` | `foaf:Person` | Human user |
+| `AgentTypeOrganization` | `foaf:Organization` | Organizational entity |
+| `AgentTypeGroup` | `foaf:Group` | Group of agents |
+| `AgentTypeSoftwareAgent` | `foaf:Agent` | Automated software agent |
+
+**Methods:**
+
+- `With(id, name, agentType string) (*Agent, error)` — Factory. Creates a new agent and records `Agent.Created`. Defaults to `foaf:Person` if `agentType` is empty.
+- `Restore(id, name, agentType string, active bool, createdAt time.Time) error` — Restores from database without recording events.
+- `Activate() error` / `Deactivate() error` — Idempotent state transitions.
+- `AssignRole(roleID string) error` — Records `Agent.RoleAssigned` triple event (agent, `org:hasRole`, role).
+- `RevokeRole(roleID string) error` — Records `Agent.RoleRevoked` triple event (agent, `org:hadRole`, role).
+- `AddToGroup(groupID string) error` — Records `Agent.GroupMembershipAdded` (agent, `foaf:member`, group).
+- `RemoveFromGroup(groupID string) error` — Records `Agent.GroupMembershipRemoved`.
+- `Name() string`, `AgentType() string`, `Active() bool`, `CreatedAt() time.Time` — Accessors.
+
+#### `Credential`
+
+```go
+type Credential struct {
+    *ddd.BaseEntity
+    // unexported fields
+}
+```
+
+Links an external identity provider account to an Agent. Uses Schema.org vocabulary.
+
+**Methods:**
+
+- `With(id, agentID, provider, providerUserID, email, displayName string) (*Credential, error)` — Factory. Creates a new credential and records `Credential.Created` triple event (agent, `schema:credential`, credential).
+- `Restore(id, agentID, provider, providerUserID, email, displayName string, active bool, createdAt, lastUsedAt time.Time) error` — Restores from database.
+- `MarkUsed() error` — Records `Credential.Used`. Updates `LastUsedAt`.
+- `Deactivate() error` / `Reactivate() error` — Idempotent state transitions.
+- `ApplyEvent(ctx context.Context, envelope domain.EventEnvelope[any]) error` — Replays events for state reconstruction.
+- `AgentID() string`, `Provider() string`, `ProviderUserID() string`, `Email() string`, `DisplayName() string`, `Active() bool`, `CreatedAt() time.Time`, `LastUsedAt() time.Time` — Accessors.
+
+#### `AuthSession`
+
+```go
+type AuthSession struct {
+    *ddd.BaseEntity
+    // unexported fields
+}
+```
+
+Represents an authenticated session with expiration and optional account scoping.
+
+**Methods:**
+
+- `With(id, agentID, credentialID, ipAddress, userAgent string, expiresAt time.Time) (*AuthSession, error)` — Factory. Records `Session.Created` triple event (agent, `schema:session`, session).
+- `Restore(id, agentID, accountID, credentialID, ipAddress, userAgent string, active bool, createdAt, expiresAt, lastAccessedAt time.Time) error` — Restores from database.
+- `Touch() error` — Updates `LastAccessedAt`. Records `Session.Touched`.
+- `Revoke() error` — Idempotent. Records `Session.Revoked`.
+- `IsExpired() bool` — Returns true if the current time is past `ExpiresAt`.
+- `ScopeToAccount(accountID string) error` — Records `Session.AccountScoped` triple event (session, `schema:authenticator`, account).
+- `ApplyEvent(ctx context.Context, envelope domain.EventEnvelope[any]) error` — Replays events.
+- `AgentID() string`, `AccountID() string`, `CredentialID() string`, `Active() bool`, `CreatedAt() time.Time`, `ExpiresAt() time.Time`, `LastAccessedAt() time.Time`, `IPAddress() string`, `UserAgent() string` — Accessors.
+
+#### `Account`
+
+```go
+type Account struct {
+    *ddd.BaseEntity
+    // unexported fields
+}
+```
+
+Tenant/workspace container for multi-tenancy. Uses W3C ORG vocabulary.
+
+**Methods:**
+
+- `With(id, name string) (*Account, error)` — Factory. Records `Account.Created`.
+- `Activate() error` / `Deactivate() error` — Idempotent.
+- `AddMember(agentID, roleID string) error` — Records `Account.MemberAdded` triple event (account, `org:hasMember`, agent) with role metadata.
+- `RemoveMember(agentID string) error` — Records `Account.MemberRemoved` (account, `org:hadMember`, agent).
+- `ChangeMemberRole(agentID, newRoleID string) error` — Records `Account.MemberRoleChanged`.
+
+#### `Role`
+
+```go
+type Role struct {
+    *ddd.BaseEntity
+    // unexported fields
+}
+```
+
+Named role with description. Aligned with W3C ORG ontology.
+
+- `With(id, name, description string) (*Role, error)` — Factory. Records `Role.Created`.
+- `Restore(id, name, description string, createdAt time.Time) error` — Restores from database.
+
+#### `Policy`
+
+```go
+type Policy struct {
+    *ddd.BaseEntity
+    // unexported fields
+}
+```
+
+ODRL (Open Digital Rights Language) policy for access control.
+
+**Policy Types** (constants):
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `PolicyTypeSet` | `odrl:Set` | General-purpose policy |
+| `PolicyTypeOffer` | `odrl:Offer` | Policy proposed by the assigner |
+| `PolicyTypeAgreement` | `odrl:Agreement` | Policy agreed upon by both parties |
+
+**Methods:**
+
+- `With(id, name, policyType string) (*Policy, error)` — Factory. Defaults to `odrl:Set`.
+- `GrantPermission(assignee, action, target string) error` — Records `Policy.PermissionGranted` triple event.
+- `RevokePermission(assignee, action, target string) error` — Records `Policy.PermissionRevoked`.
+- `SetProhibition(assignee, action, target string) error` — Records `Policy.ProhibitionSet`.
+- `RevokeProhibition(assignee, action, target string) error` — Records `Policy.ProhibitionRevoked`.
+- `ImposeDuty(assignee, action, target string) error` — Records `Policy.DutyImposed`.
+- `DischargeDuty(assignee, action, target string) error` — Records `Policy.DutyDischarged`.
+- `Assign(assigneeID string) error` — Records `Policy.Assigned`.
+
+### Ontology Constants
+
+**ODRL Actions:**
+
+| Constant | Value |
+|----------|-------|
+| `ActionUse` | `odrl:use` |
+| `ActionRead` | `odrl:read` |
+| `ActionModify` | `odrl:modify` |
+| `ActionDelete` | `odrl:delete` |
+| `ActionExecute` | `odrl:execute` |
+| `ActionAggregate` | `odrl:aggregate` |
+| `ActionDistribute` | `odrl:distribute` |
+| `ActionTransfer` | `odrl:transfer` |
+
+**Relationship Predicates:**
+
+| Constant | Value | Usage |
+|----------|-------|-------|
+| `PredicateHasRole` | `org:hasRole` | Agent currently holds a role |
+| `PredicateHadRole` | `org:hadRole` | Agent previously held a role (revocation) |
+| `PredicateHasMember` | `org:hasMember` | Account has a member agent |
+| `PredicateHadMember` | `org:hadMember` | Account had a member (removal) |
+| `PredicateMember` | `foaf:member` | Agent belongs to group |
+| `PredicateCredential` | `schema:credential` | Agent linked to credential |
+| `PredicateSession` | `schema:session` | Agent linked to session |
+| `PredicateAuthenticator` | `schema:authenticator` | Session scoped to account |
+
+### Event Type Constants
+
+All event types follow the `Aggregate.Action` naming convention:
+
+```go
+// Agent events
+EventTypeAgentCreated, EventTypeAgentActivated, EventTypeAgentDeactivated
+EventTypeAgentRoleAssigned, EventTypeAgentRoleRevoked
+EventTypeAgentGroupMembershipAdded, EventTypeAgentGroupMembershipRemoved
+
+// Credential events
+EventTypeCredentialCreated, EventTypeCredentialUsed
+EventTypeCredentialDeactivated, EventTypeCredentialReactivated
+
+// Session events
+EventTypeSessionCreated, EventTypeSessionTouched
+EventTypeSessionRevoked, EventTypeSessionAccountScoped
+
+// Account events
+EventTypeAccountCreated, EventTypeAccountActivated, EventTypeAccountDeactivated
+EventTypeAccountMemberAdded, EventTypeAccountMemberRemoved, EventTypeAccountMemberRoleChanged
+
+// Policy events
+EventTypePolicyCreated, EventTypePolicyActivated, EventTypePolicyDeactivated
+EventTypePermissionGranted, EventTypePermissionRevoked
+EventTypeProhibitionSet, EventTypeProhibitionRevoked
+EventTypeDutyImposed, EventTypeDutyDischarged, EventTypePolicyAssigned
+
+// Role events
+EventTypeRoleCreated
+```
+
+---
+
+## Package `auth/domain/repositories`
+
+`import "github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"`
+
+Repository interfaces for auth aggregate persistence. All support cursor-based pagination.
+
+### Types
+
+#### `PaginatedResponse[T]`
+
+```go
+type PaginatedResponse[T any] struct {
+    Data    []T
+    Cursor  string
+    Limit   int
+    HasMore bool
+}
+```
+
+#### `AgentRepository` (interface)
+
+```go
+Save(ctx context.Context, agent *entities.Agent) error
+FindByID(ctx context.Context, id string) (*entities.Agent, error)
+FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.Agent], error)
+```
+
+#### `CredentialRepository` (interface)
+
+```go
+Save(ctx context.Context, credential *entities.Credential) error
+FindByID(ctx context.Context, id string) (*entities.Credential, error)
+FindByProvider(ctx context.Context, provider, providerUserID string) (*entities.Credential, error)
+FindByAgent(ctx context.Context, agentID string) ([]*entities.Credential, error)
+FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.Credential], error)
+```
+
+#### `AuthSessionRepository` (interface)
+
+```go
+Save(ctx context.Context, session *entities.AuthSession) error
+FindByID(ctx context.Context, id string) (*entities.AuthSession, error)
+FindByAgent(ctx context.Context, agentID string) ([]*entities.AuthSession, error)
+FindActive(ctx context.Context, agentID string) ([]*entities.AuthSession, error)
+FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.AuthSession], error)
+RevokeAllForAgent(ctx context.Context, agentID string) error
+```
+
+#### `AccountRepository`, `RoleRepository`, `PolicyRepository` (interfaces)
+
+Follow the same pattern with `Save`, `FindByID`, `FindAll`, plus domain-specific finders.
+
+---
+
+## Package `auth/application`
+
+`import "github.com/akeemphilbert/pericarp/pkg/auth/application"`
+
+Application services for authentication and authorization.
+
+### Types
+
+#### `AuthRequest`
+
+```go
+type AuthRequest struct {
+    AuthURL      string  // Authorization URL to redirect the user to
+    State        string  // CSRF protection parameter
+    CodeVerifier string  // PKCE code verifier (store server-side)
+    Nonce        string  // OpenID Connect nonce
+    Provider     string  // Provider name
+}
+```
+
+#### `AuthResult`
+
+```go
+type AuthResult struct {
+    AccessToken  string
+    RefreshToken string
+    IDToken      string
+    TokenType    string
+    ExpiresIn    int      // seconds
+    UserInfo     UserInfo
+}
+```
+
+#### `UserInfo`
+
+```go
+type UserInfo struct {
+    ProviderUserID string  // User's ID at the provider
+    Email          string
+    DisplayName    string
+    AvatarURL      string
+    Provider       string  // Provider name (e.g., "google")
+}
+```
+
+#### `SessionInfo`
+
+```go
+type SessionInfo struct {
+    SessionID   string
+    AgentID     string
+    AccountID   string        // Empty if not scoped
+    Permissions []Permission
+    ExpiresAt   time.Time
+}
+```
+
+#### `Permission`
+
+```go
+type Permission struct {
+    Assignee string  // Agent or Role ID
+    Action   string  // ODRL action IRI
+    Target   string  // Resource identifier or "*" wildcard
+}
+```
+
+### Interfaces
+
+#### `AuthenticationService`
+
+```go
+type AuthenticationService interface {
+    InitiateAuthFlow(ctx context.Context, provider, redirectURI string) (*AuthRequest, error)
+    ExchangeCode(ctx context.Context, code, codeVerifier, provider, redirectURI string) (*AuthResult, error)
+    ValidateState(ctx context.Context, receivedState, storedState string) error
+    FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, error)
+    CreateSession(ctx context.Context, agentID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+    ValidateSession(ctx context.Context, sessionID string) (*SessionInfo, error)
+    RefreshTokens(ctx context.Context, credentialID string) (*AuthResult, error)
+    RevokeSession(ctx context.Context, sessionID string) error
+    RevokeAllSessions(ctx context.Context, agentID string) error
+}
+```
+
+#### `OAuthProvider`
+
+```go
+type OAuthProvider interface {
+    Name() string
+    AuthCodeURL(state, codeChallenge, nonce, redirectURI string) string
+    Exchange(ctx context.Context, code, codeVerifier, redirectURI string) (*AuthResult, error)
+    RefreshToken(ctx context.Context, refreshToken string) (*AuthResult, error)
+    RevokeToken(ctx context.Context, token string) error
+    ValidateIDToken(ctx context.Context, idToken, nonce string) (*UserInfo, error)
+}
+```
+
+Provider-agnostic interface for OAuth 2.0 / OpenID Connect identity providers. Implement once per provider (Google, GitHub, etc.).
+
+#### `OAuthProviderRegistry`
+
+```go
+type OAuthProviderRegistry map[string]OAuthProvider
+```
+
+Maps provider names to their implementations.
+
+#### `TokenStore`
+
+```go
+type TokenStore interface {
+    StoreTokens(ctx context.Context, credentialID string, accessToken, refreshToken, idToken string, expiresAt time.Time) error
+    GetTokens(ctx context.Context, credentialID string) (accessToken, refreshToken string, expiresAt time.Time, err error)
+    DeleteTokens(ctx context.Context, credentialID string) error
+    NeedsRefresh(ctx context.Context, credentialID string) (bool, error)
+}
+```
+
+Abstraction for encrypted server-side token storage. Consuming applications implement this against their storage layer.
+
+#### `AuthorizationChecker`
+
+```go
+type AuthorizationChecker interface {
+    IsAuthorized(ctx context.Context, agentID, action, target string) (bool, error)
+    IsAuthorizedInAccount(ctx context.Context, agentID, accountID, action, target string) (bool, error)
+    GetPermissions(ctx context.Context, agentID string) ([]Permission, error)
+    GetProhibitions(ctx context.Context, agentID string) ([]Permission, error)
+}
+```
+
+#### `PermissionStore`
+
+```go
+type PermissionStore interface {
+    GetPermissionsForAssignee(ctx context.Context, assigneeID string) ([]Permission, error)
+    GetProhibitionsForAssignee(ctx context.Context, assigneeID string) ([]Permission, error)
+    GetRolesForAgent(ctx context.Context, agentID string) ([]string, error)
+    GetRolesForAgentInAccount(ctx context.Context, agentID, accountID string) ([]string, error)
+}
+```
+
+Read model for authorization decisions. Consuming applications implement this against their storage layer.
+
+### Implementations
+
+#### `DefaultAuthenticationService`
+
+```go
+func NewDefaultAuthenticationService(
+    providers OAuthProviderRegistry,
+    agents repositories.AgentRepository,
+    credentials repositories.CredentialRepository,
+    sessions repositories.AuthSessionRepository,
+    tokens TokenStore,
+    authorization AuthorizationChecker,
+) *DefaultAuthenticationService
+```
+
+Reference implementation of `AuthenticationService`. The `authorization` parameter is optional (pass `nil` to skip permission resolution in `ValidateSession`).
+
+#### `PolicyDecisionPoint`
+
+```go
+func NewPolicyDecisionPoint(store PermissionStore) *PolicyDecisionPoint
+```
+
+Implements `AuthorizationChecker` using ODRL semantics: prohibitions override permissions, default deny.
+
+### PKCE Functions
+
+```go
+func GenerateCodeVerifier() (string, error)
+```
+
+Generates a 43-character base64url-encoded code verifier from 32 random bytes (RFC 7636).
+
+```go
+func GenerateCodeChallenge(verifier string) string
+```
+
+Generates a S256 code challenge (SHA-256 + base64url) from the code verifier.
+
+```go
+func GenerateState() (string, error)
+```
+
+Generates a 32-byte base64url-encoded state parameter for CSRF protection.
+
+```go
+func GenerateNonce() (string, error)
+```
+
+Generates a 32-byte base64url-encoded nonce for OpenID Connect ID token validation.
+
+### Sentinel Errors
+
+```go
+var ErrInvalidProvider    = errors.New("authentication: invalid provider")
+var ErrInvalidState       = errors.New("authentication: invalid state parameter")
+var ErrCodeExchangeFailed = errors.New("authentication: code exchange failed")
+var ErrSessionNotFound    = errors.New("authentication: session not found")
+var ErrSessionExpired     = errors.New("authentication: session expired")
+var ErrSessionRevoked     = errors.New("authentication: session revoked")
+var ErrTokenRefreshFailed = errors.New("authentication: token refresh failed")
+var ErrCredentialNotFound = errors.New("authentication: credential not found")
+```
+
+---
+
+## Package `auth/infrastructure/session`
+
+`import "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/session"`
+
+HTTP session management for the BFF (Backend-for-Frontend) pattern.
+
+### Types
+
+#### `SessionData`
+
+```go
+type SessionData struct {
+    SessionID string
+    AgentID   string
+    AccountID string     // Empty if not scoped
+    CreatedAt time.Time
+    ExpiresAt time.Time
+}
+```
+
+#### `FlowData`
+
+```go
+type FlowData struct {
+    State        string
+    CodeVerifier string
+    Nonce        string
+    Provider     string
+    RedirectURI  string
+    CreatedAt    time.Time
+}
+```
+
+Temporary OAuth flow data stored server-side during the authorization code exchange. Automatically cleared after retrieval (one-time use). Maximum TTL: 10 minutes.
+
+#### `SessionOptions`
+
+```go
+type SessionOptions struct {
+    MaxAge   int            // seconds (default: 86400)
+    Domain   string
+    Path     string         // default: "/"
+    HttpOnly bool           // default: true
+    Secure   bool           // default: true
+    SameSite http.SameSite  // default: Lax
+}
+```
+
+### Interface
+
+#### `SessionManager`
+
+```go
+type SessionManager interface {
+    CreateHTTPSession(w http.ResponseWriter, r *http.Request, sessionInfo SessionData) error
+    GetHTTPSession(r *http.Request) (*SessionData, error)
+    DestroyHTTPSession(w http.ResponseWriter, r *http.Request) error
+    SetFlowData(w http.ResponseWriter, r *http.Request, data FlowData) error
+    GetFlowData(w http.ResponseWriter, r *http.Request) (*FlowData, error)
+}
+```
+
+### Functions
+
+#### `DefaultSessionOptions`
+
+```go
+func DefaultSessionOptions() SessionOptions
+```
+
+Returns secure defaults: `HttpOnly=true`, `Secure=true`, `SameSite=Lax`, `MaxAge=86400` (24 hours), `Path="/"`.
+
+#### `NewGorillaSessionManager`
+
+```go
+func NewGorillaSessionManager(sessionName string, store sessions.Store, options SessionOptions) *GorillaSessionManager
+```
+
+Creates a session manager backed by `gorilla/sessions`. The `store` parameter accepts any gorilla session store (cookie, filesystem, Redis, database).
+
+### Sentinel Errors
+
+```go
+var ErrSessionNotFound  = errors.New("session: not found")
+var ErrFlowDataNotFound = errors.New("session: flow data not found")
+```

@@ -1,3 +1,9 @@
+---
+layout: default
+title: How-To Guides
+nav_order: 3
+---
+
 # How-To Guides
 
 Practical recipes for common tasks with Pericarp.
@@ -212,6 +218,166 @@ dispatcher.RegisterWildcardReceiver(func(ctx context.Context, env cqrs.CommandEn
 ```
 
 Wildcard receivers fire for every command in addition to any pattern-matched receivers.
+
+---
+
+## Authentication
+
+### How to set up the session manager with gorilla/sessions
+
+```go
+import (
+    "github.com/gorilla/sessions"
+    authsession "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/session"
+)
+
+// Use a cookie store with a 32-byte key for encryption
+store := sessions.NewCookieStore([]byte("your-32-byte-secret-key-here!!!"))
+
+// Secure defaults: HttpOnly, Secure, SameSite=Lax
+opts := authsession.DefaultSessionOptions()
+
+sessionManager := authsession.NewGorillaSessionManager("myapp-session", store, opts)
+```
+
+For production, use a server-side store (Redis, database) instead of `CookieStore` so that session data isn't stored in the cookie itself.
+
+### How to implement an OAuthProvider
+
+The `OAuthProvider` interface is provider-agnostic. Implement it once per identity provider:
+
+```go
+type OAuthProvider interface {
+    Name() string
+    AuthCodeURL(state, codeChallenge, nonce, redirectURI string) string
+    Exchange(ctx context.Context, code, codeVerifier, redirectURI string) (*AuthResult, error)
+    RefreshToken(ctx context.Context, refreshToken string) (*AuthResult, error)
+    RevokeToken(ctx context.Context, token string) error
+    ValidateIDToken(ctx context.Context, idToken, nonce string) (*UserInfo, error)
+}
+```
+
+Register providers in the registry:
+
+```go
+providers := authapp.OAuthProviderRegistry{
+    "google": &GoogleProvider{clientID: "...", clientSecret: "..."},
+    "github": &GitHubProvider{clientID: "...", clientSecret: "..."},
+}
+```
+
+### How to check authorization for an agent
+
+Use the `PolicyDecisionPoint` to evaluate ODRL-based permissions:
+
+```go
+import authapp "github.com/akeemphilbert/pericarp/pkg/auth/application"
+
+pdp := authapp.NewPolicyDecisionPoint(permissionStore)
+
+// Global check
+allowed, err := pdp.IsAuthorized(ctx, "agent-123", "odrl:read", "document-456")
+
+// Account-scoped check (considers both global and account roles)
+allowed, err := pdp.IsAuthorizedInAccount(ctx, "agent-123", "account-789", "odrl:modify", "document-456")
+```
+
+The evaluation order is: prohibitions first (deny overrides), then permissions, then default deny.
+
+### How to check authorization within a session
+
+The `ValidateSession` method returns permissions alongside session info:
+
+```go
+info, err := authService.ValidateSession(ctx, sessionID)
+if err != nil {
+    // Handle ErrSessionNotFound, ErrSessionExpired, ErrSessionRevoked
+}
+
+// info.Permissions contains the agent's effective permissions
+// info.AgentID, info.AccountID identify the authenticated context
+```
+
+### How to revoke sessions
+
+```go
+// Revoke a single session (e.g., user clicks "log out")
+err := authService.RevokeSession(ctx, sessionID)
+
+// Revoke all sessions for an agent (e.g., password change, security incident)
+err := authService.RevokeAllSessions(ctx, agentID)
+```
+
+### How to refresh OAuth tokens
+
+Token refresh happens server-side. The user's session continues seamlessly:
+
+```go
+// Check if tokens need refreshing
+needsRefresh, err := tokenStore.NeedsRefresh(ctx, credentialID)
+if needsRefresh {
+    result, err := authService.RefreshTokens(ctx, credentialID)
+    // New tokens are stored automatically
+}
+```
+
+### How to scope a session to an account
+
+For multi-tenant applications, scope a session to a specific account after login:
+
+```go
+session, _ := authService.CreateSession(ctx, agentID, credentialID, ip, ua, 24*time.Hour)
+session.ScopeToAccount("account-789")
+sessionRepo.Save(ctx, session)
+```
+
+### How to define roles and policies
+
+```go
+import "github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
+
+// Create a role
+role, _ := new(entities.Role).With("role-editor", "Editor", "Can read and modify documents")
+
+// Create an ODRL policy with permissions
+policy, _ := new(entities.Policy).With("policy-1", "Editor Policy", entities.PolicyTypeSet)
+policy.GrantPermission("role-editor", "odrl:read", "documents")
+policy.GrantPermission("role-editor", "odrl:modify", "documents")
+policy.SetProhibition("role-editor", "odrl:delete", "documents")
+
+// Assign a role to an agent
+agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+agent.AssignRole("role-editor")
+
+// Add an agent to an account with a role
+account, _ := new(entities.Account).With("account-1", "Acme Corp")
+account.AddMember("agent-1", "role-editor")
+```
+
+### How to link multiple identity providers to one agent
+
+An agent can have multiple credentials from different providers:
+
+```go
+// First login creates agent + credential
+agent, googleCred, _ := authService.FindOrCreateAgent(ctx, authapp.UserInfo{
+    Provider:       "google",
+    ProviderUserID: "google-123",
+    Email:          "alice@example.com",
+    DisplayName:    "Alice",
+})
+
+// Later, link a GitHub credential to the same agent
+githubCred, _ := new(entities.Credential).With(
+    ksuid.New().String(), agent.GetID(),
+    "github", "github-456", "alice@example.com", "alice",
+)
+credentialRepo.Save(ctx, githubCred)
+```
+
+---
+
+## Commands (CQRS)
 
 ### How to use the Watchable in a select statement
 

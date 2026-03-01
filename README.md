@@ -99,10 +99,11 @@ For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECT
 
 ## Documentation
 
-- 📚 [Tutorial](docs/tutorial/README.md) - Step-by-step tutorials
-- 🔧 [How-to Guides](docs/how-to/README.md) - Practical solutions
-- 📖 [Reference](docs/reference/README.md) - API documentation
-- 💡 [Explanation](docs/explanation/README.md) - Design decisions
+- [Documentation Site](https://akeemphilbert.github.io/pericarp/) - Full documentation
+- [Tutorial](docs/tutorial.md) - Step-by-step tutorials
+- [How-to Guides](docs/how-to.md) - Practical solutions
+- [Reference](docs/reference.md) - API documentation
+- [Explanation](docs/explanation.md) - Design decisions
 
 ## Development
 
