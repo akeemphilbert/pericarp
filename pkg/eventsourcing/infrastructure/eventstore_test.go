@@ -84,6 +84,68 @@ func TestEventStore_Append(t *testing.T) {
 			events:          []domain.EventEnvelope[any]{},
 			wantErr:         false,
 		},
+		// GORM store test cases
+		{
+			name:            "gorm: append single event to new aggregate",
+			setupStore:      setupGormStore,
+			aggregateID:     "agg-1",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-1", "event-1", "test.created", 0),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "gorm: append multiple events",
+			setupStore:      setupGormStore,
+			aggregateID:     "agg-2",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-2", "event-1", "test.created", 0),
+				createTestEvent("agg-2", "event-2", "test.updated", 1),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "gorm: append with version check success",
+			setupStore:      setupGormStoreWithEvents,
+			aggregateID:     "agg-3",
+			expectedVersion: 0,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-3", "event-2", "test.updated", 1),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "gorm: append with version check failure",
+			setupStore:      setupGormStoreWithEvents,
+			aggregateID:     "agg-3",
+			expectedVersion: 5,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-3", "event-2", "test.updated", 1),
+			},
+			wantErr: true,
+			errType: domain.ErrConcurrencyConflict,
+		},
+		{
+			name:            "gorm: append event with mismatched aggregate ID",
+			setupStore:      setupGormStore,
+			aggregateID:     "agg-5",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-6", "event-1", "test.created", 0),
+			},
+			wantErr: true,
+			errType: domain.ErrInvalidEvent,
+		},
+		{
+			name:            "gorm: append empty events slice",
+			setupStore:      setupGormStore,
+			aggregateID:     "agg-7",
+			expectedVersion: -1,
+			events:          []domain.EventEnvelope[any]{},
+			wantErr:         false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -133,6 +195,20 @@ func TestEventStore_GetEvents(t *testing.T) {
 		{
 			name:        "get events for non-existent aggregate",
 			setupStore:  setupMemoryStore,
+			aggregateID: "agg-nonexistent",
+			wantCount:   0,
+			wantErr:     false,
+		},
+		{
+			name:        "gorm: get events for existing aggregate",
+			setupStore:  setupGormStoreWithEvents,
+			aggregateID: "agg-3",
+			wantCount:   1,
+			wantErr:     false,
+		},
+		{
+			name:        "gorm: get events for non-existent aggregate",
+			setupStore:  setupGormStore,
 			aggregateID: "agg-nonexistent",
 			wantCount:   0,
 			wantErr:     false,
@@ -211,6 +287,30 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			wantCount:   0,
 			wantErr:     false,
 		},
+		{
+			name:        "gorm: get events from version 1",
+			setupStore:  setupGormStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 1,
+			wantCount:   2,
+			wantErr:     false,
+		},
+		{
+			name:        "gorm: get events from version 2",
+			setupStore:  setupGormStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 2,
+			wantCount:   1,
+			wantErr:     false,
+		},
+		{
+			name:        "gorm: get events from version beyond existing",
+			setupStore:  setupGormStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 10,
+			wantCount:   0,
+			wantErr:     false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -272,6 +372,22 @@ func TestEventStore_GetEventByID(t *testing.T) {
 		{
 			name:       "get non-existent event",
 			setupStore: setupMemoryStore,
+			eventID:    "event-nonexistent",
+			wantFound:  false,
+			wantErr:    true,
+			errType:    domain.ErrEventNotFound,
+		},
+		{
+			name:       "gorm: get existing event by ID",
+			setupStore: setupGormStoreWithEvents,
+			eventID:    "event-1",
+			wantFound:  true,
+			wantAggID:  "agg-3",
+			wantErr:    false,
+		},
+		{
+			name:       "gorm: get non-existent event",
+			setupStore: setupGormStore,
 			eventID:    "event-nonexistent",
 			wantFound:  false,
 			wantErr:    true,
@@ -342,6 +458,27 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 		{
 			name:        "get version for aggregate with multiple events",
 			setupStore:  setupMemoryStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			wantVersion: 2,
+			wantErr:     false,
+		},
+		{
+			name:        "gorm: get version for existing aggregate",
+			setupStore:  setupGormStoreWithEvents,
+			aggregateID: "agg-3",
+			wantVersion: 0,
+			wantErr:     false,
+		},
+		{
+			name:        "gorm: get version for non-existent aggregate",
+			setupStore:  setupGormStore,
+			aggregateID: "agg-nonexistent",
+			wantVersion: 0,
+			wantErr:     false,
+		},
+		{
+			name:        "gorm: get version for aggregate with multiple events",
+			setupStore:  setupGormStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			wantVersion: 2,
 			wantErr:     false,
