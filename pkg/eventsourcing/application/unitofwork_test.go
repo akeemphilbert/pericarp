@@ -407,13 +407,13 @@ func TestCommitFailure(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Commit first UoW (succeeds, store version becomes 0, event has sequenceNo 0)
+		// Commit first UoW (succeeds, store version becomes 1, event has sequenceNo 1)
 		if err := uow1.Commit(ctx); err != nil {
 			t.Fatalf("First commit failed: %v", err)
 		}
 
 		// Simulate two concurrent reads: both entities load from store at the same time
-		// Both see version 0, so both track with expectedVersion 0
+		// Both see version 1, so both track with expectedVersion 1
 		entity2 := NewTestEntity("entity-1", "Test", "test@example.com")
 		events, err := eventStore.GetEvents(ctx, "entity-1")
 		if err != nil {
@@ -423,11 +423,11 @@ func TestCommitFailure(t *testing.T) {
 			t.Fatalf("Expected 1 event, got %d", len(events))
 		}
 		// Apply the single event to entity2 to simulate loading from store
-		// entity2 starts with sequenceNo -1, event has sequenceNo 0, so this should work
+		// entity2 starts with sequenceNo 0, event has sequenceNo 1, so this should work
 		if err := entity2.ApplyEvent(ctx, events[0]); err != nil {
 			t.Fatalf("Failed to apply event: %v", err)
 		}
-		// entity2 now has sequenceNo 0
+		// entity2 now has sequenceNo 1
 
 		entity3 := NewTestEntity("entity-1", "Test", "test@example.com")
 		events2, err := eventStore.GetEvents(ctx, "entity-1")
@@ -441,10 +441,10 @@ func TestCommitFailure(t *testing.T) {
 		if err := entity3.ApplyEvent(ctx, events2[0]); err != nil {
 			t.Fatalf("Failed to apply event: %v", err)
 		}
-		// entity3 now has sequenceNo 0
+		// entity3 now has sequenceNo 1
 
-		// Both entities now have sequenceNo 0
-		// Track both with separate UoWs (both capture expectedVersion = 0)
+		// Both entities now have sequenceNo 1
+		// Track both with separate UoWs (both capture expectedVersion = 1)
 		uow2 := application.NewSimpleUnitOfWork(eventStore, nil)
 		if err := uow2.Track(entity2); err != nil {
 			t.Fatalf("Failed to track entity2: %v", err)
@@ -461,12 +461,12 @@ func TestCommitFailure(t *testing.T) {
 			t.Fatalf("Failed to record event: %v", err)
 		}
 
-		// Commit first concurrent transaction (succeeds, store version becomes 1)
+		// Commit first concurrent transaction (succeeds, store version becomes 2)
 		if err := uow2.Commit(ctx); err != nil {
 			t.Fatalf("Second commit failed: %v", err)
 		}
 
-		// Try to commit second concurrent transaction (should fail - expectedVersion 0 but store version is now 1)
+		// Try to commit second concurrent transaction (should fail - expectedVersion 1 but store version is now 2)
 		err = uow3.Commit(ctx)
 		if err == nil {
 			t.Error("Expected commit to fail due to concurrency conflict")

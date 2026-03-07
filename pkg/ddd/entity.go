@@ -45,7 +45,7 @@ type BaseEntity struct {
 func NewBaseEntity(aggregateID string) *BaseEntity {
 	return &BaseEntity{
 		aggregateID:       aggregateID,
-		sequenceNo:        -1, // Start at -1 so first event is 0
+		sequenceNo:        0, // Start at 0; first event gets sequence 1
 		uncommittedEvents: make([]domain.EventEnvelope[any], 0),
 		appliedEventIDs:   make(map[string]bool),
 	}

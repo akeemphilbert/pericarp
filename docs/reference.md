@@ -24,7 +24,7 @@ type BaseEntity struct { /* unexported fields */ }
 
 Embed in your aggregate root to gain event tracking, sequence number management, and uncommitted event collection. Thread-safe.
 
-New aggregates start at sequence number -1. The first recorded event gets sequence number 0.
+New aggregates start at sequence number 0 (no events). The first recorded event gets sequence number 1.
 
 #### Sentinel Errors
 
@@ -42,7 +42,7 @@ var ErrInvalidEventSequenceNo = errors.New("event sequence number is invalid")
 func NewBaseEntity(aggregateID string) *BaseEntity
 ```
 
-Creates a new BaseEntity with the given aggregate ID, starting at sequence number -1.
+Creates a new BaseEntity with the given aggregate ID, starting at sequence number 0.
 
 ### Methods on `BaseEntity`
 

@@ -23,8 +23,8 @@ func TestMemoryStore_Integration(t *testing.T) {
 
 		// Append initial events
 		events := []domain.EventEnvelope[any]{
-			createTestEvent(aggregateID, "event-1", "test.created", 0),
-			createTestEvent(aggregateID, "event-2", "test.updated", 1),
+			createTestEvent(aggregateID, "event-1", "test.created", 1),
+			createTestEvent(aggregateID, "event-2", "test.updated", 2),
 		}
 
 		if err := store.Append(ctx, aggregateID, -1, events...); err != nil {
@@ -42,11 +42,11 @@ func TestMemoryStore_Integration(t *testing.T) {
 		}
 
 		// Verify versions were preserved correctly
-		if retrieved[0].SequenceNo != 0 {
-			t.Errorf("expected first event version 0, got %d", retrieved[0].SequenceNo)
+		if retrieved[0].SequenceNo != 1 {
+			t.Errorf("expected first event version 1, got %d", retrieved[0].SequenceNo)
 		}
-		if retrieved[1].SequenceNo != 1 {
-			t.Errorf("expected second event version 1, got %d", retrieved[1].SequenceNo)
+		if retrieved[1].SequenceNo != 2 {
+			t.Errorf("expected second event version 2, got %d", retrieved[1].SequenceNo)
 		}
 
 		// Get current version
@@ -54,13 +54,13 @@ func TestMemoryStore_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get current version: %v", err)
 		}
-		if version != 1 {
-			t.Errorf("expected current version 1, got %d", version)
+		if version != 2 {
+			t.Errorf("expected current version 2, got %d", version)
 		}
 
 		// Append more events with version check
-		newEvent := createTestEvent(aggregateID, "event-3", "test.updated", 2)
-		if err := store.Append(ctx, aggregateID, 1, newEvent); err != nil {
+		newEvent := createTestEvent(aggregateID, "event-3", "test.updated", 3)
+		if err := store.Append(ctx, aggregateID, 2, newEvent); err != nil {
 			t.Fatalf("failed to append with version check: %v", err)
 		}
 
@@ -73,13 +73,13 @@ func TestMemoryStore_Integration(t *testing.T) {
 			t.Fatalf("expected 3 events, got %d", len(allEvents))
 		}
 
-		// Get events from version 1
-		fromVersion1, err := store.GetEventsFromVersion(ctx, aggregateID, 1)
+		// Get events from version 2
+		fromVersion2, err := store.GetEventsFromVersion(ctx, aggregateID, 2)
 		if err != nil {
 			t.Fatalf("failed to get events from version: %v", err)
 		}
-		if len(fromVersion1) != 2 {
-			t.Fatalf("expected 2 events from version 1, got %d", len(fromVersion1))
+		if len(fromVersion2) != 2 {
+			t.Fatalf("expected 2 events from version 2, got %d", len(fromVersion2))
 		}
 
 		// Get event by ID
@@ -102,13 +102,13 @@ func TestMemoryStore_Integration(t *testing.T) {
 		aggregateID := "conflict-test"
 
 		// Append initial event
-		event1 := createTestEvent(aggregateID, "event-1", "test.created", 0)
+		event1 := createTestEvent(aggregateID, "event-1", "test.created", 1)
 		if err := store.Append(ctx, aggregateID, -1, event1); err != nil {
 			t.Fatalf("failed to append initial event: %v", err)
 		}
 
-		// Try to append with wrong version (current version is 0, not 5)
-		event2 := createTestEvent(aggregateID, "event-2", "test.updated", 1)
+		// Try to append with wrong version (current version is 1, not 5)
+		event2 := createTestEvent(aggregateID, "event-2", "test.updated", 2)
 		err := store.Append(ctx, aggregateID, 5, event2)
 		if err == nil {
 			t.Fatal("expected concurrency conflict error, got nil")
@@ -128,11 +128,11 @@ func TestMemoryStore_Integration(t *testing.T) {
 
 		// Append events for multiple aggregates
 		agg1Events := []domain.EventEnvelope[any]{
-			createTestEvent("agg-1", "event-1", "test.created", 0),
+			createTestEvent("agg-1", "event-1", "test.created", 1),
 		}
 		agg2Events := []domain.EventEnvelope[any]{
-			createTestEvent("agg-2", "event-2", "test.created", 0),
-			createTestEvent("agg-2", "event-3", "test.updated", 1),
+			createTestEvent("agg-2", "event-2", "test.created", 1),
+			createTestEvent("agg-2", "event-3", "test.updated", 2),
 		}
 
 		if err := store.Append(ctx, "agg-1", -1, agg1Events...); err != nil {
@@ -170,13 +170,13 @@ func TestMemoryStore_GetAllAggregateIDs(t *testing.T) {
 	ctx := context.Background()
 
 	// Add events for multiple aggregates
-	if err := store.Append(ctx, "agg-1", -1, createTestEvent("agg-1", "e1", "test.created", 0)); err != nil {
+	if err := store.Append(ctx, "agg-1", -1, createTestEvent("agg-1", "e1", "test.created", 1)); err != nil {
 		t.Fatalf("failed to append: %v", err)
 	}
-	if err := store.Append(ctx, "agg-2", -1, createTestEvent("agg-2", "e2", "test.created", 0)); err != nil {
+	if err := store.Append(ctx, "agg-2", -1, createTestEvent("agg-2", "e2", "test.created", 1)); err != nil {
 		t.Fatalf("failed to append: %v", err)
 	}
-	if err := store.Append(ctx, "agg-3", -1, createTestEvent("agg-3", "e3", "test.created", 0)); err != nil {
+	if err := store.Append(ctx, "agg-3", -1, createTestEvent("agg-3", "e3", "test.created", 1)); err != nil {
 		t.Fatalf("failed to append: %v", err)
 	}
 

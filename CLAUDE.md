@@ -70,7 +70,7 @@ pkg/
 
 ### Sequence Numbers
 
-- New aggregates start at sequence -1; first event gets sequence 0
+- New aggregates start at sequence 0 (no events); first event gets sequence 1
 - Strict ordering enforced (no gaps)
 - `expectedVersion` in `Append()` uses the sequence number before the new events
 

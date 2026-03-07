@@ -120,7 +120,7 @@ func (s *DynamoEventStore) appendWithVersionCheck(ctx context.Context, aggregate
 	// Add an atomic ConditionCheck to verify the expected version exists.
 	// This eliminates the TOCTOU race of a separate read-then-write.
 	// For expectedVersion >= 0, verify that an item at that sequence_no exists for this aggregate.
-	if expectedVersion >= 0 {
+	if expectedVersion > 0 {
 		transactItems = append(transactItems, types.TransactWriteItem{
 			ConditionCheck: &types.ConditionCheck{
 				TableName: &s.tableName,

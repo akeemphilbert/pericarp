@@ -93,8 +93,8 @@ The `RegisterReceiver[T]` function in the `cqrs` package accepts the `CommandDis
 
 ### How sequence numbers work
 
-- A new aggregate starts at sequence number **-1**
-- The first event recorded gets sequence number **0**
+- A new aggregate starts at sequence number **0** (no events)
+- The first event recorded gets sequence number **1**
 - Each subsequent event increments by 1
 - `BaseEntity.RecordEvent` manages this automatically
 

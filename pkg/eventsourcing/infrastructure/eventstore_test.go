@@ -29,7 +29,7 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-1",
 			expectedVersion: -1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-1", "event-1", "test.created", 0),
+				createTestEvent("agg-1", "event-1", "test.created", 1),
 			},
 			wantErr: false,
 		},
@@ -39,8 +39,8 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-2",
 			expectedVersion: -1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-2", "event-1", "test.created", 0),
-				createTestEvent("agg-2", "event-2", "test.updated", 0),
+				createTestEvent("agg-2", "event-1", "test.created", 1),
+				createTestEvent("agg-2", "event-2", "test.updated", 2),
 			},
 			wantErr: false,
 		},
@@ -48,9 +48,9 @@ func TestEventStore_Append(t *testing.T) {
 			name:            "append with version check success",
 			setupStore:      setupMemoryStoreWithEvents,
 			aggregateID:     "agg-3",
-			expectedVersion: 0,
+			expectedVersion: 1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-3", "event-2", "test.updated", 1),
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
 			},
 			wantErr: false,
 		},
@@ -60,7 +60,7 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-3",
 			expectedVersion: 5,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-3", "event-2", "test.updated", 1),
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
 			},
 			wantErr: true,
 			errType: domain.ErrConcurrencyConflict,
@@ -71,7 +71,7 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-5",
 			expectedVersion: -1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-6", "event-1", "test.created", 0),
+				createTestEvent("agg-6", "event-1", "test.created", 1),
 			},
 			wantErr: true,
 			errType: domain.ErrInvalidEvent,
@@ -91,7 +91,7 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-1",
 			expectedVersion: -1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-1", "event-1", "test.created", 0),
+				createTestEvent("agg-1", "event-1", "test.created", 1),
 			},
 			wantErr: false,
 		},
@@ -101,8 +101,8 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-2",
 			expectedVersion: -1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-2", "event-1", "test.created", 0),
-				createTestEvent("agg-2", "event-2", "test.updated", 1),
+				createTestEvent("agg-2", "event-1", "test.created", 1),
+				createTestEvent("agg-2", "event-2", "test.updated", 2),
 			},
 			wantErr: false,
 		},
@@ -110,9 +110,9 @@ func TestEventStore_Append(t *testing.T) {
 			name:            "gorm: append with version check success",
 			setupStore:      setupGormStoreWithEvents,
 			aggregateID:     "agg-3",
-			expectedVersion: 0,
+			expectedVersion: 1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-3", "event-2", "test.updated", 1),
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
 			},
 			wantErr: false,
 		},
@@ -122,7 +122,7 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-3",
 			expectedVersion: 5,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-3", "event-2", "test.updated", 1),
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
 			},
 			wantErr: true,
 			errType: domain.ErrConcurrencyConflict,
@@ -133,7 +133,7 @@ func TestEventStore_Append(t *testing.T) {
 			aggregateID:     "agg-5",
 			expectedVersion: -1,
 			events: []domain.EventEnvelope[any]{
-				createTestEvent("agg-6", "event-1", "test.created", 0),
+				createTestEvent("agg-6", "event-1", "test.created", 1),
 			},
 			wantErr: true,
 			errType: domain.ErrInvalidEvent,
@@ -268,7 +268,7 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			setupStore:  setupMemoryStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			fromVersion: 1,
-			wantCount:   2,
+			wantCount:   3,
 			wantErr:     false,
 		},
 		{
@@ -276,7 +276,7 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			setupStore:  setupMemoryStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			fromVersion: 2,
-			wantCount:   1,
+			wantCount:   2,
 			wantErr:     false,
 		},
 		{
@@ -292,7 +292,7 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			setupStore:  setupGormStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			fromVersion: 1,
-			wantCount:   2,
+			wantCount:   3,
 			wantErr:     false,
 		},
 		{
@@ -300,7 +300,7 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			setupStore:  setupGormStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			fromVersion: 2,
-			wantCount:   1,
+			wantCount:   2,
 			wantErr:     false,
 		},
 		{
@@ -445,7 +445,7 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 			name:        "get version for existing aggregate",
 			setupStore:  setupMemoryStoreWithEvents,
 			aggregateID: "agg-3",
-			wantVersion: 0,
+			wantVersion: 1,
 			wantErr:     false,
 		},
 		{
@@ -459,14 +459,14 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 			name:        "get version for aggregate with multiple events",
 			setupStore:  setupMemoryStoreWithMultipleEvents,
 			aggregateID: "agg-4",
-			wantVersion: 2,
+			wantVersion: 3,
 			wantErr:     false,
 		},
 		{
 			name:        "gorm: get version for existing aggregate",
 			setupStore:  setupGormStoreWithEvents,
 			aggregateID: "agg-3",
-			wantVersion: 0,
+			wantVersion: 1,
 			wantErr:     false,
 		},
 		{
@@ -480,7 +480,7 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 			name:        "gorm: get version for aggregate with multiple events",
 			setupStore:  setupGormStoreWithMultipleEvents,
 			aggregateID: "agg-4",
-			wantVersion: 2,
+			wantVersion: 3,
 			wantErr:     false,
 		},
 	}
@@ -526,7 +526,7 @@ func setupMemoryStoreWithEvents(t *testing.T) domain.EventStore {
 	store := infrastructure.NewMemoryStore()
 	ctx := context.Background()
 
-	event := createTestEvent("agg-3", "event-1", "test.created", 0)
+	event := createTestEvent("agg-3", "event-1", "test.created", 1)
 	if err := store.Append(ctx, "agg-3", -1, event); err != nil {
 		t.Fatalf("failed to setup store: %v", err)
 	}
@@ -540,9 +540,9 @@ func setupMemoryStoreWithMultipleEvents(t *testing.T) domain.EventStore {
 	ctx := context.Background()
 
 	events := []domain.EventEnvelope[any]{
-		createTestEvent("agg-4", "event-1", "test.created", 0),
-		createTestEvent("agg-4", "event-2", "test.updated", 1),
-		createTestEvent("agg-4", "event-3", "test.updated", 2),
+		createTestEvent("agg-4", "event-1", "test.created", 1),
+		createTestEvent("agg-4", "event-2", "test.updated", 2),
+		createTestEvent("agg-4", "event-3", "test.updated", 3),
 	}
 
 	if err := store.Append(ctx, "agg-4", -1, events...); err != nil {
@@ -575,7 +575,7 @@ func TestToAnyEnvelope(t *testing.T) {
 	t.Run("conversion preserves all fields", func(t *testing.T) {
 		t.Parallel()
 
-		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-1", "test.created", 0)
+		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-1", "test.created", 1)
 
 		// Convert to EventEnvelope[any]
 		anyEnvelope := domain.ToAnyEnvelope(original)

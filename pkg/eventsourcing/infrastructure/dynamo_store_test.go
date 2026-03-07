@@ -150,7 +150,7 @@ func setupDynamoStoreWithEvents(t *testing.T) domain.EventStore {
 	store := setupDynamoStore(t)
 	ctx := context.Background()
 
-	event := createTestEvent("agg-3", "event-1", "test.created", 0)
+	event := createTestEvent("agg-3", "event-1", "test.created", 1)
 	if err := store.Append(ctx, "agg-3", -1, event); err != nil {
 		t.Fatalf("failed to setup store: %v", err)
 	}
@@ -163,9 +163,9 @@ func setupDynamoStoreWithMultipleEvents(t *testing.T) domain.EventStore {
 	ctx := context.Background()
 
 	events := []domain.EventEnvelope[any]{
-		createTestEvent("agg-4", "event-1", "test.created", 0),
-		createTestEvent("agg-4", "event-2", "test.updated", 1),
-		createTestEvent("agg-4", "event-3", "test.updated", 2),
+		createTestEvent("agg-4", "event-1", "test.created", 1),
+		createTestEvent("agg-4", "event-2", "test.updated", 2),
+		createTestEvent("agg-4", "event-3", "test.updated", 3),
 	}
 
 	if err := store.Append(ctx, "agg-4", -1, events...); err != nil {
@@ -187,8 +187,8 @@ func TestDynamoStore_Integration(t *testing.T) {
 		aggregateID := "test-aggregate"
 
 		events := []domain.EventEnvelope[any]{
-			createTestEvent(aggregateID, "event-1", "test.created", 0),
-			createTestEvent(aggregateID, "event-2", "test.updated", 1),
+			createTestEvent(aggregateID, "event-1", "test.created", 1),
+			createTestEvent(aggregateID, "event-2", "test.updated", 2),
 		}
 
 		if err := store.Append(ctx, aggregateID, -1, events...); err != nil {
@@ -202,23 +202,23 @@ func TestDynamoStore_Integration(t *testing.T) {
 		if len(retrieved) != 2 {
 			t.Fatalf("expected 2 events, got %d", len(retrieved))
 		}
-		if retrieved[0].SequenceNo != 0 {
-			t.Errorf("expected first event version 0, got %d", retrieved[0].SequenceNo)
+		if retrieved[0].SequenceNo != 1 {
+			t.Errorf("expected first event version 1, got %d", retrieved[0].SequenceNo)
 		}
-		if retrieved[1].SequenceNo != 1 {
-			t.Errorf("expected second event version 1, got %d", retrieved[1].SequenceNo)
+		if retrieved[1].SequenceNo != 2 {
+			t.Errorf("expected second event version 2, got %d", retrieved[1].SequenceNo)
 		}
 
 		version, err := store.GetCurrentVersion(ctx, aggregateID)
 		if err != nil {
 			t.Fatalf("failed to get current version: %v", err)
 		}
-		if version != 1 {
-			t.Errorf("expected current version 1, got %d", version)
+		if version != 2 {
+			t.Errorf("expected current version 2, got %d", version)
 		}
 
-		newEvent := createTestEvent(aggregateID, "event-3", "test.updated", 2)
-		if err := store.Append(ctx, aggregateID, 1, newEvent); err != nil {
+		newEvent := createTestEvent(aggregateID, "event-3", "test.updated", 3)
+		if err := store.Append(ctx, aggregateID, 2, newEvent); err != nil {
 			t.Fatalf("failed to append with version check: %v", err)
 		}
 
@@ -230,12 +230,12 @@ func TestDynamoStore_Integration(t *testing.T) {
 			t.Fatalf("expected 3 events, got %d", len(allEvents))
 		}
 
-		fromVersion1, err := store.GetEventsFromVersion(ctx, aggregateID, 1)
+		fromVersion2, err := store.GetEventsFromVersion(ctx, aggregateID, 2)
 		if err != nil {
 			t.Fatalf("failed to get events from version: %v", err)
 		}
-		if len(fromVersion1) != 2 {
-			t.Fatalf("expected 2 events from version 1, got %d", len(fromVersion1))
+		if len(fromVersion2) != 2 {
+			t.Fatalf("expected 2 events from version 2, got %d", len(fromVersion2))
 		}
 
 		event, err := store.GetEventByID(ctx, "event-2")
@@ -255,7 +255,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 
 		ctx := context.Background()
 
-		event := createTestEvent("agg-3", "event-2", "test.updated", 1)
+		event := createTestEvent("agg-3", "event-2", "test.updated", 2)
 		err := store.Append(ctx, "agg-3", 999, event)
 		if err == nil {
 			t.Fatal("expected concurrency conflict error, got nil")
@@ -273,12 +273,12 @@ func TestDynamoStore_Integration(t *testing.T) {
 
 		ctx := context.Background()
 
-		if err := store.Append(ctx, "agg-1", -1, createTestEvent("agg-1", "event-1", "test.created", 0)); err != nil {
+		if err := store.Append(ctx, "agg-1", -1, createTestEvent("agg-1", "event-1", "test.created", 1)); err != nil {
 			t.Fatalf("failed to append events for agg-1: %v", err)
 		}
 		if err := store.Append(ctx, "agg-2", -1,
-			createTestEvent("agg-2", "event-2", "test.created", 0),
-			createTestEvent("agg-2", "event-3", "test.updated", 1),
+			createTestEvent("agg-2", "event-2", "test.created", 1),
+			createTestEvent("agg-2", "event-3", "test.updated", 2),
 		); err != nil {
 			t.Fatalf("failed to append events for agg-2: %v", err)
 		}
@@ -332,7 +332,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 			EventType:   "test.created",
 			Payload:     payload,
 			Created:     time.Now(),
-			SequenceNo:  0,
+			SequenceNo:  1,
 		}
 
 		if err := store.Append(ctx, "agg-payload", -1, event); err != nil {
@@ -375,7 +375,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 			EventType:   "test.created",
 			Payload:     map[string]any{"test": "data"},
 			Created:     now,
-			SequenceNo:  0,
+			SequenceNo:  1,
 		}
 
 		if err := store.Append(ctx, "agg-ts", -1, event); err != nil {
@@ -405,7 +405,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 			EventType:   "test.created",
 			Payload:     map[string]any{"test": "data"},
 			Created:     time.Now(),
-			SequenceNo:  0,
+			SequenceNo:  1,
 			Metadata: map[string]any{
 				"correlation_id": "corr-123",
 				"user_id":        "user-456",
@@ -444,7 +444,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		defer store.Close()
 
 		ctx := context.Background()
-		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-struct", "test.created", 0)
+		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-struct", "test.created", 1)
 		anyEnvelope := domain.ToAnyEnvelope(original)
 
 		if err := store.Append(ctx, "agg-struct", -1, anyEnvelope); err != nil {
@@ -482,10 +482,10 @@ func TestDynamoStore_GetEventsRange(t *testing.T) {
 		aggregateID := "range-test"
 
 		events := []domain.EventEnvelope[any]{
-			createTestEvent(aggregateID, "event-1", "test.created", 0),
-			createTestEvent(aggregateID, "event-2", "test.updated", 1),
-			createTestEvent(aggregateID, "event-3", "test.updated", 2),
-			createTestEvent(aggregateID, "event-4", "test.updated", 3),
+			createTestEvent(aggregateID, "event-1", "test.created", 1),
+			createTestEvent(aggregateID, "event-2", "test.updated", 2),
+			createTestEvent(aggregateID, "event-3", "test.updated", 3),
+			createTestEvent(aggregateID, "event-4", "test.updated", 4),
 		}
 
 		if err := store.Append(ctx, aggregateID, -1, events...); err != nil {
@@ -520,8 +520,8 @@ func TestDynamoStore_GetEventsRange(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get events range: %v", err)
 		}
-		if len(allFromVersion2) != 2 {
-			t.Fatalf("expected 2 events from version 2 onwards, got %d", len(allFromVersion2))
+		if len(allFromVersion2) != 3 {
+			t.Fatalf("expected 3 events from version 2 onwards, got %d", len(allFromVersion2))
 		}
 	})
 }

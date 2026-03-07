@@ -35,19 +35,19 @@ func TestNewBaseEntity(t *testing.T) {
 			name:           "valid aggregate ID",
 			aggregateID:    "agg-123",
 			wantID:         "agg-123",
-			wantSequenceNo: -1, // Starts at -1 so first event is 0
+			wantSequenceNo: 0, // Starts at 0; first event gets sequence 1
 		},
 		{
 			name:           "empty aggregate ID",
 			aggregateID:    "",
 			wantID:         "",
-			wantSequenceNo: -1,
+			wantSequenceNo: 0,
 		},
 		{
 			name:           "long aggregate ID",
 			aggregateID:    "very-long-aggregate-id-with-many-characters",
 			wantID:         "very-long-aggregate-id-with-many-characters",
-			wantSequenceNo: -1,
+			wantSequenceNo: 0,
 		},
 	}
 
@@ -85,8 +85,8 @@ func TestBaseEntity_GetSequenceNo(t *testing.T) {
 	t.Parallel()
 
 	entity := NewBaseEntity("test-id")
-	if got := entity.GetSequenceNo(); got != -1 {
-		t.Errorf("GetSequenceNo() = %v, want -1", got)
+	if got := entity.GetSequenceNo(); got != 0 {
+		t.Errorf("GetSequenceNo() = %v, want 0", got)
 	}
 }
 
@@ -172,8 +172,8 @@ func TestBaseEntity_ClearUncommittedEvents(t *testing.T) {
 	}
 
 	// SequenceNo should remain unchanged
-	if got := entity.GetSequenceNo(); got != 2 {
-		t.Errorf("GetSequenceNo() after clear = %v, want 2", got)
+	if got := entity.GetSequenceNo(); got != 3 {
+		t.Errorf("GetSequenceNo() after clear = %v, want 3", got)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestBaseEntity_ApplyEvent(t *testing.T) {
 	t.Parallel()
 
 	// Create a shared event for the duplicate event test case — same event (same ID) applied twice
-	duplicateTestEvent := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0))
+	duplicateTestEvent := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1))
 
 	tests := []struct {
 		name           string
@@ -194,27 +194,27 @@ func TestBaseEntity_ApplyEvent(t *testing.T) {
 	}{
 		{
 			name:           "happy path - first event",
-			event:          toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0)),
-			ctx:            context.Background(),
-			wantSequenceNo: 0,
-		},
-		{
-			name: "happy path - sequential events",
-			setup: func(e *BaseEntity) error {
-				event1 := toAnyEvent(domain.NewEventEnvelope("payload1", "test-id", "test.event1", 0))
-				return e.ApplyEvent(context.Background(), event1)
-			},
-			event:          toAnyEvent(domain.NewEventEnvelope("payload2", "test-id", "test.event2", 1)),
+			event:          toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1)),
 			ctx:            context.Background(),
 			wantSequenceNo: 1,
 		},
 		{
+			name: "happy path - sequential events",
+			setup: func(e *BaseEntity) error {
+				event1 := toAnyEvent(domain.NewEventEnvelope("payload1", "test-id", "test.event1", 1))
+				return e.ApplyEvent(context.Background(), event1)
+			},
+			event:          toAnyEvent(domain.NewEventEnvelope("payload2", "test-id", "test.event2", 2)),
+			ctx:            context.Background(),
+			wantSequenceNo: 2,
+		},
+		{
 			name:           "wrong aggregate ID",
-			event:          toAnyEvent(domain.NewEventEnvelope("payload", "wrong-id", "test.event", 0)),
+			event:          toAnyEvent(domain.NewEventEnvelope("payload", "wrong-id", "test.event", 1)),
 			ctx:            context.Background(),
 			wantErr:        true,
 			wantErrType:    ErrWrongAggregate,
-			wantSequenceNo: -1,
+			wantSequenceNo: 0,
 		},
 		{
 			name: "duplicate event",
@@ -225,26 +225,26 @@ func TestBaseEntity_ApplyEvent(t *testing.T) {
 			ctx:            context.Background(),
 			wantErr:        true,
 			wantErrType:    ErrDuplicateEvent,
-			wantSequenceNo: 0,
+			wantSequenceNo: 1,
 		},
 		{
 			name:           "context cancelled",
-			event:          toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0)),
+			event:          toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1)),
 			ctx:            func() context.Context { ctx, cancel := context.WithCancel(context.Background()); cancel(); return ctx }(),
 			wantErr:        true,
-			wantSequenceNo: -1,
+			wantSequenceNo: 0,
 		},
 		{
 			name:           "context timeout",
-			event:          toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0)),
+			event:          toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1)),
 			ctx:            func() context.Context { ctx, _ := context.WithTimeout(context.Background(), 0); return ctx }(),
 			wantErr:        true,
-			wantSequenceNo: -1,
+			wantSequenceNo: 0,
 		},
 		{
 			name: "invalid event sequence number",
 			setup: func(e *BaseEntity) error {
-				event1 := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0))
+				event1 := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1))
 				return e.ApplyEvent(context.Background(), event1)
 			},
 			event: func() domain.EventEnvelope[any] {
@@ -254,20 +254,20 @@ func TestBaseEntity_ApplyEvent(t *testing.T) {
 			ctx:            context.Background(),
 			wantErr:        true,
 			wantErrType:    ErrInvalidEventSequenceNo,
-			wantSequenceNo: 0,
+			wantSequenceNo: 1,
 		},
 		{
 			name: "event with correct sequence number",
 			setup: func(e *BaseEntity) error {
-				event1 := toAnyEvent(domain.NewEventEnvelope("payload1", "test-id", "test.event1", 0))
+				event1 := toAnyEvent(domain.NewEventEnvelope("payload1", "test-id", "test.event1", 1))
 				return e.ApplyEvent(context.Background(), event1)
 			},
 			event: func() domain.EventEnvelope[any] {
-				evt := toAnyEvent(domain.NewEventEnvelope("payload2", "test-id", "test.event2", 1))
+				evt := toAnyEvent(domain.NewEventEnvelope("payload2", "test-id", "test.event2", 2))
 				return evt
 			}(),
 			ctx:            context.Background(),
-			wantSequenceNo: 1,
+			wantSequenceNo: 2,
 		},
 	}
 
@@ -321,7 +321,7 @@ func TestBaseEntity_RecordEvent(t *testing.T) {
 			name:           "happy path - first event",
 			payload:        "payload",
 			eventType:      "test.event",
-			wantSequenceNo: 0, // First event has sequenceNo 0
+			wantSequenceNo: 1, // First event has sequenceNo 1
 			wantEventCount: 1,
 		},
 		{
@@ -331,7 +331,7 @@ func TestBaseEntity_RecordEvent(t *testing.T) {
 			},
 			payload:        "payload2",
 			eventType:      "test.event2",
-			wantSequenceNo: 1, // Second event has sequenceNo 1
+			wantSequenceNo: 2, // Second event has sequenceNo 2
 			wantEventCount: 2,
 		},
 		{
@@ -342,21 +342,21 @@ func TestBaseEntity_RecordEvent(t *testing.T) {
 			payload:        "payload",
 			eventType:      "test.event",
 			wantErr:        false, // Different event IDs, so not a duplicate
-			wantSequenceNo: 1,     // Second event has sequenceNo 1
+			wantSequenceNo: 2,     // Second event has sequenceNo 2
 			wantEventCount: 2,
 		},
 		{
 			name:           "event sequence number is set automatically",
 			payload:        "payload",
 			eventType:      "test.event",
-			wantSequenceNo: 0, // First event has sequenceNo 0
+			wantSequenceNo: 1, // First event has sequenceNo 1
 			wantEventCount: 1,
 		},
 		{
 			name:           "struct payload",
 			payload:        map[string]interface{}{"key": "value"},
 			eventType:      "test.event",
-			wantSequenceNo: 0, // First event has sequenceNo 0
+			wantSequenceNo: 1, // First event has sequenceNo 1
 			wantEventCount: 1,
 		},
 	}
@@ -419,15 +419,15 @@ func TestBaseEntity_Idempotency(t *testing.T) {
 	t.Parallel()
 
 	entity := NewBaseEntity("test-id")
-	event := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0))
+	event := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1))
 
 	// Apply event first time
 	if err := entity.ApplyEvent(context.Background(), event); err != nil {
 		t.Fatalf("ApplyEvent() first time error = %v", err)
 	}
 
-	if got := entity.GetSequenceNo(); got != 0 {
-		t.Errorf("GetSequenceNo() after first apply = %v, want 0", got)
+	if got := entity.GetSequenceNo(); got != 1 {
+		t.Errorf("GetSequenceNo() after first apply = %v, want 1", got)
 	}
 
 	// Try to apply same event again (should fail)
@@ -440,8 +440,8 @@ func TestBaseEntity_Idempotency(t *testing.T) {
 	}
 
 	// SequenceNo should not have changed
-	if got := entity.GetSequenceNo(); got != 0 {
-		t.Errorf("GetSequenceNo() after duplicate apply = %v, want 0", got)
+	if got := entity.GetSequenceNo(); got != 1 {
+		t.Errorf("GetSequenceNo() after duplicate apply = %v, want 1", got)
 	}
 }
 
@@ -487,10 +487,10 @@ func TestBaseEntity_Concurrency(t *testing.T) {
 	events := entity.GetUncommittedEvents()
 	sequenceNo := entity.GetSequenceNo()
 
-	// SequenceNo should be >= (number of events - 1) since sequenceNo is 0-indexed
+	// SequenceNo should be >= number of events since sequenceNo is 1-indexed
 	// Since we're using ksuid for event IDs, duplicates should be rare but possible
-	if sequenceNo < len(events)-1 {
-		t.Errorf("SequenceNo (%d) should be >= number of events - 1 (%d)", sequenceNo, len(events)-1)
+	if sequenceNo < len(events) {
+		t.Errorf("SequenceNo (%d) should be >= number of events (%d)", sequenceNo, len(events))
 	}
 
 	// Verify all events belong to the correct aggregate
@@ -527,8 +527,8 @@ func TestBaseEntity_ConcurrentReads(t *testing.T) {
 			if id != "test-id" {
 				t.Errorf("GetID() = %v, want test-id", id)
 			}
-			if version != 9 {
-				t.Errorf("GetSequenceNo() = %v, want 9", version)
+			if version != 10 {
+				t.Errorf("GetSequenceNo() = %v, want 10", version)
 			}
 			if len(events) != 10 {
 				t.Errorf("GetUncommittedEvents() length = %v, want 10", len(events))
@@ -560,8 +560,8 @@ func TestBaseEntity_LargeEventList(t *testing.T) {
 		t.Errorf("GetUncommittedEvents() length = %v, want %v", len(events), numEvents)
 	}
 
-	if got := entity.GetSequenceNo(); got != numEvents-1 {
-		t.Errorf("GetSequenceNo() = %v, want %v", got, numEvents-1)
+	if got := entity.GetSequenceNo(); got != numEvents {
+		t.Errorf("GetSequenceNo() = %v, want %v", got, numEvents)
 	}
 }
 
@@ -578,7 +578,7 @@ func TestBaseEntity_EventVersionTracking(t *testing.T) {
 
 		events := entity.GetUncommittedEvents()
 		lastEvent := events[len(events)-1]
-		expectedSeqNo := i
+		expectedSeqNo := i + 1
 		if lastEvent.SequenceNo != expectedSeqNo {
 			t.Errorf("Event %d sequenceNo = %v, want %v", i+1, lastEvent.SequenceNo, expectedSeqNo)
 		}
@@ -598,15 +598,15 @@ func TestBaseEntity_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	event := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0))
+	event := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1))
 	err := entity.ApplyEvent(ctx, event)
 
 	if err == nil {
 		t.Error("ApplyEvent() with cancelled context should return error")
 	}
 
-	if entity.GetSequenceNo() != -1 {
-		t.Errorf("GetSequenceNo() after cancelled context = %v, want -1", entity.GetSequenceNo())
+	if entity.GetSequenceNo() != 0 {
+		t.Errorf("GetSequenceNo() after cancelled context = %v, want 0", entity.GetSequenceNo())
 	}
 }
 
@@ -622,15 +622,15 @@ func TestBaseEntity_ContextTimeout(t *testing.T) {
 	// Wait a tiny bit to ensure timeout
 	time.Sleep(1 * time.Millisecond)
 
-	event := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 0))
+	event := toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1))
 	err := entity.ApplyEvent(ctx, event)
 
 	if err == nil {
 		t.Error("ApplyEvent() with timed out context should return error")
 	}
 
-	if entity.GetSequenceNo() != -1 {
-		t.Errorf("GetSequenceNo() after timeout = %v, want -1", entity.GetSequenceNo())
+	if entity.GetSequenceNo() != 0 {
+		t.Errorf("GetSequenceNo() after timeout = %v, want 0", entity.GetSequenceNo())
 	}
 }
 
@@ -643,8 +643,8 @@ func TestBaseEntity_EmptyAggregateID(t *testing.T) {
 		t.Errorf("RecordEvent() with empty aggregate ID error = %v", err)
 	}
 
-	if entity.GetSequenceNo() != 0 {
-		t.Errorf("GetSequenceNo() = %v, want 0", entity.GetSequenceNo())
+	if entity.GetSequenceNo() != 1 {
+		t.Errorf("GetSequenceNo() = %v, want 1", entity.GetSequenceNo())
 	}
 }
 
@@ -652,15 +652,15 @@ func TestBaseEntity_ApplyThenRecord(t *testing.T) {
 	t.Parallel()
 
 	entity := NewBaseEntity("test-id")
-	event1 := toAnyEvent(domain.NewEventEnvelope("payload1", "test-id", "test.event1", 0))
+	event1 := toAnyEvent(domain.NewEventEnvelope("payload1", "test-id", "test.event1", 1))
 
 	// Apply first event (replay scenario)
 	if err := entity.ApplyEvent(context.Background(), event1); err != nil {
 		t.Fatalf("ApplyEvent() error = %v", err)
 	}
 
-	if entity.GetSequenceNo() != 0 {
-		t.Errorf("GetSequenceNo() after ApplyEvent = %v, want 0", entity.GetSequenceNo())
+	if entity.GetSequenceNo() != 1 {
+		t.Errorf("GetSequenceNo() after ApplyEvent = %v, want 1", entity.GetSequenceNo())
 	}
 
 	// Record second event (new event)
@@ -668,8 +668,8 @@ func TestBaseEntity_ApplyThenRecord(t *testing.T) {
 		t.Fatalf("RecordEvent() error = %v", err)
 	}
 
-	if entity.GetSequenceNo() != 1 {
-		t.Errorf("GetSequenceNo() after RecordEvent = %v, want 1", entity.GetSequenceNo())
+	if entity.GetSequenceNo() != 2 {
+		t.Errorf("GetSequenceNo() after RecordEvent = %v, want 2", entity.GetSequenceNo())
 	}
 
 	// Only the recorded event should be in uncommitted events
