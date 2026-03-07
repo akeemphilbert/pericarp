@@ -141,7 +141,7 @@ The FileStore creates the directory if it doesn't exist and loads existing event
 
 ```go
 // Marshal a typed envelope to JSON
-envelope := domain.NewEventEnvelope(myPayload, "agg-1", "user.created", 0)
+envelope := domain.NewEventEnvelope(myPayload, "agg-1", "user.created", 1)
 data, err := domain.MarshalEventToJSON(envelope)
 
 // Unmarshal back to a typed envelope
