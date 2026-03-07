@@ -44,6 +44,14 @@ func NewBaseEntity(aggregateID string) *BaseEntity
 
 Creates a new BaseEntity with the given aggregate ID, starting at sequence number 0.
 
+#### `RestoreBaseEntity`
+
+```go
+func RestoreBaseEntity(aggregateID string, sequenceNo int) *BaseEntity
+```
+
+Creates a BaseEntity with a known sequence number, for use when loading an entity from a projection or read model. The `sequenceNo` should match the entity's current version in the event store. Subsequent `RecordEvent` calls will produce events starting at `sequenceNo + 1`.
+
 ### Methods on `BaseEntity`
 
 #### `GetID`

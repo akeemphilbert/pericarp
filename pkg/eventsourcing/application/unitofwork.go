@@ -12,7 +12,9 @@ import (
 // It provides atomic persistence of uncommitted events from tracked entities.
 type UnitOfWork interface {
 	// Track registers one or more entities to be included in the unit of work.
-	// The entity's expected version (sequence number) is captured at this time for optimistic concurrency control.
+	// The expected version for optimistic concurrency is computed by subtracting
+	// uncommitted events from the current sequence number, so Track works correctly
+	// regardless of whether RecordEvent was called before or after Track.
 	// If any entity is invalid or already tracked, an error is returned and no entities are tracked.
 	Track(entities ...domain.Entity) error
 
@@ -88,7 +90,9 @@ func (uow *SimpleUnitOfWork) Track(entities ...domain.Entity) error {
 	for _, entity := range entities {
 		aggregateID := entity.GetID()
 		uow.entities[aggregateID] = entity
-		uow.expectedVersions[aggregateID] = entity.GetSequenceNo()
+		// Compute the version before any uncommitted events, so Track works
+		// regardless of whether RecordEvent was called before or after Track.
+		uow.expectedVersions[aggregateID] = entity.GetSequenceNo() - len(entity.GetUncommittedEvents())
 	}
 
 	return nil

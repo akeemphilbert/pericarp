@@ -559,6 +559,88 @@ func TestConcurrentUnitOfWork(t *testing.T) {
 	})
 }
 
+func TestCommit_RecordBeforeTrack(t *testing.T) {
+	t.Parallel()
+
+	t.Run("new entity records event before track", func(t *testing.T) {
+		t.Parallel()
+		eventStore := infrastructure.NewMemoryStore()
+		uow := application.NewSimpleUnitOfWork(eventStore, nil)
+
+		entity := NewTestEntity("entity-1", "Test", "test@example.com")
+
+		// Record event BEFORE tracking — this is the pattern finexity uses
+		if err := entity.RecordEvent(map[string]string{"name": "Test"}, "test.created"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+
+		// Track after recording — expectedVersion should be 0 (new aggregate)
+		if err := uow.Track(entity); err != nil {
+			t.Fatalf("Failed to track entity: %v", err)
+		}
+
+		ctx := context.Background()
+		if err := uow.Commit(ctx); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+
+		events, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events: %v", err)
+		}
+		if len(events) != 1 {
+			t.Errorf("Expected 1 event, got %d", len(events))
+		}
+	})
+
+	t.Run("restored entity records event before track", func(t *testing.T) {
+		t.Parallel()
+		eventStore := infrastructure.NewMemoryStore()
+		ctx := context.Background()
+
+		// Pre-populate store with an existing event at sequence 1
+		initialEvent := domain.NewEventEnvelope(
+			map[string]string{"name": "Test"},
+			"entity-1", "test.created", 1,
+		)
+		if err := eventStore.Append(ctx, "entity-1", 0, domain.ToAnyEnvelope(initialEvent)); err != nil {
+			t.Fatalf("Failed to seed store: %v", err)
+		}
+
+		// Restore entity from projection with version 1
+		entity := &TestEntity{
+			BaseEntity: ddd.RestoreBaseEntity("entity-1", 1),
+			name:       "Test",
+		}
+
+		// Record event BEFORE tracking
+		if err := entity.RecordEvent(map[string]string{"name": "Updated"}, "test.updated"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+
+		// Track after recording — expectedVersion should be 1
+		uow := application.NewSimpleUnitOfWork(eventStore, nil)
+		if err := uow.Track(entity); err != nil {
+			t.Fatalf("Failed to track entity: %v", err)
+		}
+
+		if err := uow.Commit(ctx); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+
+		events, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events: %v", err)
+		}
+		if len(events) != 2 {
+			t.Errorf("Expected 2 events, got %d", len(events))
+		}
+		if events[1].SequenceNo != 2 {
+			t.Errorf("Expected second event at sequence 2, got %d", events[1].SequenceNo)
+		}
+	})
+}
+
 // failingEventStore is a test helper that fails on Append
 type failingEventStore struct {
 	*infrastructure.MemoryStore

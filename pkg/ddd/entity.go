@@ -51,6 +51,18 @@ func NewBaseEntity(aggregateID string) *BaseEntity {
 	}
 }
 
+// RestoreBaseEntity creates a BaseEntity with a known sequence number,
+// for use when loading an entity from a projection or read model.
+// The sequenceNo should match the current version in the event store.
+func RestoreBaseEntity(aggregateID string, sequenceNo int) *BaseEntity {
+	return &BaseEntity{
+		aggregateID:       aggregateID,
+		sequenceNo:        sequenceNo,
+		uncommittedEvents: make([]domain.EventEnvelope[any], 0),
+		appliedEventIDs:   make(map[string]bool),
+	}
+}
+
 // GetID returns the aggregate ID.
 func (e *BaseEntity) GetID() string {
 	e.mu.RLock()

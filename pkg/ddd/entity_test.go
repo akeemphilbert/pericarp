@@ -72,6 +72,62 @@ func TestNewBaseEntity(t *testing.T) {
 	}
 }
 
+func TestRestoreBaseEntity(t *testing.T) {
+	t.Parallel()
+
+	t.Run("restores with correct sequence number", func(t *testing.T) {
+		t.Parallel()
+
+		entity := RestoreBaseEntity("agg-1", 5)
+
+		if got := entity.GetID(); got != "agg-1" {
+			t.Errorf("GetID() = %v, want agg-1", got)
+		}
+		if got := entity.GetSequenceNo(); got != 5 {
+			t.Errorf("GetSequenceNo() = %v, want 5", got)
+		}
+		if events := entity.GetUncommittedEvents(); len(events) != 0 {
+			t.Errorf("GetUncommittedEvents() length = %v, want 0", len(events))
+		}
+	})
+
+	t.Run("RecordEvent produces correct sequence after restore", func(t *testing.T) {
+		t.Parallel()
+
+		entity := RestoreBaseEntity("agg-1", 3)
+
+		if err := entity.RecordEvent("payload", "test.updated"); err != nil {
+			t.Fatalf("RecordEvent() error = %v", err)
+		}
+
+		events := entity.GetUncommittedEvents()
+		if len(events) != 1 {
+			t.Fatalf("expected 1 uncommitted event, got %d", len(events))
+		}
+		if events[0].SequenceNo != 4 {
+			t.Errorf("event SequenceNo = %d, want 4", events[0].SequenceNo)
+		}
+		if entity.GetSequenceNo() != 4 {
+			t.Errorf("GetSequenceNo() = %d, want 4", entity.GetSequenceNo())
+		}
+	})
+
+	t.Run("restore at zero behaves like new entity", func(t *testing.T) {
+		t.Parallel()
+
+		entity := RestoreBaseEntity("agg-1", 0)
+
+		if err := entity.RecordEvent("payload", "test.created"); err != nil {
+			t.Fatalf("RecordEvent() error = %v", err)
+		}
+
+		events := entity.GetUncommittedEvents()
+		if events[0].SequenceNo != 1 {
+			t.Errorf("event SequenceNo = %d, want 1", events[0].SequenceNo)
+		}
+	})
+}
+
 func TestBaseEntity_GetID(t *testing.T) {
 	t.Parallel()
 
