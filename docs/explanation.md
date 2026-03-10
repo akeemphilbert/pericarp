@@ -191,7 +191,7 @@ The dispatchers specifically release the registry lock before invoking handlers/
 
 Pericarp's authentication module is built around the Backend-for-Frontend pattern, where the backend serves as a secure proxy between the browser and identity providers. This is a deliberate architectural choice over alternatives like implicit flow or client-side token handling.
 
-The key insight: **the browser never sees tokens.** The backend initiates the OAuth flow, exchanges the authorization code for tokens server-to-server, stores tokens encrypted server-side, and gives the browser only an opaque session ID in an `HttpOnly` cookie. Even if an XSS vulnerability exists in the frontend, there are no tokens to steal.
+The key insight: **the browser never sees tokens.** The backend initiates the OAuth flow, exchanges the authorization code for tokens server-to-server, stores tokens server-side (encryption at rest is the responsibility of the `TokenStore` implementation), and gives the browser only an opaque session ID in an `HttpOnly` cookie. Even if an XSS vulnerability exists in the frontend, there are no tokens to steal.
 
 ### Why PKCE for Authorization Code Flow
 

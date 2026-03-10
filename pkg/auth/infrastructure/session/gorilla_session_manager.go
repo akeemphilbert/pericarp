@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,6 +30,7 @@ const (
 	keyProvider     = "provider"
 	keyRedirectURI  = "redirect_uri"
 	keyFlowCreated  = "flow_created_at"
+	keyFlowMetadata = "flow_metadata"
 )
 
 var (
@@ -151,6 +153,14 @@ func (m *GorillaSessionManager) SetFlowData(w http.ResponseWriter, r *http.Reque
 	sess.Values[keyRedirectURI] = data.RedirectURI
 	sess.Values[keyFlowCreated] = data.CreatedAt.Unix()
 
+	if len(data.Metadata) > 0 {
+		raw, err := json.Marshal(data.Metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal flow metadata: %w", err)
+		}
+		sess.Values[keyFlowMetadata] = string(raw)
+	}
+
 	return sess.Save(r, w)
 }
 
@@ -173,6 +183,13 @@ func (m *GorillaSessionManager) GetFlowData(w http.ResponseWriter, r *http.Reque
 	redirectURI, _ := sess.Values[keyRedirectURI].(string)
 	flowCreated, _ := sess.Values[keyFlowCreated].(int64)
 
+	var metadata map[string]string
+	if raw, ok := sess.Values[keyFlowMetadata].(string); ok && raw != "" {
+		if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal flow metadata: %w", err)
+		}
+	}
+
 	data := &FlowData{
 		State:        state,
 		CodeVerifier: codeVerifier,
@@ -180,6 +197,7 @@ func (m *GorillaSessionManager) GetFlowData(w http.ResponseWriter, r *http.Reque
 		Provider:     provider,
 		RedirectURI:  redirectURI,
 		CreatedAt:    time.Unix(flowCreated, 0),
+		Metadata:     metadata,
 	}
 
 	// Clear flow data after retrieval (one-time use)

@@ -90,7 +90,7 @@ func (m *mockAgentRepo) Save(ctx context.Context, agent *entities.Agent) error {
 func (m *mockAgentRepo) FindByID(_ context.Context, id string) (*entities.Agent, error) {
 	agent, ok := m.agents[id]
 	if !ok {
-		return nil, errors.New("agent not found")
+		return nil, nil // matches GORM repo: not-found returns (nil, nil)
 	}
 	return agent, nil
 }
@@ -121,7 +121,7 @@ func (m *mockCredentialRepo) Save(_ context.Context, credential *entities.Creden
 func (m *mockCredentialRepo) FindByID(_ context.Context, id string) (*entities.Credential, error) {
 	cred, ok := m.credentials[id]
 	if !ok {
-		return nil, errors.New("credential not found")
+		return nil, nil // matches GORM repo: not-found returns (nil, nil)
 	}
 	return cred, nil
 }
@@ -130,7 +130,7 @@ func (m *mockCredentialRepo) FindByProvider(_ context.Context, provider, provide
 	key := provider + ":" + providerUserID
 	cred, ok := m.byProvider[key]
 	if !ok {
-		return nil, errors.New("credential not found")
+		return nil, nil // matches GORM repo: not-found returns (nil, nil)
 	}
 	return cred, nil
 }
@@ -159,7 +159,7 @@ func (m *mockSessionRepo) Save(_ context.Context, session *entities.AuthSession)
 func (m *mockSessionRepo) FindByID(_ context.Context, id string) (*entities.AuthSession, error) {
 	session, ok := m.sessions[id]
 	if !ok {
-		return nil, errors.New("session not found")
+		return nil, nil // matches GORM repo: not-found returns (nil, nil)
 	}
 	return session, nil
 }
@@ -277,8 +277,8 @@ func newTestService() (*application.DefaultAuthenticationService, *testDeps) {
 		deps.agents,
 		deps.credentials,
 		deps.sessions,
-		deps.tokens,
-		deps.authz,
+		application.WithTokenStore(deps.tokens),
+		application.WithAuthorizationChecker(deps.authz),
 	)
 
 	return svc, deps
@@ -375,7 +375,7 @@ func TestDefaultAuthenticationService_ExchangeCode_ExchangeFails(t *testing.T) {
 			},
 		},
 	}
-	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockTokenStore(), nil)
+	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), application.WithTokenStore(newMockTokenStore()))
 
 	_, err := svc.ExchangeCode(ctx, "auth-code", "code-verifier", "google", "https://example.com/callback")
 	if err == nil {
@@ -786,7 +786,7 @@ func TestDefaultAuthenticationService_RefreshTokens_ProviderFails(t *testing.T) 
 		expiresAt:    time.Now().Add(-1 * time.Hour),
 	}
 
-	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), credentials, newMockSessionRepo(), tokens, nil)
+	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), credentials, newMockSessionRepo(), application.WithTokenStore(tokens))
 
 	_, err := svc.RefreshTokens(ctx, "cred-1")
 	if err == nil {
@@ -811,8 +811,8 @@ func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 		newMockAgentRepo(),
 		newMockCredentialRepo(),
 		sessions,
-		newMockTokenStore(),
-		nil, // nil authorization checker
+		application.WithTokenStore(newMockTokenStore()),
+		// no authorization checker — should default to nil
 	)
 
 	info, err := svc.ValidateSession(ctx, "sess-1")

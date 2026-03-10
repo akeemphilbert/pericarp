@@ -366,7 +366,7 @@ func (g *GoogleProvider) AuthCodeURL(state, codeChallenge, nonce, redirectURI st
 
 ### 8.2 Create the Authentication Service
 
-Wire the provider registry and repositories into the `DefaultAuthenticationService`:
+Wire the provider registry and repositories into the `DefaultAuthenticationService` using functional options:
 
 ```go
 import (
@@ -378,15 +378,19 @@ providers := authapp.OAuthProviderRegistry{
     "github": &GitHubProvider{...},
 }
 
+// Required parameters are positional; optional dependencies use functional options.
 authService := authapp.NewDefaultAuthenticationService(
     providers,
     agentRepo,       // repositories.AgentRepository
     credentialRepo,  // repositories.CredentialRepository
     sessionRepo,     // repositories.AuthSessionRepository
-    tokenStore,      // authapp.TokenStore
-    authzChecker,    // authapp.AuthorizationChecker (or nil)
+    authapp.WithTokenStore(tokenStore),              // optional: server-side token persistence
+    authapp.WithAuthorizationChecker(authzChecker),  // optional: permission resolution
+    authapp.WithLogger(myLogger),                    // optional: structured logging
 )
 ```
+
+All options have safe defaults: a no-op token store, no authorization checker (empty permissions), and a no-op logger.
 
 ### 8.3 Implement the Login Handler
 
@@ -593,8 +597,8 @@ authService := authapp.NewDefaultAuthenticationService(
     agentRepo,
     credentialRepo,
     sessionRepo,
-    tokenStore,
-    checker, // CasbinAuthorizationChecker implements AuthorizationChecker
+    authapp.WithTokenStore(tokenStore),
+    authapp.WithAuthorizationChecker(checker), // CasbinAuthorizationChecker implements AuthorizationChecker
 )
 
 // When validating a session, permissions are resolved automatically
@@ -602,7 +606,7 @@ info, err := authService.ValidateSession(ctx, sessionID)
 // info.Permissions now contains the agent's effective permissions
 ```
 
-If you pass `nil` instead of a checker, `ValidateSession` skips permission resolution and returns an empty permissions slice.
+If you omit `WithAuthorizationChecker`, `ValidateSession` skips permission resolution and returns an empty permissions slice.
 
 ## Next Steps
 

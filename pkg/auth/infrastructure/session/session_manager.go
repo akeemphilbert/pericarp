@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// SessionData represents the data stored in an HTTP session cookie.
-// Only the opaque session ID is stored in the cookie; all real data
-// lives in the domain AuthSession aggregate.
+// SessionData holds the data associated with an HTTP session.
+// Implementations of SessionManager determine which fields are persisted
+// in the cookie versus looked up from the domain layer.
 type SessionData struct {
 	// SessionID maps to the AuthSession aggregate ID.
 	SessionID string
@@ -36,6 +36,9 @@ type FlowData struct {
 	RedirectURI string
 	// CreatedAt is when the flow was initiated.
 	CreatedAt time.Time
+	// Metadata holds application-specific key-value pairs that survive the
+	// OAuth round-trip (e.g., post-login redirect path). Nil-safe.
+	Metadata map[string]string
 }
 
 // SessionManager defines the interface for HTTP session management.

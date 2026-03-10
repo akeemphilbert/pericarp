@@ -23,7 +23,7 @@ type PaginatedResponse[T any] struct {
 
 // AgentRepository defines the interface for Agent aggregate persistence.
 type AgentRepository interface {
-	// Save persists the Agent aggregate and its uncommitted events.
+	// Save persists the Agent aggregate state.
 	Save(ctx context.Context, agent *entities.Agent) error
 
 	// FindByID retrieves an Agent aggregate by its ID.
@@ -35,7 +35,7 @@ type AgentRepository interface {
 
 // PolicyRepository defines the interface for Policy aggregate persistence.
 type PolicyRepository interface {
-	// Save persists the Policy aggregate and its uncommitted events.
+	// Save persists the Policy aggregate state.
 	Save(ctx context.Context, policy *entities.Policy) error
 
 	// FindByID retrieves a Policy aggregate by its ID.
@@ -50,7 +50,7 @@ type PolicyRepository interface {
 
 // RoleRepository defines the interface for Role aggregate persistence.
 type RoleRepository interface {
-	// Save persists the Role aggregate and its uncommitted events.
+	// Save persists the Role aggregate state.
 	Save(ctx context.Context, role *entities.Role) error
 
 	// FindByID retrieves a Role aggregate by its ID.
@@ -62,7 +62,7 @@ type RoleRepository interface {
 
 // AccountRepository defines the interface for Account aggregate persistence.
 type AccountRepository interface {
-	// Save persists the Account aggregate and its uncommitted events.
+	// Save persists the Account aggregate state.
 	Save(ctx context.Context, account *entities.Account) error
 
 	// FindByID retrieves an Account aggregate by its ID.
@@ -77,7 +77,7 @@ type AccountRepository interface {
 
 // CredentialRepository defines the interface for Credential aggregate persistence.
 type CredentialRepository interface {
-	// Save persists the Credential aggregate and its uncommitted events.
+	// Save persists the Credential aggregate state.
 	Save(ctx context.Context, credential *entities.Credential) error
 
 	// FindByID retrieves a Credential aggregate by its ID.
@@ -95,7 +95,7 @@ type CredentialRepository interface {
 
 // AuthSessionRepository defines the interface for AuthSession aggregate persistence.
 type AuthSessionRepository interface {
-	// Save persists the AuthSession aggregate and its uncommitted events.
+	// Save persists the AuthSession aggregate state.
 	Save(ctx context.Context, session *entities.AuthSession) error
 
 	// FindByID retrieves an AuthSession aggregate by its ID.

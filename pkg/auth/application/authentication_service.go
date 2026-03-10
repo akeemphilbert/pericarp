@@ -82,7 +82,7 @@ type OAuthProvider interface {
 	ValidateIDToken(ctx context.Context, idToken string, nonce string) (*UserInfo, error)
 }
 
-// TokenStore defines the interface for encrypted server-side token storage.
+// TokenStore defines the interface for server-side token storage.
 type TokenStore interface {
 	// StoreTokens stores OAuth tokens for a credential.
 	StoreTokens(ctx context.Context, credentialID string, accessToken, refreshToken, idToken string, expiresAt time.Time) error
@@ -131,7 +131,7 @@ type AuthenticationService interface {
 type OAuthProviderRegistry map[string]OAuthProvider
 
 // DefaultAuthenticationService implements AuthenticationService using OAuth providers
-// and the domain's event-sourced aggregates.
+// and domain aggregates.
 type DefaultAuthenticationService struct {
 	providers     OAuthProviderRegistry
 	agents        repositories.AgentRepository
@@ -139,10 +139,38 @@ type DefaultAuthenticationService struct {
 	sessions      repositories.AuthSessionRepository
 	tokens        TokenStore
 	authorization AuthorizationChecker
+	logger        Logger
 }
 
 // NewDefaultAuthenticationService creates a new DefaultAuthenticationService.
+// Required dependencies are the provider registry and repositories. Optional
+// dependencies (TokenStore, AuthorizationChecker, Logger) can be configured
+// via functional options; safe no-op defaults are used when not provided.
 func NewDefaultAuthenticationService(
+	providers OAuthProviderRegistry,
+	agents repositories.AgentRepository,
+	credentials repositories.CredentialRepository,
+	sessions repositories.AuthSessionRepository,
+	opts ...AuthServiceOption,
+) *DefaultAuthenticationService {
+	s := &DefaultAuthenticationService{
+		providers:   providers,
+		agents:      agents,
+		credentials: credentials,
+		sessions:    sessions,
+		tokens:      noOpTokenStore{},
+		logger:      NoOpLogger{},
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// Deprecated: NewDefaultAuthenticationServiceLegacy creates a DefaultAuthenticationService
+// with the original 6-parameter signature. Use NewDefaultAuthenticationService
+// with functional options instead.
+func NewDefaultAuthenticationServiceLegacy(
 	providers OAuthProviderRegistry,
 	agents repositories.AgentRepository,
 	credentials repositories.CredentialRepository,
@@ -150,14 +178,11 @@ func NewDefaultAuthenticationService(
 	tokens TokenStore,
 	authorization AuthorizationChecker,
 ) *DefaultAuthenticationService {
-	return &DefaultAuthenticationService{
-		providers:     providers,
-		agents:        agents,
-		credentials:   credentials,
-		sessions:      sessions,
-		tokens:        tokens,
-		authorization: authorization,
-	}
+	return NewDefaultAuthenticationService(
+		providers, agents, credentials, sessions,
+		WithTokenStore(tokens),
+		WithAuthorizationChecker(authorization),
+	)
 }
 
 // InitiateAuthFlow generates PKCE parameters and returns the authorization URL.
@@ -228,6 +253,9 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 		if agentErr != nil {
 			return nil, nil, fmt.Errorf("failed to find agent for credential: %w", agentErr)
 		}
+		if agent == nil {
+			return nil, nil, fmt.Errorf("failed to find agent for credential: agent %s not found", credential.AgentID())
+		}
 
 		// Mark credential as used
 		if markErr := credential.MarkUsed(); markErr != nil {
@@ -289,6 +317,9 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSessionNotFound, err)
 	}
+	if session == nil {
+		return nil, ErrSessionNotFound
+	}
 
 	if !session.Active() {
 		return nil, ErrSessionRevoked
@@ -330,6 +361,9 @@ func (s *DefaultAuthenticationService) RefreshTokens(ctx context.Context, creden
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrCredentialNotFound, err)
 	}
+	if credential == nil {
+		return nil, ErrCredentialNotFound
+	}
 
 	provider, ok := s.providers[credential.Provider()]
 	if !ok {
@@ -360,6 +394,9 @@ func (s *DefaultAuthenticationService) RevokeSession(ctx context.Context, sessio
 	session, err := s.sessions.FindByID(ctx, sessionID)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrSessionNotFound, err)
+	}
+	if session == nil {
+		return ErrSessionNotFound
 	}
 
 	if revokeErr := session.Revoke(); revokeErr != nil {

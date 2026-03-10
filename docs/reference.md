@@ -1006,7 +1006,7 @@ type TokenStore interface {
 }
 ```
 
-Abstraction for encrypted server-side token storage. Consuming applications implement this against their storage layer.
+Abstraction for server-side token storage. Consuming applications implement this against their storage layer (encryption at rest is the responsibility of the implementation).
 
 #### `AuthorizationChecker`
 
@@ -1034,10 +1034,89 @@ Read model for authorization decisions. Consuming applications implement this ag
 
 ### Implementations
 
+#### `Logger`
+
+```go
+type Logger interface {
+    Info(ctx context.Context, msg string, keysAndValues ...interface{})
+    Warn(ctx context.Context, msg string, keysAndValues ...interface{})
+    Error(ctx context.Context, msg string, keysAndValues ...interface{})
+}
+```
+
+Structured logging interface used by `DefaultAuthenticationService` and `AuthHandlers`. The default is `NoOpLogger`.
+
+#### `NoOpLogger`
+
+```go
+type NoOpLogger struct{}
+```
+
+Default `Logger` implementation that silently discards all log messages. Exported so infrastructure packages can share the same no-op default.
+
+#### `AuthServiceOption`
+
+```go
+type AuthServiceOption func(*DefaultAuthenticationService)
+```
+
+Functional option for configuring `DefaultAuthenticationService`.
+
+#### `WithTokenStore`
+
+```go
+func WithTokenStore(store TokenStore) AuthServiceOption
+```
+
+Sets a custom token store for server-side OAuth token persistence. If `nil`, a no-op store is used.
+
+#### `WithAuthorizationChecker`
+
+```go
+func WithAuthorizationChecker(checker AuthorizationChecker) AuthServiceOption
+```
+
+Sets a custom authorization checker for permission resolution. A `nil` checker disables permission resolution; `ValidateSession` will return empty permissions.
+
+#### `WithLogger`
+
+```go
+func WithLogger(logger Logger) AuthServiceOption
+```
+
+Sets a custom logger. The default is `NoOpLogger`.
+
 #### `DefaultAuthenticationService`
 
 ```go
 func NewDefaultAuthenticationService(
+    providers OAuthProviderRegistry,
+    agents repositories.AgentRepository,
+    credentials repositories.CredentialRepository,
+    sessions repositories.AuthSessionRepository,
+    opts ...AuthServiceOption,
+) *DefaultAuthenticationService
+```
+
+Reference implementation of `AuthenticationService`. Uses functional options for optional dependencies (`TokenStore`, `AuthorizationChecker`, `Logger`). Omitted options use safe defaults (no-op token store, no authorization checker, no-op logger).
+
+```go
+// Minimal setup — only required dependencies
+svc := NewDefaultAuthenticationService(providers, agentRepo, credRepo, sessionRepo)
+
+// With all optional dependencies
+svc := NewDefaultAuthenticationService(providers, agentRepo, credRepo, sessionRepo,
+    WithTokenStore(myTokenStore),
+    WithAuthorizationChecker(casbinChecker),
+    WithLogger(myLogger),
+)
+```
+
+##### Deprecated: `NewDefaultAuthenticationServiceLegacy`
+
+```go
+// Deprecated: Use NewDefaultAuthenticationService with functional options instead.
+func NewDefaultAuthenticationServiceLegacy(
     providers OAuthProviderRegistry,
     agents repositories.AgentRepository,
     credentials repositories.CredentialRepository,
@@ -1047,7 +1126,7 @@ func NewDefaultAuthenticationService(
 ) *DefaultAuthenticationService
 ```
 
-Reference implementation of `AuthenticationService`. The `authorization` parameter is optional (pass `nil` to skip permission resolution in `ValidateSession`).
+Legacy 6-parameter constructor. Delegates to `NewDefaultAuthenticationService` with `WithTokenStore` and `WithAuthorizationChecker`.
 
 #### `PolicyDecisionPoint`
 
