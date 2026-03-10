@@ -31,6 +31,12 @@ func startDynamoContainer(t *testing.T) (string, error) {
 	t.Helper()
 
 	dynamoOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				dynamoSetupErr = fmt.Errorf("Docker not available: %v", r)
+			}
+		}()
+
 		ctx := context.Background()
 		req := testcontainers.ContainerRequest{
 			Image:        "amazon/dynamodb-local:latest",
