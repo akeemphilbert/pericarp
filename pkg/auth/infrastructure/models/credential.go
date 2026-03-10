@@ -12,7 +12,7 @@ type CredentialModel struct {
 	AgentID        string `gorm:"not null;index"`
 	Provider       string `gorm:"not null;uniqueIndex:idx_provider_user"`
 	ProviderUserID string `gorm:"not null;uniqueIndex:idx_provider_user"`
-	Email          string
+	Email          string `gorm:"index:idx_email"`
 	DisplayName    string
 	Active         bool `gorm:"not null;default:true"`
 	CreatedAt      time.Time

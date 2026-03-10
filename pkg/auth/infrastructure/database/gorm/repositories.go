@@ -116,6 +116,23 @@ func (r *credentialRepository) FindByProvider(ctx context.Context, provider, pro
 	return m.ToEntity()
 }
 
+func (r *credentialRepository) FindByEmail(ctx context.Context, email string) ([]*entities.Credential, error) {
+	var records []models.CredentialModel
+	if err := r.db.WithContext(ctx).Where("email = ?", email).Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]*entities.Credential, 0, len(records))
+	for i := range records {
+		cred, err := records[i].ToEntity()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, cred)
+	}
+	return result, nil
+}
+
 func (r *credentialRepository) FindByAgent(ctx context.Context, agentID string) ([]*entities.Credential, error) {
 	var records []models.CredentialModel
 	if err := r.db.WithContext(ctx).Where("agent_id = ?", agentID).Find(&records).Error; err != nil {

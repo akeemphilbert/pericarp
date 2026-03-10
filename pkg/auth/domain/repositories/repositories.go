@@ -86,6 +86,9 @@ type CredentialRepository interface {
 	// FindByProvider retrieves a Credential by provider and provider user ID.
 	FindByProvider(ctx context.Context, provider, providerUserID string) (*entities.Credential, error)
 
+	// FindByEmail retrieves all credentials associated with the given email address.
+	FindByEmail(ctx context.Context, email string) ([]*entities.Credential, error)
+
 	// FindByAgent retrieves all credentials for the given agent.
 	FindByAgent(ctx context.Context, agentID string) ([]*entities.Credential, error)
 

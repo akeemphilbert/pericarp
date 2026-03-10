@@ -135,6 +135,16 @@ func (m *mockCredentialRepo) FindByProvider(_ context.Context, provider, provide
 	return cred, nil
 }
 
+func (m *mockCredentialRepo) FindByEmail(_ context.Context, email string) ([]*entities.Credential, error) {
+	var result []*entities.Credential
+	for _, cred := range m.credentials {
+		if cred.Email() == email {
+			result = append(result, cred)
+		}
+	}
+	return result, nil
+}
+
 func (m *mockCredentialRepo) FindByAgent(_ context.Context, _ string) ([]*entities.Credential, error) {
 	return nil, nil
 }
