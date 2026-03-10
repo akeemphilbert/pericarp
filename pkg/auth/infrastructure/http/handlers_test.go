@@ -131,6 +131,9 @@ func (m *mockCredRepo) FindByID(_ context.Context, _ string) (*entities.Credenti
 func (m *mockCredRepo) FindByProvider(_ context.Context, _, _ string) (*entities.Credential, error) {
 	return nil, nil
 }
+func (m *mockCredRepo) FindByEmail(_ context.Context, _ string) ([]*entities.Credential, error) {
+	return nil, nil
+}
 func (m *mockCredRepo) FindByAgent(ctx context.Context, agentID string) ([]*entities.Credential, error) {
 	if m.findByAgentFunc != nil {
 		return m.findByAgentFunc(ctx, agentID)
