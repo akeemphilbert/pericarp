@@ -122,7 +122,7 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, credential, err := h.cfg.AuthService.FindOrCreateAgent(ctx, authResult.UserInfo)
+	agent, credential, account, err := h.cfg.AuthService.FindOrCreateAgent(ctx, authResult.UserInfo)
 	if err != nil {
 		h.cfg.Logger.Error(ctx, "find or create agent failed", "error", err)
 		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to find or create agent"})
@@ -146,6 +146,9 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		AgentID:   agent.GetID(),
 		CreatedAt: time.Now(),
 		ExpiresAt: authSession.ExpiresAt(),
+	}
+	if account != nil {
+		sessionData.AccountID = account.GetID()
 	}
 	if err := h.cfg.SessionManager.CreateHTTPSession(w, r, sessionData); err != nil {
 		h.cfg.Logger.Error(ctx, "HTTP session creation failed", "error", err)

@@ -8,15 +8,17 @@ import (
 
 // AccountCreated represents the creation of an account.
 type AccountCreated struct {
-	Name      string    `json:"name"`
-	Timestamp time.Time `json:"timestamp"`
+	Name        string    `json:"name"`
+	AccountType string    `json:"account_type"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
 // With creates a new AccountCreated event.
-func (e AccountCreated) With(name string) AccountCreated {
+func (e AccountCreated) With(name, accountType string) AccountCreated {
 	return AccountCreated{
-		Name:      name,
-		Timestamp: time.Now(),
+		Name:        name,
+		AccountType: accountType,
+		Timestamp:   time.Now(),
 	}
 }
 

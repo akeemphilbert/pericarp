@@ -14,23 +14,53 @@ func TestAccount_With(t *testing.T) {
 		name        string
 		id          string
 		accountName string
+		accountType string
 		wantErr     bool
 	}{
 		{
-			name:        "creates account",
+			name:        "creates personal account",
 			id:          "account-1",
 			accountName: "Acme Corp",
+			accountType: entities.AccountTypePersonal,
+		},
+		{
+			name:        "creates team account",
+			id:          "account-2",
+			accountName: "Engineering",
+			accountType: entities.AccountTypeTeam,
+		},
+		{
+			name:        "creates organization account",
+			id:          "account-3",
+			accountName: "Acme Inc",
+			accountType: entities.AccountTypeOrganization,
 		},
 		{
 			name:        "fails with empty ID",
 			id:          "",
 			accountName: "Acme Corp",
+			accountType: entities.AccountTypePersonal,
 			wantErr:     true,
 		},
 		{
 			name:        "fails with empty name",
 			id:          "account-1",
 			accountName: "",
+			accountType: entities.AccountTypePersonal,
+			wantErr:     true,
+		},
+		{
+			name:        "fails with invalid account type",
+			id:          "account-1",
+			accountName: "Acme Corp",
+			accountType: "invalid",
+			wantErr:     true,
+		},
+		{
+			name:        "fails with empty account type",
+			id:          "account-1",
+			accountName: "Acme Corp",
+			accountType: "",
 			wantErr:     true,
 		},
 	}
@@ -38,7 +68,7 @@ func TestAccount_With(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			account, err := new(entities.Account).With(tt.id, tt.accountName)
+			account, err := new(entities.Account).With(tt.id, tt.accountName, tt.accountType)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -54,6 +84,9 @@ func TestAccount_With(t *testing.T) {
 			}
 			if account.Name() != tt.accountName {
 				t.Errorf("Name() = %q, want %q", account.Name(), tt.accountName)
+			}
+			if account.AccountType() != tt.accountType {
+				t.Errorf("AccountType() = %q, want %q", account.AccountType(), tt.accountType)
 			}
 			if !account.Active() {
 				t.Error("expected account to be active")
@@ -76,7 +109,7 @@ func TestAccount_With(t *testing.T) {
 func TestAccount_ActivateDeactivate(t *testing.T) {
 	t.Parallel()
 
-	account, err := new(entities.Account).With("account-1", "Acme Corp")
+	account, err := new(entities.Account).With("account-1", "Acme Corp", entities.AccountTypeTeam)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +143,7 @@ func TestAccount_ActivateDeactivate(t *testing.T) {
 func TestAccount_AddMember(t *testing.T) {
 	t.Parallel()
 
-	account, err := new(entities.Account).With("account-1", "Acme Corp")
+	account, err := new(entities.Account).With("account-1", "Acme Corp", entities.AccountTypeTeam)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +183,7 @@ func TestAccount_AddMember(t *testing.T) {
 func TestAccount_RemoveMember(t *testing.T) {
 	t.Parallel()
 
-	account, err := new(entities.Account).With("account-1", "Acme Corp")
+	account, err := new(entities.Account).With("account-1", "Acme Corp", entities.AccountTypeTeam)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,7 +210,7 @@ func TestAccount_RemoveMember(t *testing.T) {
 func TestAccount_ChangeMemberRole(t *testing.T) {
 	t.Parallel()
 
-	account, err := new(entities.Account).With("account-1", "Acme Corp")
+	account, err := new(entities.Account).With("account-1", "Acme Corp", entities.AccountTypeTeam)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -210,7 +243,7 @@ func TestAccount_ChangeMemberRole(t *testing.T) {
 func TestAccount_ValidationErrors(t *testing.T) {
 	t.Parallel()
 
-	account, err := new(entities.Account).With("account-1", "Acme Corp")
+	account, err := new(entities.Account).With("account-1", "Acme Corp", entities.AccountTypeTeam)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -236,7 +269,7 @@ func TestAccount_ApplyEvent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	account, err := new(entities.Account).With("account-1", "Acme Corp")
+	account, err := new(entities.Account).With("account-1", "Acme Corp", entities.AccountTypeTeam)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -246,7 +279,7 @@ func TestAccount_ApplyEvent(t *testing.T) {
 
 	// Reconstruct from events
 	restored := &entities.Account{}
-	if err := restored.Restore("account-1", "placeholder", true, events[0].Created); err != nil {
+	if err := restored.Restore("account-1", "placeholder", "", true, events[0].Created); err != nil {
 		t.Fatalf("Restore() error: %v", err)
 	}
 
@@ -255,5 +288,8 @@ func TestAccount_ApplyEvent(t *testing.T) {
 	}
 	if restored.Name() != "Acme Corp" {
 		t.Errorf("Name() = %q, want %q", restored.Name(), "Acme Corp")
+	}
+	if restored.AccountType() != entities.AccountTypeTeam {
+		t.Errorf("AccountType() = %q, want %q", restored.AccountType(), entities.AccountTypeTeam)
 	}
 }

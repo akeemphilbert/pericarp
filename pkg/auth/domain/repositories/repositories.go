@@ -71,6 +71,13 @@ type AccountRepository interface {
 	// FindByMember retrieves all accounts that the given agent is a member of.
 	FindByMember(ctx context.Context, agentID string) ([]*entities.Account, error)
 
+	// FindPersonalByMember retrieves the personal account for the given agent.
+	// Returns (nil, nil) if the agent has no personal account.
+	FindPersonalByMember(ctx context.Context, agentID string) (*entities.Account, error)
+
+	// SaveMember persists a membership between an account and an agent with a role.
+	SaveMember(ctx context.Context, accountID, agentID, roleID string) error
+
 	// FindAll retrieves Account aggregates with cursor-based pagination.
 	FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.Account], error)
 }

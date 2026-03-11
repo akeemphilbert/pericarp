@@ -239,6 +239,62 @@ func (m *mockTokenStore) NeedsRefresh(_ context.Context, credentialID string) (b
 	return time.Now().After(entry.expiresAt), nil
 }
 
+type mockAccountRepo struct {
+	accounts map[string]*entities.Account
+	byMember map[string]*entities.Account // key: agentID -> personal account
+}
+
+func newMockAccountRepo() *mockAccountRepo {
+	return &mockAccountRepo{
+		accounts: make(map[string]*entities.Account),
+		byMember: make(map[string]*entities.Account),
+	}
+}
+
+func (m *mockAccountRepo) Save(_ context.Context, account *entities.Account) error {
+	m.accounts[account.GetID()] = account
+	return nil
+}
+
+func (m *mockAccountRepo) SaveMember(_ context.Context, _, agentID string, _ string) error {
+	// Link agent to the most recently saved account for lookup
+	for _, account := range m.accounts {
+		if account.AccountType() == entities.AccountTypePersonal {
+			m.byMember[agentID] = account
+			break
+		}
+	}
+	return nil
+}
+
+func (m *mockAccountRepo) FindByID(_ context.Context, id string) (*entities.Account, error) {
+	account, ok := m.accounts[id]
+	if !ok {
+		return nil, nil
+	}
+	return account, nil
+}
+
+func (m *mockAccountRepo) FindByMember(_ context.Context, agentID string) ([]*entities.Account, error) {
+	var result []*entities.Account
+	if account, ok := m.byMember[agentID]; ok {
+		result = append(result, account)
+	}
+	return result, nil
+}
+
+func (m *mockAccountRepo) FindPersonalByMember(_ context.Context, agentID string) (*entities.Account, error) {
+	account, ok := m.byMember[agentID]
+	if !ok {
+		return nil, nil
+	}
+	return account, nil
+}
+
+func (m *mockAccountRepo) FindAll(_ context.Context, _ string, _ int) (*repositories.PaginatedResponse[*entities.Account], error) {
+	return nil, nil
+}
+
 type mockAuthorizationChecker struct {
 	permissions []application.Permission
 }
@@ -266,6 +322,7 @@ type testDeps struct {
 	agents      *mockAgentRepo
 	credentials *mockCredentialRepo
 	sessions    *mockSessionRepo
+	accounts    *mockAccountRepo
 	tokens      *mockTokenStore
 	authz       *mockAuthorizationChecker
 }
@@ -278,6 +335,7 @@ func newTestService() (*application.DefaultAuthenticationService, *testDeps) {
 		agents:      newMockAgentRepo(),
 		credentials: newMockCredentialRepo(),
 		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
 		tokens:      newMockTokenStore(),
 		authz:       &mockAuthorizationChecker{},
 	}
@@ -287,6 +345,7 @@ func newTestService() (*application.DefaultAuthenticationService, *testDeps) {
 		deps.agents,
 		deps.credentials,
 		deps.sessions,
+		deps.accounts,
 		application.WithTokenStore(deps.tokens),
 		application.WithAuthorizationChecker(deps.authz),
 	)
@@ -385,7 +444,7 @@ func TestDefaultAuthenticationService_ExchangeCode_ExchangeFails(t *testing.T) {
 			},
 		},
 	}
-	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), application.WithTokenStore(newMockTokenStore()))
+	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(), application.WithTokenStore(newMockTokenStore()))
 
 	_, err := svc.ExchangeCode(ctx, "auth-code", "code-verifier", "google", "https://example.com/callback")
 	if err == nil {
@@ -467,7 +526,7 @@ func TestDefaultAuthenticationService_FindOrCreateAgent_New(t *testing.T) {
 		Provider:       "google",
 	}
 
-	agent, credential, err := svc.FindOrCreateAgent(ctx, userInfo)
+	agent, credential, account, err := svc.FindOrCreateAgent(ctx, userInfo)
 	if err != nil {
 		t.Fatalf("FindOrCreateAgent() error: %v", err)
 	}
@@ -477,6 +536,9 @@ func TestDefaultAuthenticationService_FindOrCreateAgent_New(t *testing.T) {
 	}
 	if credential == nil {
 		t.Fatal("expected non-nil credential")
+	}
+	if account == nil {
+		t.Fatal("expected non-nil account")
 	}
 
 	if agent.Name() != "Alice" {
@@ -492,6 +554,11 @@ func TestDefaultAuthenticationService_FindOrCreateAgent_New(t *testing.T) {
 		t.Errorf("credential Email() = %q, want %q", credential.Email(), "alice@example.com")
 	}
 
+	// Verify account is personal type
+	if account.AccountType() != entities.AccountTypePersonal {
+		t.Errorf("account AccountType() = %q, want %q", account.AccountType(), entities.AccountTypePersonal)
+	}
+
 	// Verify agent was saved
 	if len(deps.agents.agents) != 1 {
 		t.Errorf("expected 1 saved agent, got %d", len(deps.agents.agents))
@@ -501,6 +568,11 @@ func TestDefaultAuthenticationService_FindOrCreateAgent_New(t *testing.T) {
 	if len(deps.credentials.credentials) != 1 {
 		t.Errorf("expected 1 saved credential, got %d", len(deps.credentials.credentials))
 	}
+
+	// Verify account was saved
+	if len(deps.accounts.accounts) != 1 {
+		t.Errorf("expected 1 saved account, got %d", len(deps.accounts.accounts))
+	}
 }
 
 func TestDefaultAuthenticationService_FindOrCreateAgent_Existing(t *testing.T) {
@@ -509,13 +581,17 @@ func TestDefaultAuthenticationService_FindOrCreateAgent_Existing(t *testing.T) {
 
 	svc, deps := newTestService()
 
-	// Pre-create agent and credential
+	// Pre-create agent, credential, and personal account
 	agent, _ := new(entities.Agent).With("agent-existing", "Alice", entities.AgentTypePerson)
 	deps.agents.agents["agent-existing"] = agent
 
 	cred, _ := new(entities.Credential).With("cred-existing", "agent-existing", "google", "google-user-123", "alice@example.com", "Alice")
 	deps.credentials.credentials["cred-existing"] = cred
 	deps.credentials.byProvider["google:google-user-123"] = cred
+
+	personalAccount, _ := new(entities.Account).With("account-existing", "Alice's Account", entities.AccountTypePersonal)
+	deps.accounts.accounts["account-existing"] = personalAccount
+	deps.accounts.byMember["agent-existing"] = personalAccount
 
 	userInfo := application.UserInfo{
 		ProviderUserID: "google-user-123",
@@ -524,7 +600,7 @@ func TestDefaultAuthenticationService_FindOrCreateAgent_Existing(t *testing.T) {
 		Provider:       "google",
 	}
 
-	foundAgent, foundCredential, err := svc.FindOrCreateAgent(ctx, userInfo)
+	foundAgent, foundCredential, foundAccount, err := svc.FindOrCreateAgent(ctx, userInfo)
 	if err != nil {
 		t.Fatalf("FindOrCreateAgent() error: %v", err)
 	}
@@ -534,6 +610,12 @@ func TestDefaultAuthenticationService_FindOrCreateAgent_Existing(t *testing.T) {
 	}
 	if foundCredential.GetID() != "cred-existing" {
 		t.Errorf("credential ID = %q, want %q", foundCredential.GetID(), "cred-existing")
+	}
+	if foundAccount == nil {
+		t.Fatal("expected non-nil account")
+	}
+	if foundAccount.GetID() != "account-existing" {
+		t.Errorf("account ID = %q, want %q", foundAccount.GetID(), "account-existing")
 	}
 
 	// Should not have created new agents (still just the 1 we pre-created)
@@ -796,7 +878,7 @@ func TestDefaultAuthenticationService_RefreshTokens_ProviderFails(t *testing.T) 
 		expiresAt:    time.Now().Add(-1 * time.Hour),
 	}
 
-	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), credentials, newMockSessionRepo(), application.WithTokenStore(tokens))
+	svc := application.NewDefaultAuthenticationService(providers, newMockAgentRepo(), credentials, newMockSessionRepo(), newMockAccountRepo(), application.WithTokenStore(tokens))
 
 	_, err := svc.RefreshTokens(ctx, "cred-1")
 	if err == nil {
@@ -821,6 +903,7 @@ func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 		newMockAgentRepo(),
 		newMockCredentialRepo(),
 		sessions,
+		newMockAccountRepo(),
 		application.WithTokenStore(newMockTokenStore()),
 		// no authorization checker — should default to nil
 	)

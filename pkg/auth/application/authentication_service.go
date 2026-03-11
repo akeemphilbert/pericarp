@@ -9,6 +9,8 @@ import (
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
+	esApplication "github.com/akeemphilbert/pericarp/pkg/eventsourcing/application"
+	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 	"github.com/segmentio/ksuid"
 )
 
@@ -109,7 +111,8 @@ type AuthenticationService interface {
 	ValidateState(ctx context.Context, receivedState string, storedState string) error
 
 	// FindOrCreateAgent looks up an agent by provider credentials, creates if not found.
-	FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, error)
+	// For new users, a personal Account is also created with the agent as owner.
+	FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
 
 	// CreateSession creates an authenticated session for an agent.
 	CreateSession(ctx context.Context, agentID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
@@ -137,6 +140,8 @@ type DefaultAuthenticationService struct {
 	agents        repositories.AgentRepository
 	credentials   repositories.CredentialRepository
 	sessions      repositories.AuthSessionRepository
+	accounts      repositories.AccountRepository
+	eventStore    esDomain.EventStore
 	tokens        TokenStore
 	authorization AuthorizationChecker
 	logger        Logger
@@ -144,13 +149,14 @@ type DefaultAuthenticationService struct {
 
 // NewDefaultAuthenticationService creates a new DefaultAuthenticationService.
 // Required dependencies are the provider registry and repositories. Optional
-// dependencies (TokenStore, AuthorizationChecker, Logger) can be configured
-// via functional options; safe no-op defaults are used when not provided.
+// dependencies (TokenStore, AuthorizationChecker, Logger, EventStore) can be
+// configured via functional options; safe no-op defaults are used when not provided.
 func NewDefaultAuthenticationService(
 	providers OAuthProviderRegistry,
 	agents repositories.AgentRepository,
 	credentials repositories.CredentialRepository,
 	sessions repositories.AuthSessionRepository,
+	accounts repositories.AccountRepository,
 	opts ...AuthServiceOption,
 ) *DefaultAuthenticationService {
 	s := &DefaultAuthenticationService{
@@ -158,6 +164,7 @@ func NewDefaultAuthenticationService(
 		agents:      agents,
 		credentials: credentials,
 		sessions:    sessions,
+		accounts:    accounts,
 		tokens:      noOpTokenStore{},
 		logger:      NoOpLogger{},
 	}
@@ -168,18 +175,19 @@ func NewDefaultAuthenticationService(
 }
 
 // Deprecated: NewDefaultAuthenticationServiceLegacy creates a DefaultAuthenticationService
-// with the original 6-parameter signature. Use NewDefaultAuthenticationService
+// with a positional-parameter signature. Use NewDefaultAuthenticationService
 // with functional options instead.
 func NewDefaultAuthenticationServiceLegacy(
 	providers OAuthProviderRegistry,
 	agents repositories.AgentRepository,
 	credentials repositories.CredentialRepository,
 	sessions repositories.AuthSessionRepository,
+	accounts repositories.AccountRepository,
 	tokens TokenStore,
 	authorization AuthorizationChecker,
 ) *DefaultAuthenticationService {
 	return NewDefaultAuthenticationService(
-		providers, agents, credentials, sessions,
+		providers, agents, credentials, sessions, accounts,
 		WithTokenStore(tokens),
 		WithAuthorizationChecker(authorization),
 	)
@@ -244,17 +252,31 @@ func (s *DefaultAuthenticationService) ValidateState(_ context.Context, received
 }
 
 // FindOrCreateAgent looks up an agent by provider credentials, creates if not found.
-func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, error) {
+// For new users, a personal Account is also created with the agent as owner.
+// For existing users, the personal Account is returned if one exists (may be nil).
+func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
 	// Look up existing credential by provider
 	credential, err := s.credentials.FindByProvider(ctx, userInfo.Provider, userInfo.ProviderUserID)
-	if err == nil && credential != nil {
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to look up credential for provider %s: %w", userInfo.Provider, err)
+	}
+	if credential != nil {
 		// Credential exists, fetch the agent
 		agent, agentErr := s.agents.FindByID(ctx, credential.AgentID())
 		if agentErr != nil {
-			return nil, nil, fmt.Errorf("failed to find agent for credential: %w", agentErr)
+			return nil, nil, nil, fmt.Errorf("failed to find agent for credential: %w", agentErr)
 		}
 		if agent == nil {
-			return nil, nil, fmt.Errorf("failed to find agent for credential: agent %s not found", credential.AgentID())
+			return nil, nil, nil, fmt.Errorf("failed to find agent for credential: agent %s not found", credential.AgentID())
+		}
+
+		// Look up personal account
+		var account *entities.Account
+		if s.accounts != nil {
+			account, err = s.accounts.FindPersonalByMember(ctx, agent.GetID())
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("failed to find personal account: %w", err)
+			}
 		}
 
 		// Mark credential as used
@@ -279,18 +301,41 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 		return nil, nil, fmt.Errorf("failed to save agent: %w", err)
 	}
 
-	// Create credential linked to the agent
 	credentialID := ksuid.New().String()
 	credential = new(entities.Credential)
 	credential, err = credential.With(credentialID, agentID, userInfo.Provider, userInfo.ProviderUserID, userInfo.Email, userInfo.DisplayName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create credential: %w", err)
-	}
-	if err = s.credentials.Save(ctx, credential); err != nil {
-		return nil, nil, fmt.Errorf("failed to save credential: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create credential: %w", err)
 	}
 
-	return agent, credential, nil
+	// Commit events atomically to event store via UnitOfWork
+	if s.eventStore != nil {
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		if err = uow.Track(agent, account, credential); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to track entities: %w", err)
+		}
+		if err = uow.Commit(ctx); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to commit unit of work: %w", err)
+		}
+	}
+
+	// Save projections to read-model repos
+	if err = s.agents.Save(ctx, agent); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to save agent: %w", err)
+	}
+	if s.accounts != nil {
+		if err = s.accounts.Save(ctx, account); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to save account: %w", err)
+		}
+		if err = s.accounts.SaveMember(ctx, accountID, agentID, entities.RoleOwner); err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to save account member: %w", err)
+		}
+	}
+	if err = s.credentials.Save(ctx, credential); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to save credential: %w", err)
+	}
+
+	return agent, credential, account, nil
 }
 
 // CreateSession creates an authenticated session for an agent.

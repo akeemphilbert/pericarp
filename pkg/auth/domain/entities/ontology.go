@@ -101,6 +101,13 @@ const (
 	PredicateHadMember = "org:hadMember"
 )
 
+// Well-known roles for account membership.
+const (
+	RoleOwner  = "owner"
+	RoleMember = "member"
+	RoleAdmin  = "admin"
+)
+
 // Event type patterns for LIKE queries.
 const (
 	PatternAgent      = "Agent.%"

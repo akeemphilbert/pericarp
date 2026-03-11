@@ -78,6 +78,114 @@ func (r *agentRepository) FindAll(ctx context.Context, cursor string, limit int)
 	return result, nil
 }
 
+// accountRepository implements repositories.AccountRepository using GORM.
+type accountRepository struct {
+	db *gorm.DB
+}
+
+// NewAccountRepository creates a new GORM-backed AccountRepository.
+func NewAccountRepository(db *gorm.DB) repositories.AccountRepository {
+	return &accountRepository{db: db}
+}
+
+func (r *accountRepository) Save(ctx context.Context, account *entities.Account) error {
+	m := models.AccountModelFromEntity(account)
+	return r.db.WithContext(ctx).Save(m).Error
+}
+
+func (r *accountRepository) SaveMember(ctx context.Context, accountID, agentID, roleID string) error {
+	member := models.AccountMemberModelFrom(accountID, agentID, roleID)
+	return r.db.WithContext(ctx).Save(member).Error
+}
+
+func (r *accountRepository) FindByID(ctx context.Context, id string) (*entities.Account, error) {
+	var m models.AccountModel
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&m).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return m.ToEntity()
+}
+
+func (r *accountRepository) FindByMember(ctx context.Context, agentID string) ([]*entities.Account, error) {
+	var records []models.AccountModel
+	err := r.db.WithContext(ctx).
+		Joins("JOIN account_members ON account_members.account_id = accounts.id").
+		Where("account_members.agent_id = ?", agentID).
+		Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*entities.Account, 0, len(records))
+	for i := range records {
+		a, err := records[i].ToEntity()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, nil
+}
+
+func (r *accountRepository) FindPersonalByMember(ctx context.Context, agentID string) (*entities.Account, error) {
+	var m models.AccountModel
+	err := r.db.WithContext(ctx).
+		Joins("JOIN account_members ON account_members.account_id = accounts.id").
+		Where("account_members.agent_id = ? AND accounts.account_type = ?", agentID, entities.AccountTypePersonal).
+		First(&m).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return m.ToEntity()
+}
+
+func (r *accountRepository) FindAll(ctx context.Context, cursor string, limit int) (*repositories.PaginatedResponse[*entities.Account], error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	query := r.db.WithContext(ctx).Order("id ASC")
+	if cursor != "" {
+		query = query.Where("id > ?", cursor)
+	}
+
+	var records []models.AccountModel
+	if err := query.Limit(limit + 1).Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	hasMore := len(records) > limit
+	if hasMore {
+		records = records[:limit]
+	}
+
+	result := &repositories.PaginatedResponse[*entities.Account]{
+		Data:    make([]*entities.Account, 0, len(records)),
+		Limit:   limit,
+		HasMore: hasMore,
+	}
+
+	for i := range records {
+		a, err := records[i].ToEntity()
+		if err != nil {
+			return nil, err
+		}
+		result.Data = append(result.Data, a)
+	}
+
+	if len(records) > 0 {
+		result.Cursor = records[len(records)-1].ID
+	}
+
+	return result, nil
+}
+
 // credentialRepository implements repositories.CredentialRepository using GORM.
 type credentialRepository struct {
 	db *gorm.DB

@@ -23,7 +23,7 @@ type mockAuthService struct {
 	initiateFunc      func(ctx context.Context, provider, redirectURI string) (*application.AuthRequest, error)
 	exchangeFunc      func(ctx context.Context, code, codeVerifier, provider, redirectURI string) (*application.AuthResult, error)
 	validateStateFunc func(ctx context.Context, received, stored string) error
-	findOrCreateFunc  func(ctx context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, error)
+	findOrCreateFunc  func(ctx context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
 	createSessionFunc func(ctx context.Context, agentID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error)
 	validateSessFunc  func(ctx context.Context, sessionID string) (*application.SessionInfo, error)
 	revokeFunc        func(ctx context.Context, sessionID string) error
@@ -69,13 +69,14 @@ func (m *mockAuthService) ValidateState(ctx context.Context, received, stored st
 	return nil
 }
 
-func (m *mockAuthService) FindOrCreateAgent(ctx context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, error) {
+func (m *mockAuthService) FindOrCreateAgent(ctx context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
 	if m.findOrCreateFunc != nil {
 		return m.findOrCreateFunc(ctx, userInfo)
 	}
 	agent, _ := new(entities.Agent).With("agent-1", userInfo.DisplayName, entities.AgentTypePerson)
 	cred, _ := new(entities.Credential).With("cred-1", "agent-1", userInfo.Provider, userInfo.ProviderUserID, userInfo.Email, userInfo.DisplayName)
-	return agent, cred, nil
+	account, _ := new(entities.Account).With("account-1", userInfo.DisplayName+"'s Account", entities.AccountTypePersonal)
+	return agent, cred, account, nil
 }
 
 func (m *mockAuthService) CreateSession(ctx context.Context, agentID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {

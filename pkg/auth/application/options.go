@@ -1,5 +1,9 @@
 package application
 
+import (
+	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+)
+
 // AuthServiceOption configures the DefaultAuthenticationService.
 type AuthServiceOption func(*DefaultAuthenticationService)
 
@@ -27,6 +31,16 @@ func WithLogger(logger Logger) AuthServiceOption {
 	return func(s *DefaultAuthenticationService) {
 		if logger != nil {
 			s.logger = logger
+		}
+	}
+}
+
+// WithEventStore sets the event store for atomic event persistence via UnitOfWork.
+// When configured, FindOrCreateAgent will commit events atomically before saving projections.
+func WithEventStore(store esDomain.EventStore) AuthServiceOption {
+	return func(s *DefaultAuthenticationService) {
+		if store != nil {
+			s.eventStore = store
 		}
 	}
 }

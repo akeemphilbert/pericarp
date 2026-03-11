@@ -9,30 +9,42 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 )
 
+// Well-known account types.
+const (
+	AccountTypePersonal     = "personal"
+	AccountTypeTeam         = "team"
+	AccountTypeOrganization = "organization"
+)
+
 // Account represents a tenant or workspace that agents belong to.
 // Agents are members of accounts and hold account-scoped roles.
 type Account struct {
 	*ddd.BaseEntity
-	name      string
-	active    bool
-	createdAt time.Time
+	name        string
+	accountType string
+	active      bool
+	createdAt   time.Time
 }
 
-// With initializes a new Account with the given ID and name.
-func (a *Account) With(id, name string) (*Account, error) {
+// With initializes a new Account with the given ID, name, and account type.
+func (a *Account) With(id, name, accountType string) (*Account, error) {
 	if id == "" {
 		return nil, fmt.Errorf("account ID cannot be empty")
 	}
 	if name == "" {
 		return nil, fmt.Errorf("account name cannot be empty")
 	}
+	if !validAccountType(accountType) {
+		return nil, fmt.Errorf("invalid account type: %q", accountType)
+	}
 
 	a.BaseEntity = ddd.NewBaseEntity(id)
 	a.name = name
+	a.accountType = accountType
 	a.active = true
 	a.createdAt = time.Now()
 
-	event := new(AccountCreated).With(name)
+	event := new(AccountCreated).With(name, accountType)
 	if err := a.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Account.Created event: %w", err)
 	}
@@ -43,6 +55,11 @@ func (a *Account) With(id, name string) (*Account, error) {
 // Name returns the account name.
 func (a *Account) Name() string {
 	return a.name
+}
+
+// AccountType returns the account type (e.g. "personal", "team", "organization").
+func (a *Account) AccountType() string {
+	return a.accountType
 }
 
 // Active returns whether the account is currently active.
@@ -56,7 +73,7 @@ func (a *Account) CreatedAt() time.Time {
 }
 
 // Restore restores an Account from database values without recording events.
-func (a *Account) Restore(id, name string, active bool, createdAt time.Time) error {
+func (a *Account) Restore(id, name, accountType string, active bool, createdAt time.Time) error {
 	if id == "" {
 		return fmt.Errorf("id cannot be empty")
 	}
@@ -65,6 +82,7 @@ func (a *Account) Restore(id, name string, active bool, createdAt time.Time) err
 	}
 	a.BaseEntity = ddd.NewBaseEntity(id)
 	a.name = name
+	a.accountType = accountType
 	a.active = active
 	a.createdAt = createdAt
 	return nil
@@ -138,6 +156,7 @@ func (a *Account) ApplyEvent(ctx context.Context, envelope domain.EventEnvelope[
 	switch payload := envelope.Payload.(type) {
 	case AccountCreated:
 		a.name = payload.Name
+		a.accountType = payload.AccountType
 		a.active = true
 		a.createdAt = payload.Timestamp
 	case AccountActivated:
@@ -150,4 +169,13 @@ func (a *Account) ApplyEvent(ctx context.Context, envelope domain.EventEnvelope[
 		return fmt.Errorf("unknown event type: %T", envelope.Payload)
 	}
 	return nil
+}
+
+func validAccountType(t string) bool {
+	switch t {
+	case AccountTypePersonal, AccountTypeTeam, AccountTypeOrganization:
+		return true
+	default:
+		return false
+	}
 }
