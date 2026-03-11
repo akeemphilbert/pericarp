@@ -889,6 +889,160 @@ func TestDefaultAuthenticationService_RefreshTokens_ProviderFails(t *testing.T) 
 	}
 }
 
+// --- Mock JWTService ---
+
+type mockJWTService struct {
+	issueFunc func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (string, error)
+}
+
+func (m *mockJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (string, error) {
+	if m.issueFunc != nil {
+		return m.issueFunc(ctx, agent, accounts, activeAccountID)
+	}
+	return "mock-jwt-token", nil
+}
+
+func (m *mockJWTService) ValidateToken(_ context.Context, _ string) (*application.PericarpClaims, error) {
+	return &application.PericarpClaims{AgentID: "agent-1"}, nil
+}
+
+// --- IssueIdentityToken tests ---
+
+func TestIssueIdentityToken_NoJWTService_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, _ := newTestService() // no WithJWTService
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	token, err := svc.IssueIdentityToken(ctx, agent, "")
+	if err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if token != "" {
+		t.Errorf("expected empty token, got %q", token)
+	}
+}
+
+func TestIssueIdentityToken_Success(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	deps := &testDeps{
+		providers: application.OAuthProviderRegistry{
+			"google": &mockOAuthProvider{name: "google"},
+		},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+		tokens:      newMockTokenStore(),
+		authz:       &mockAuthorizationChecker{},
+	}
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
+		application.WithTokenStore(deps.tokens),
+		application.WithJWTService(jwtSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+	account, _ := new(entities.Account).With("account-1", "Alice's Account", entities.AccountTypePersonal)
+	deps.accounts.accounts["account-1"] = account
+	deps.accounts.byMember["agent-1"] = account
+
+	token, err := svc.IssueIdentityToken(ctx, agent, "account-1")
+	if err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if token != "mock-jwt-token" {
+		t.Errorf("expected %q, got %q", "mock-jwt-token", token)
+	}
+}
+
+func TestIssueIdentityToken_AccountLookupFails_ReturnsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(),
+		&errorAccountRepo{err: errors.New("database down")},
+		application.WithTokenStore(newMockTokenStore()),
+		application.WithJWTService(jwtSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	_, err := svc.IssueIdentityToken(ctx, agent, "account-1")
+	if err == nil {
+		t.Fatal("expected error when account lookup fails")
+	}
+}
+
+func TestIssueIdentityToken_NilAgent_ReturnsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+
+	_, err := svc.IssueIdentityToken(ctx, nil, "account-1")
+	if err == nil {
+		t.Fatal("expected error for nil agent")
+	}
+}
+
+func TestIssueIdentityToken_NilAccountRepo_StillIssuesToken(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), nil,
+		application.WithJWTService(jwtSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	token, err := svc.IssueIdentityToken(ctx, agent, "")
+	if err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if token != "mock-jwt-token" {
+		t.Errorf("expected %q, got %q", "mock-jwt-token", token)
+	}
+}
+
+// errorAccountRepo is a mock AccountRepository that always returns an error from FindByMember.
+type errorAccountRepo struct {
+	err error
+}
+
+func (m *errorAccountRepo) Save(_ context.Context, _ *entities.Account) error { return nil }
+func (m *errorAccountRepo) FindByID(_ context.Context, _ string) (*entities.Account, error) {
+	return nil, nil
+}
+func (m *errorAccountRepo) FindByMember(_ context.Context, _ string) ([]*entities.Account, error) {
+	return nil, m.err
+}
+func (m *errorAccountRepo) FindPersonalByMember(_ context.Context, _ string) (*entities.Account, error) {
+	return nil, nil
+}
+func (m *errorAccountRepo) SaveMember(_ context.Context, _, _, _ string) error { return nil }
+func (m *errorAccountRepo) FindAll(_ context.Context, _ string, _ int) (*repositories.PaginatedResponse[*entities.Account], error) {
+	return nil, nil
+}
+
 func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

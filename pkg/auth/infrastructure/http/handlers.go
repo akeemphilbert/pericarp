@@ -26,6 +26,11 @@ type HandlerConfig struct {
 	// redirects. When empty, post-login redirects use relative paths.
 	FrontendURL string
 	Logger      application.Logger
+	// JWTCookieName is the cookie name for the issued JWT. Defaults to "pericarp_token".
+	JWTCookieName string
+	// JWTCookieMaxAge is the MaxAge (in seconds) for the JWT cookie. When zero,
+	// it defaults to 900 (15 minutes) to match the default token TTL.
+	JWTCookieMaxAge int
 }
 
 // AuthHandlers provides standard HTTP handlers for OAuth login, callback, me, and logout.
@@ -44,6 +49,9 @@ func NewAuthHandlers(cfg HandlerConfig) *AuthHandlers {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = application.NoOpLogger{}
+	}
+	if cfg.JWTCookieMaxAge == 0 {
+		cfg.JWTCookieMaxAge = 900 // 15 minutes, matching default token TTL
 	}
 	return &AuthHandlers{cfg: cfg}
 }
@@ -156,6 +164,30 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Issue identity token if the AuthService supports it (non-fatal on failure).
+	activeAccountID := ""
+	if account != nil {
+		activeAccountID = account.GetID()
+	}
+	tokenString, issueErr := h.cfg.AuthService.IssueIdentityToken(ctx, agent, activeAccountID)
+	if issueErr != nil {
+		h.cfg.Logger.Warn(ctx, "failed to issue identity token", "error", issueErr)
+	} else if tokenString != "" {
+		cookieName := h.cfg.JWTCookieName
+		if cookieName == "" {
+			cookieName = "pericarp_token"
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     cookieName,
+			Value:    tokenString,
+			Path:     "/",
+			MaxAge:   h.cfg.JWTCookieMaxAge,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
 	// Determine post-login redirect path from flow metadata.
 	redirectPath := "/"
 	if flowData.Metadata != nil {
@@ -224,6 +256,21 @@ func (h *AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
 		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to destroy session"})
 		return
 	}
+
+	// Clear the JWT cookie if one was configured.
+	cookieName := h.cfg.JWTCookieName
+	if cookieName == "" {
+		cookieName = "pericarp_token"
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     cookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
 
 	h.writeJSON(w, http.StatusOK, map[string]string{"status": "logged out"})
 }

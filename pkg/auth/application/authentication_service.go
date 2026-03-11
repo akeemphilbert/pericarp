@@ -114,6 +114,10 @@ type AuthenticationService interface {
 	// For new users, a personal Account is also created with the agent as owner.
 	FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
 
+	// IssueIdentityToken issues a signed JWT for the given agent.
+	// Returns ("", nil) if no JWTService is configured.
+	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
+
 	// CreateSession creates an authenticated session for an agent.
 	CreateSession(ctx context.Context, agentID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
 
@@ -145,6 +149,7 @@ type DefaultAuthenticationService struct {
 	tokens        TokenStore
 	authorization AuthorizationChecker
 	logger        Logger
+	jwtService    JWTService
 }
 
 // NewDefaultAuthenticationService creates a new DefaultAuthenticationService.
@@ -462,4 +467,24 @@ func (s *DefaultAuthenticationService) RevokeSession(ctx context.Context, sessio
 // RevokeAllSessions revokes all sessions for an agent.
 func (s *DefaultAuthenticationService) RevokeAllSessions(ctx context.Context, agentID string) error {
 	return s.sessions.RevokeAllForAgent(ctx, agentID)
+}
+
+// IssueIdentityToken issues a signed JWT for the given agent.
+// Returns ("", nil) if no JWTService is configured.
+func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
+	if s.jwtService == nil {
+		return "", nil
+	}
+	if agent == nil {
+		return "", fmt.Errorf("authentication: agent must not be nil for token issuance")
+	}
+	var accounts []*entities.Account
+	if s.accounts != nil {
+		var err error
+		accounts, err = s.accounts.FindByMember(ctx, agent.GetID())
+		if err != nil {
+			return "", fmt.Errorf("authentication: failed to fetch accounts for token: %w", err)
+		}
+	}
+	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID)
 }

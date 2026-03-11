@@ -2,6 +2,8 @@ package authhttp_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
 	authhttp "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/http"
+	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
 	"github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/session"
 	"github.com/gorilla/sessions"
 )
@@ -20,15 +23,16 @@ import (
 // --- Mock AuthenticationService ---
 
 type mockAuthService struct {
-	initiateFunc      func(ctx context.Context, provider, redirectURI string) (*application.AuthRequest, error)
-	exchangeFunc      func(ctx context.Context, code, codeVerifier, provider, redirectURI string) (*application.AuthResult, error)
-	validateStateFunc func(ctx context.Context, received, stored string) error
-	findOrCreateFunc  func(ctx context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
-	createSessionFunc func(ctx context.Context, agentID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error)
-	validateSessFunc  func(ctx context.Context, sessionID string) (*application.SessionInfo, error)
-	revokeFunc        func(ctx context.Context, sessionID string) error
-	revokeAllFunc     func(ctx context.Context, agentID string) error
-	refreshFunc       func(ctx context.Context, credentialID string) (*application.AuthResult, error)
+	initiateFunc           func(ctx context.Context, provider, redirectURI string) (*application.AuthRequest, error)
+	exchangeFunc           func(ctx context.Context, code, codeVerifier, provider, redirectURI string) (*application.AuthResult, error)
+	validateStateFunc      func(ctx context.Context, received, stored string) error
+	findOrCreateFunc       func(ctx context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
+	createSessionFunc      func(ctx context.Context, agentID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+	validateSessFunc       func(ctx context.Context, sessionID string) (*application.SessionInfo, error)
+	revokeFunc             func(ctx context.Context, sessionID string) error
+	revokeAllFunc          func(ctx context.Context, agentID string) error
+	refreshFunc            func(ctx context.Context, credentialID string) (*application.AuthResult, error)
+	issueIdentityTokenFunc func(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
 }
 
 func (m *mockAuthService) InitiateAuthFlow(ctx context.Context, provider, redirectURI string) (*application.AuthRequest, error) {
@@ -117,6 +121,13 @@ func (m *mockAuthService) RefreshTokens(ctx context.Context, credentialID string
 		return m.refreshFunc(ctx, credentialID)
 	}
 	return &application.AuthResult{AccessToken: "new-token"}, nil
+}
+
+func (m *mockAuthService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
+	if m.issueIdentityTokenFunc != nil {
+		return m.issueIdentityTokenFunc(ctx, agent, activeAccountID)
+	}
+	return "", nil
 }
 
 // --- Mock CredentialRepository ---
@@ -735,5 +746,192 @@ func TestLogout_NoSession_StillSucceeds(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestLogout_ClearsJWTCookie(t *testing.T) {
+	t.Parallel()
+
+	handlers, sm := newTestHandlers(&mockAuthService{}, nil)
+
+	r := httptest.NewRequest("POST", "/api/auth/logout", nil)
+	r.Host = "example.com"
+	sessionW := httptest.NewRecorder()
+	_ = sm.CreateHTTPSession(sessionW, r, session.SessionData{
+		SessionID: "sess-1", AgentID: "agent-1",
+		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(24 * time.Hour),
+	})
+
+	r2 := httptest.NewRequest("POST", "/api/auth/logout", nil)
+	for _, cookie := range sessionW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Logout(w, r2)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify JWT cookie is cleared with MaxAge -1.
+	var jwtCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "pericarp_token" {
+			jwtCookie = c
+			break
+		}
+	}
+	if jwtCookie == nil {
+		t.Fatal("expected pericarp_token cookie to be set (for deletion)")
+	}
+	if jwtCookie.MaxAge != -1 {
+		t.Errorf("JWT cookie MaxAge = %d, want -1", jwtCookie.MaxAge)
+	}
+}
+
+// --- JWT handler tests ---
+
+func TestCallback_WithJWT_SetsCookie(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+	jwtSvc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	svc := &mockAuthService{
+		issueIdentityTokenFunc: func(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
+			account, _ := new(entities.Account).With("account-1", "Test Account", entities.AccountTypePersonal)
+			return jwtSvc.IssueToken(ctx, agent, []*entities.Account{account}, activeAccountID)
+		},
+	}
+
+	handlers, sm := newTestHandlers(svc, nil)
+
+	// Set up flow data
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(),
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify JWT cookie is set
+	var jwtCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "pericarp_token" {
+			jwtCookie = c
+			break
+		}
+	}
+	if jwtCookie == nil {
+		t.Fatal("expected pericarp_token cookie, not found")
+	}
+	if jwtCookie.Value == "" {
+		t.Error("JWT cookie value should not be empty")
+	}
+	if !jwtCookie.HttpOnly {
+		t.Error("JWT cookie should be HttpOnly")
+	}
+	if !jwtCookie.Secure {
+		t.Error("JWT cookie should be Secure")
+	}
+	if jwtCookie.MaxAge != 900 {
+		t.Errorf("JWT cookie MaxAge = %d, want 900", jwtCookie.MaxAge)
+	}
+
+	// Validate the token content
+	claims, validateErr := jwtSvc.ValidateToken(context.Background(), jwtCookie.Value)
+	if validateErr != nil {
+		t.Fatalf("JWT cookie contains invalid token: %v", validateErr)
+	}
+	if claims.AgentID != "agent-1" {
+		t.Errorf("AgentID = %q, want %q", claims.AgentID, "agent-1")
+	}
+}
+
+func TestCallback_JWTIssueFails_StillRedirects(t *testing.T) {
+	t.Parallel()
+
+	svc := &mockAuthService{
+		issueIdentityTokenFunc: func(_ context.Context, _ *entities.Agent, _ string) (string, error) {
+			return "", errors.New("signing failure")
+		},
+	}
+
+	handlers, sm := newTestHandlers(svc, nil)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(),
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302 (graceful degradation), got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	// No JWT cookie should be set
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "pericarp_token" {
+			t.Error("expected no pericarp_token cookie when JWT issuance fails")
+		}
+	}
+}
+
+func TestCallback_NoJWTService_NoCookie(t *testing.T) {
+	t.Parallel()
+
+	handlers, sm := newTestHandlers(&mockAuthService{}, nil)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(),
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "pericarp_token" {
+			t.Error("expected no pericarp_token cookie when JWTService is nil")
+		}
 	}
 }

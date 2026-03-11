@@ -44,3 +44,14 @@ func WithEventStore(store esDomain.EventStore) AuthServiceOption {
 		}
 	}
 }
+
+// WithJWTService sets a JWTService for issuing identity tokens.
+// When configured, IssueIdentityToken will produce a signed JWT;
+// otherwise it returns an empty string (opaque-session-only mode).
+func WithJWTService(js JWTService) AuthServiceOption {
+	return func(s *DefaultAuthenticationService) {
+		if js != nil {
+			s.jwtService = js
+		}
+	}
+}
