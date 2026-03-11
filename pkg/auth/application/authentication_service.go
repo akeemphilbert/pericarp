@@ -281,24 +281,32 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 
 		// Mark credential as used
 		if markErr := credential.MarkUsed(); markErr != nil {
-			return nil, nil, fmt.Errorf("failed to mark credential as used: %w", markErr)
+			return nil, nil, nil, fmt.Errorf("failed to mark credential as used: %w", markErr)
 		}
 		if saveErr := s.credentials.Save(ctx, credential); saveErr != nil {
-			return nil, nil, fmt.Errorf("failed to save credential: %w", saveErr)
+			return nil, nil, nil, fmt.Errorf("failed to save credential: %w", saveErr)
 		}
 
-		return agent, credential, nil
+		return agent, credential, account, nil
 	}
 
-	// Create new agent
+	// No existing credential found -- create new agent, personal account, and credential
+
 	agentID := ksuid.New().String()
 	agent := new(entities.Agent)
 	agent, err = agent.With(agentID, userInfo.DisplayName, entities.AgentTypePerson)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create agent: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to create agent: %w", err)
 	}
-	if err = s.agents.Save(ctx, agent); err != nil {
-		return nil, nil, fmt.Errorf("failed to save agent: %w", err)
+
+	accountID := ksuid.New().String()
+	account := new(entities.Account)
+	account, err = account.With(accountID, userInfo.DisplayName+"'s Account", entities.AccountTypePersonal)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create account: %w", err)
+	}
+	if err = account.AddMember(agentID, entities.RoleOwner); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to add member to account: %w", err)
 	}
 
 	credentialID := ksuid.New().String()
