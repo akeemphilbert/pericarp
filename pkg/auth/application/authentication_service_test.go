@@ -240,14 +240,16 @@ func (m *mockTokenStore) NeedsRefresh(_ context.Context, credentialID string) (b
 }
 
 type mockAccountRepo struct {
-	accounts map[string]*entities.Account
-	byMember map[string]*entities.Account // key: agentID -> personal account
+	accounts    map[string]*entities.Account
+	byMember    map[string]*entities.Account // key: agentID -> personal account
+	memberRoles map[string]string            // key: "accountID:agentID" -> roleID
 }
 
 func newMockAccountRepo() *mockAccountRepo {
 	return &mockAccountRepo{
-		accounts: make(map[string]*entities.Account),
-		byMember: make(map[string]*entities.Account),
+		accounts:    make(map[string]*entities.Account),
+		byMember:    make(map[string]*entities.Account),
+		memberRoles: make(map[string]string),
 	}
 }
 
@@ -256,7 +258,13 @@ func (m *mockAccountRepo) Save(_ context.Context, account *entities.Account) err
 	return nil
 }
 
-func (m *mockAccountRepo) SaveMember(_ context.Context, _, agentID string, _ string) error {
+func (m *mockAccountRepo) FindMemberRole(_ context.Context, accountID, agentID string) (string, error) {
+	role, _ := m.memberRoles[accountID+":"+agentID]
+	return role, nil
+}
+
+func (m *mockAccountRepo) SaveMember(_ context.Context, accountID, agentID string, roleID string) error {
+	m.memberRoles[accountID+":"+agentID] = roleID
 	// Link agent to the most recently saved account for lookup
 	for _, account := range m.accounts {
 		if account.AccountType() == entities.AccountTypePersonal {
@@ -1037,6 +1045,9 @@ func (m *errorAccountRepo) FindByMember(_ context.Context, _ string) ([]*entitie
 }
 func (m *errorAccountRepo) FindPersonalByMember(_ context.Context, _ string) (*entities.Account, error) {
 	return nil, nil
+}
+func (m *errorAccountRepo) FindMemberRole(_ context.Context, _, _ string) (string, error) {
+	return "", nil
 }
 func (m *errorAccountRepo) SaveMember(_ context.Context, _, _, _ string) error { return nil }
 func (m *errorAccountRepo) FindAll(_ context.Context, _ string, _ int) (*repositories.PaginatedResponse[*entities.Account], error) {

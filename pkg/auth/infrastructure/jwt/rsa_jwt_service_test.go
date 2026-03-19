@@ -323,3 +323,233 @@ func TestIssueToken_NilAgent(t *testing.T) {
 		t.Fatal("expected error for nil agent, got nil")
 	}
 }
+
+// --- Invite Token Tests ---
+
+func TestInviteToken_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	tokenString, err := svc.IssueInviteToken(context.Background(), "invite-123", 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("IssueInviteToken failed: %v", err)
+	}
+
+	claims, err := svc.ValidateInviteToken(context.Background(), tokenString)
+	if err != nil {
+		t.Fatalf("ValidateInviteToken failed: %v", err)
+	}
+
+	if claims.InviteID != "invite-123" {
+		t.Errorf("InviteID = %q, want %q", claims.InviteID, "invite-123")
+	}
+	if claims.Subject != "invite-123" {
+		t.Errorf("Subject = %q, want %q", claims.Subject, "invite-123")
+	}
+	if claims.Issuer != "pericarp" {
+		t.Errorf("Issuer = %q, want %q", claims.Issuer, "pericarp")
+	}
+	if claims.ID == "" {
+		t.Error("JWT ID should not be empty")
+	}
+}
+
+func TestInviteToken_Expired(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	tokenString, err := svc.IssueInviteToken(context.Background(), "invite-123", 1*time.Millisecond)
+	if err != nil {
+		t.Fatalf("IssueInviteToken failed: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	_, err = svc.ValidateInviteToken(context.Background(), tokenString)
+	if err != application.ErrTokenExpired {
+		t.Errorf("expected ErrTokenExpired, got %v", err)
+	}
+}
+
+func TestInviteToken_WrongKey(t *testing.T) {
+	t.Parallel()
+
+	keyA := generateTestKey(t)
+	keyB := generateTestKey(t)
+
+	svcA := authjwt.NewRSAJWTService(authjwt.WithSigningKey(keyA))
+	svcB := authjwt.NewRSAJWTService(authjwt.WithSigningKey(keyB))
+
+	tokenString, err := svcA.IssueInviteToken(context.Background(), "invite-123", 1*time.Hour)
+	if err != nil {
+		t.Fatalf("IssueInviteToken failed: %v", err)
+	}
+
+	_, err = svcB.ValidateInviteToken(context.Background(), tokenString)
+	if !errors.Is(err, application.ErrTokenInvalid) {
+		t.Errorf("expected ErrTokenInvalid, got %v", err)
+	}
+}
+
+func TestInviteToken_NoSigningKey(t *testing.T) {
+	t.Parallel()
+
+	svc := authjwt.NewRSAJWTService() // no key
+
+	_, err := svc.IssueInviteToken(context.Background(), "invite-123", 1*time.Hour)
+	if err != application.ErrNoSigningKey {
+		t.Errorf("expected ErrNoSigningKey, got %v", err)
+	}
+}
+
+func TestInviteToken_EmptyInviteID(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	_, err := svc.IssueInviteToken(context.Background(), "", 1*time.Hour)
+	if err == nil {
+		t.Fatal("expected error for empty invite ID, got nil")
+	}
+}
+
+// --- ReissueToken Tests ---
+
+func TestReissueToken_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	agent := createTestAgent(t, "agent-1", "Test User")
+	accounts := []*entities.Account{
+		createTestAccount(t, "acc-1", "Account One"),
+		createTestAccount(t, "acc-2", "Account Two"),
+	}
+
+	originalToken, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1")
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	originalClaims, err := svc.ValidateToken(context.Background(), originalToken)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+
+	reissuedToken, err := svc.ReissueToken(context.Background(), originalClaims, "acc-2")
+	if err != nil {
+		t.Fatalf("ReissueToken failed: %v", err)
+	}
+
+	newClaims, err := svc.ValidateToken(context.Background(), reissuedToken)
+	if err != nil {
+		t.Fatalf("ValidateToken on reissued token failed: %v", err)
+	}
+
+	if newClaims.ActiveAccountID != "acc-2" {
+		t.Errorf("ActiveAccountID = %q, want %q", newClaims.ActiveAccountID, "acc-2")
+	}
+	if newClaims.AgentID != "agent-1" {
+		t.Errorf("AgentID = %q, want %q", newClaims.AgentID, "agent-1")
+	}
+	if len(newClaims.AccountIDs) != 2 {
+		t.Fatalf("AccountIDs length = %d, want 2", len(newClaims.AccountIDs))
+	}
+	if newClaims.AccountIDs[0] != "acc-1" || newClaims.AccountIDs[1] != "acc-2" {
+		t.Errorf("AccountIDs = %v, want [acc-1, acc-2]", newClaims.AccountIDs)
+	}
+	if newClaims.Subject != "agent-1" {
+		t.Errorf("Subject = %q, want %q", newClaims.Subject, "agent-1")
+	}
+}
+
+func TestReissueToken_FreshTimestamps(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	agent := createTestAgent(t, "agent-1", "Test User")
+	accounts := []*entities.Account{
+		createTestAccount(t, "acc-1", "Account One"),
+	}
+
+	originalToken, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1")
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	originalClaims, err := svc.ValidateToken(context.Background(), originalToken)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+
+	// Sleep just over 1 second so JWT second-precision timestamps differ.
+	time.Sleep(1100 * time.Millisecond)
+
+	reissuedToken, err := svc.ReissueToken(context.Background(), originalClaims, "acc-1")
+	if err != nil {
+		t.Fatalf("ReissueToken failed: %v", err)
+	}
+
+	newClaims, err := svc.ValidateToken(context.Background(), reissuedToken)
+	if err != nil {
+		t.Fatalf("ValidateToken on reissued token failed: %v", err)
+	}
+
+	if newClaims.ID == originalClaims.ID {
+		t.Error("reissued token should have a different JWT ID")
+	}
+	if !newClaims.IssuedAt.Time.After(originalClaims.IssuedAt.Time) {
+		t.Error("reissued token IssuedAt should be after original")
+	}
+	if !newClaims.ExpiresAt.Time.After(originalClaims.ExpiresAt.Time) {
+		t.Error("reissued token ExpiresAt should be after original")
+	}
+}
+
+func TestReissueToken_NilClaims(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	_, err := svc.ReissueToken(context.Background(), nil, "acc-1")
+	if err == nil {
+		t.Fatal("expected error for nil claims, got nil")
+	}
+}
+
+func TestReissueToken_NoSigningKey(t *testing.T) {
+	t.Parallel()
+
+	svc := authjwt.NewRSAJWTService() // no key
+
+	claims := &application.PericarpClaims{AgentID: "agent-1"}
+	_, err := svc.ReissueToken(context.Background(), claims, "acc-1")
+	if err != application.ErrNoSigningKey {
+		t.Errorf("expected ErrNoSigningKey, got %v", err)
+	}
+}
+
+func TestReissueToken_CancelledContext(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	claims := &application.PericarpClaims{AgentID: "agent-1"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.ReissueToken(ctx, claims, "acc-1")
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}

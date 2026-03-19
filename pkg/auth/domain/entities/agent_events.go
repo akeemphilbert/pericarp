@@ -27,6 +27,44 @@ func (e AgentCreated) EventType() string {
 	return EventTypeAgentCreated
 }
 
+// AgentInvited represents the creation of a skeleton invited agent.
+type AgentInvited struct {
+	Email     string    `json:"email"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// With creates a new AgentInvited event.
+func (e AgentInvited) With(email string) AgentInvited {
+	return AgentInvited{
+		Email:     email,
+		Timestamp: time.Now(),
+	}
+}
+
+// EventType returns the event type name.
+func (e AgentInvited) EventType() string {
+	return EventTypeAgentInvited
+}
+
+// AgentNameUpdated represents an agent's display name being changed.
+type AgentNameUpdated struct {
+	Name      string    `json:"name"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// With creates a new AgentNameUpdated event.
+func (e AgentNameUpdated) With(name string) AgentNameUpdated {
+	return AgentNameUpdated{
+		Name:      name,
+		Timestamp: time.Now(),
+	}
+}
+
+// EventType returns the event type name.
+func (e AgentNameUpdated) EventType() string {
+	return EventTypeAgentNameUpdated
+}
+
 // AgentDeactivated represents the deactivation of an agent.
 type AgentDeactivated struct {
 	Timestamp time.Time `json:"timestamp"`

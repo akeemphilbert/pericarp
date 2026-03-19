@@ -13,6 +13,8 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
+var _ application.TokenReissuer = (*RSAJWTService)(nil)
+
 // RSAJWTService implements application.JWTService using RS256 signing.
 // It can be constructed without keys; calls to IssueToken/ValidateToken will
 // return application.ErrNoSigningKey until a key is provided via options.
@@ -102,4 +104,102 @@ func (s *RSAJWTService) ValidateToken(ctx context.Context, tokenString string) (
 	}
 
 	return claims, nil
+}
+
+// IssueInviteToken creates a signed JWT for an invite.
+func (s *RSAJWTService) IssueInviteToken(ctx context.Context, inviteID string, expiry time.Duration) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if s.privateKey == nil {
+		return "", application.ErrNoSigningKey
+	}
+	if inviteID == "" {
+		return "", fmt.Errorf("authentication: invite ID must not be empty")
+	}
+
+	now := time.Now()
+	claims := application.InviteClaims{
+		RegisteredClaims: gojwt.RegisteredClaims{
+			Issuer:    s.issuer,
+			Subject:   inviteID,
+			IssuedAt:  gojwt.NewNumericDate(now),
+			ExpiresAt: gojwt.NewNumericDate(now.Add(expiry)),
+			ID:        ksuid.New().String(),
+		},
+		InviteID: inviteID,
+	}
+
+	token := gojwt.NewWithClaims(gojwt.SigningMethodRS256, claims)
+	tokenString, err := token.SignedString(s.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", application.ErrSigningFailed, err)
+	}
+
+	return tokenString, nil
+}
+
+// ValidateInviteToken parses and validates an invite token string, returning the claims.
+func (s *RSAJWTService) ValidateInviteToken(ctx context.Context, tokenString string) (*application.InviteClaims, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.publicKey == nil {
+		return nil, application.ErrNoSigningKey
+	}
+
+	claims := &application.InviteClaims{}
+	token, err := gojwt.ParseWithClaims(tokenString, claims, func(token *gojwt.Token) (any, error) {
+		if _, ok := token.Method.(*gojwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return s.publicKey, nil
+	})
+	if err != nil {
+		if errors.Is(err, gojwt.ErrTokenExpired) {
+			return nil, application.ErrTokenExpired
+		}
+		return nil, fmt.Errorf("%w: %v", application.ErrTokenInvalid, err)
+	}
+	if !token.Valid {
+		return nil, application.ErrTokenInvalid
+	}
+
+	return claims, nil
+}
+
+// ReissueToken creates a new JWT with a different ActiveAccountID, copying
+// AgentID, Subject, and AccountIDs from the existing claims.
+func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.PericarpClaims, activeAccountID string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if s.privateKey == nil {
+		return "", application.ErrNoSigningKey
+	}
+	if claims == nil {
+		return "", fmt.Errorf("authentication: claims must not be nil")
+	}
+
+	now := time.Now()
+	newClaims := application.PericarpClaims{
+		RegisteredClaims: gojwt.RegisteredClaims{
+			Issuer:    s.issuer,
+			Subject:   claims.Subject,
+			IssuedAt:  gojwt.NewNumericDate(now),
+			ExpiresAt: gojwt.NewNumericDate(now.Add(s.tokenTTL)),
+			ID:        ksuid.New().String(),
+		},
+		AgentID:         claims.AgentID,
+		AccountIDs:      claims.AccountIDs,
+		ActiveAccountID: activeAccountID,
+	}
+
+	token := gojwt.NewWithClaims(gojwt.SigningMethodRS256, newClaims)
+	tokenString, err := token.SignedString(s.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", application.ErrSigningFailed, err)
+	}
+
+	return tokenString, nil
 }

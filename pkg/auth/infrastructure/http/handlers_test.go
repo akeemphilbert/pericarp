@@ -935,3 +935,441 @@ func TestCallback_NoJWTService_NoCookie(t *testing.T) {
 		}
 	}
 }
+
+// --- Invite token tests ---
+
+type mockInviteAcceptor struct {
+	acceptFunc func(ctx context.Context, token string, userInfo application.UserInfo) (
+		*entities.Agent, *entities.Credential, *entities.Account, error)
+}
+
+func (m *mockInviteAcceptor) AcceptInvite(ctx context.Context, token string, userInfo application.UserInfo) (
+	*entities.Agent, *entities.Credential, *entities.Account, error) {
+	if m.acceptFunc != nil {
+		return m.acceptFunc(ctx, token, userInfo)
+	}
+	return nil, nil, nil, errors.New("not implemented")
+}
+
+func newTestHandlersWithInvite(authSvc *mockAuthService, credRepo *mockCredRepo, inviteAcceptor authhttp.InviteAcceptor) (*authhttp.AuthHandlers, *session.GorillaSessionManager) {
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+
+	if credRepo == nil {
+		credRepo = &mockCredRepo{}
+	}
+
+	cfg := authhttp.HandlerConfig{
+		AuthService:    authSvc,
+		SessionManager: sm,
+		Credentials:    credRepo,
+		RedirectURI:    authhttp.RedirectURIConfig{CallbackPath: "/api/auth/callback"},
+		InviteAcceptor: inviteAcceptor,
+	}
+	return authhttp.NewAuthHandlers(cfg), sm
+}
+
+func TestLogin_WithInviteToken_StoresInFlowData(t *testing.T) {
+	t.Parallel()
+
+	handlers, sm := newTestHandlers(&mockAuthService{}, nil)
+
+	r := httptest.NewRequest("GET", "/auth/login?invite_token=XYZ", nil)
+	r.Host = "example.com"
+	w := httptest.NewRecorder()
+
+	handlers.Login(w, r)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected status 302, got %d", w.Code)
+	}
+
+	resp := w.Result()
+	callbackReq := httptest.NewRequest("GET", "/api/auth/callback", nil)
+	for _, cookie := range resp.Cookies() {
+		callbackReq.AddCookie(cookie)
+	}
+
+	callbackW := httptest.NewRecorder()
+	flowData, err := sm.GetFlowData(callbackW, callbackReq)
+	if err != nil {
+		t.Fatalf("failed to get flow data: %v", err)
+	}
+	if flowData.InviteToken != "XYZ" {
+		t.Errorf("InviteToken = %q, want %q", flowData.InviteToken, "XYZ")
+	}
+}
+
+func TestLogin_WithInviteTokenAndRedirect_StoresBoth(t *testing.T) {
+	t.Parallel()
+
+	handlers, sm := newTestHandlers(&mockAuthService{}, nil)
+
+	r := httptest.NewRequest("GET", "/auth/login?invite_token=ABC&redirect=/dashboard", nil)
+	r.Host = "example.com"
+	w := httptest.NewRecorder()
+
+	handlers.Login(w, r)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected status 302, got %d", w.Code)
+	}
+
+	resp := w.Result()
+	callbackReq := httptest.NewRequest("GET", "/api/auth/callback", nil)
+	for _, cookie := range resp.Cookies() {
+		callbackReq.AddCookie(cookie)
+	}
+
+	callbackW := httptest.NewRecorder()
+	flowData, err := sm.GetFlowData(callbackW, callbackReq)
+	if err != nil {
+		t.Fatalf("failed to get flow data: %v", err)
+	}
+	if flowData.InviteToken != "ABC" {
+		t.Errorf("InviteToken = %q, want %q", flowData.InviteToken, "ABC")
+	}
+	if flowData.Metadata == nil || flowData.Metadata["post_login_redirect"] != "/dashboard" {
+		t.Errorf("expected post_login_redirect=/dashboard, got metadata=%v", flowData.Metadata)
+	}
+}
+
+func TestCallback_WithInviteToken_CallsAcceptInvite(t *testing.T) {
+	t.Parallel()
+
+	var capturedToken string
+	var capturedUserInfo application.UserInfo
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, token string, userInfo application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			capturedToken = token
+			capturedUserInfo = userInfo
+			agent, _ := new(entities.Agent).With("invited-agent", userInfo.DisplayName, entities.AgentTypePerson)
+			cred, _ := new(entities.Credential).With("invited-cred", "invited-agent", userInfo.Provider, userInfo.ProviderUserID, userInfo.Email, userInfo.DisplayName)
+			account, _ := new(entities.Account).With("team-account", "Team Account", entities.AccountTypeTeam)
+			return agent, cred, account, nil
+		},
+	}
+
+	svc := &mockAuthService{}
+	handlers, sm := newTestHandlersWithInvite(svc, nil, acceptor)
+
+	// Set up flow data with invite token
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State:       "s",
+		Provider:    "google",
+		CreatedAt:   time.Now(),
+		InviteToken: "invite-token-123",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected 302, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	if capturedToken != "invite-token-123" {
+		t.Errorf("AcceptInvite token = %q, want %q", capturedToken, "invite-token-123")
+	}
+	if capturedUserInfo.Email != "user@example.com" {
+		t.Errorf("AcceptInvite email = %q, want %q", capturedUserInfo.Email, "user@example.com")
+	}
+
+	loc := w.Header().Get("Location")
+	if loc != "/" {
+		t.Errorf("Location = %q, want %q", loc, "/")
+	}
+}
+
+func TestCallback_WithInviteToken_ExpiredInvite_Returns400(t *testing.T) {
+	t.Parallel()
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			return nil, nil, nil, application.ErrInviteExpired
+		},
+	}
+
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State:       "s",
+		Provider:    "google",
+		CreatedAt:   time.Now(),
+		InviteToken: "expired-token",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	resp := parseJSONResponse(t, w)
+	if resp["error"] != "invalid or expired invite" {
+		t.Errorf("error = %q, want %q", resp["error"], "invalid or expired invite")
+	}
+}
+
+func TestCallback_WithInviteToken_InternalError_Returns500(t *testing.T) {
+	t.Parallel()
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			return nil, nil, nil, errors.New("database connection lost")
+		},
+	}
+
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State:       "s",
+		Provider:    "google",
+		CreatedAt:   time.Now(),
+		InviteToken: "some-token",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	resp := parseJSONResponse(t, w)
+	if resp["error"] != "failed to accept invite" {
+		t.Errorf("error = %q, want %q", resp["error"], "failed to accept invite")
+	}
+}
+
+func TestCallback_WithInviteToken_NilAcceptor_Returns500(t *testing.T) {
+	t.Parallel()
+
+	// InviteAcceptor is nil
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, nil)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State:       "s",
+		Provider:    "google",
+		CreatedAt:   time.Now(),
+		InviteToken: "some-token",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	resp := parseJSONResponse(t, w)
+	if resp["error"] != "invite system not configured" {
+		t.Errorf("error = %q, want %q", resp["error"], "invite system not configured")
+	}
+}
+
+func TestCallback_WithInviteToken_NotFound_Returns400(t *testing.T) {
+	t.Parallel()
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			return nil, nil, nil, application.ErrInviteNotFound
+		},
+	}
+
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(), InviteToken: "tok",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCallback_WithInviteToken_NotPending_Returns400(t *testing.T) {
+	t.Parallel()
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			return nil, nil, nil, application.ErrInviteNotPending
+		},
+	}
+
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(), InviteToken: "tok",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCallback_WithInviteToken_InvalidToken_Returns400(t *testing.T) {
+	t.Parallel()
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			return nil, nil, nil, application.ErrInviteTokenInvalid
+		},
+	}
+
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(), InviteToken: "tok",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCallback_WithInviteToken_EmailMismatch_Returns400(t *testing.T) {
+	t.Parallel()
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			return nil, nil, nil, application.ErrInviteEmailMismatch
+		},
+	}
+
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(), InviteToken: "tok",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCallback_WithInviteToken_AgentMissing_Returns500(t *testing.T) {
+	t.Parallel()
+
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (
+			*entities.Agent, *entities.Credential, *entities.Account, error) {
+			return nil, nil, nil, application.ErrInviteeAgentMissing
+		},
+	}
+
+	handlers, sm := newTestHandlersWithInvite(&mockAuthService{}, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	_ = sm.SetFlowData(flowW, r, session.FlowData{
+		State: "s", Provider: "google", CreatedAt: time.Now(), InviteToken: "tok",
+	})
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	w := httptest.NewRecorder()
+	handlers.Callback(w, r2)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d; body: %s", w.Code, w.Body.String())
+	}
+}

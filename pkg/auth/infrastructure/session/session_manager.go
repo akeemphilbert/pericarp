@@ -39,6 +39,9 @@ type FlowData struct {
 	// Metadata holds application-specific key-value pairs that survive the
 	// OAuth round-trip (e.g., post-login redirect path). Nil-safe.
 	Metadata map[string]string
+	// InviteToken is an optional signed invite token that threads through
+	// the OAuth round-trip for invitation-based signup flows.
+	InviteToken string
 }
 
 // SessionManager defines the interface for HTTP session management.

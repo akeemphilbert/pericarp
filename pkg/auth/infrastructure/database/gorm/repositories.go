@@ -93,6 +93,20 @@ func (r *accountRepository) Save(ctx context.Context, account *entities.Account)
 	return r.db.WithContext(ctx).Save(m).Error
 }
 
+func (r *accountRepository) FindMemberRole(ctx context.Context, accountID, agentID string) (string, error) {
+	var member models.AccountMemberModel
+	err := r.db.WithContext(ctx).
+		Where("account_id = ? AND agent_id = ?", accountID, agentID).
+		First(&member).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	return member.RoleID, nil
+}
+
 func (r *accountRepository) SaveMember(ctx context.Context, accountID, agentID, roleID string) error {
 	member := models.AccountMemberModelFrom(accountID, agentID, roleID)
 	return r.db.WithContext(ctx).Save(member).Error

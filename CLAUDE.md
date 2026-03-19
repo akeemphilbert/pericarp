@@ -88,3 +88,16 @@ Only two: `github.com/segmentio/ksuid` (event IDs) and `golang.org/x/sync` (errg
 - Race detection enabled (`-race` flag)
 - Tests colocated with source files
 - `MemoryStore` used as the default test EventStore
+
+## Project Journal
+
+An append-only journal at `.claude/journal.md` tracks major changes to Pericarp.
+
+**When to read it:** At the start of any major task (new feature, architectural change, new package) to understand recent context and avoid contradicting prior decisions.
+
+**When to append:** After completing a major change — new packages, architectural decisions, significant feature additions, design pivots, or scope changes. Do not log routine bug fixes, test additions, or minor refactors.
+
+**Entry format:**
+- Heading: `### YYYY-MM-DD: Short description`
+- A few bullets covering what changed, why, and key design decisions
+- Keep entries concise (3-6 bullets)

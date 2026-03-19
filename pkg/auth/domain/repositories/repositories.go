@@ -75,6 +75,10 @@ type AccountRepository interface {
 	// Returns (nil, nil) if the agent has no personal account.
 	FindPersonalByMember(ctx context.Context, agentID string) (*entities.Account, error)
 
+	// FindMemberRole retrieves the role of a member in an account.
+	// Returns ("", nil) if the agent is not a member of the account.
+	FindMemberRole(ctx context.Context, accountID, agentID string) (string, error)
+
 	// SaveMember persists a membership between an account and an agent with a role.
 	SaveMember(ctx context.Context, accountID, agentID, roleID string) error
 
@@ -101,6 +105,24 @@ type CredentialRepository interface {
 
 	// FindAll retrieves Credential aggregates with cursor-based pagination.
 	FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.Credential], error)
+}
+
+// InviteRepository defines the interface for Invite aggregate persistence.
+type InviteRepository interface {
+	// Save persists the Invite aggregate state.
+	Save(ctx context.Context, invite *entities.Invite) error
+
+	// FindByID retrieves an Invite aggregate by its ID.
+	FindByID(ctx context.Context, id string) (*entities.Invite, error)
+
+	// FindByEmail retrieves all invites for the given email address.
+	FindByEmail(ctx context.Context, email string) ([]*entities.Invite, error)
+
+	// FindByAccount retrieves all invites for the given account.
+	FindByAccount(ctx context.Context, accountID string) ([]*entities.Invite, error)
+
+	// FindPendingByEmail retrieves all pending invites for the given email address.
+	FindPendingByEmail(ctx context.Context, email string) ([]*entities.Invite, error)
 }
 
 // AuthSessionRepository defines the interface for AuthSession aggregate persistence.

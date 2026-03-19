@@ -1,18 +1,27 @@
 package authhttp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
+	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
 	"github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/session"
 )
 
 const defaultSessionDuration = 24 * time.Hour
+
+// InviteAcceptor accepts an invite on behalf of a user during the OAuth callback.
+type InviteAcceptor interface {
+	AcceptInvite(ctx context.Context, token string, userInfo application.UserInfo) (
+		*entities.Agent, *entities.Credential, *entities.Account, error)
+}
 
 // HandlerConfig configures the reference auth HTTP handlers.
 type HandlerConfig struct {
@@ -31,6 +40,10 @@ type HandlerConfig struct {
 	// JWTCookieMaxAge is the MaxAge (in seconds) for the JWT cookie. When zero,
 	// it defaults to 900 (15 minutes) to match the default token TTL.
 	JWTCookieMaxAge int
+	// InviteAcceptor is optional. When set and the login flow carries an invite
+	// token, the callback handler calls AcceptInvite instead of FindOrCreateAgent.
+	// Flows without an invite token use the normal FindOrCreateAgent path regardless.
+	InviteAcceptor InviteAcceptor
 }
 
 // AuthHandlers provides standard HTTP handlers for OAuth login, callback, me, and logout.
@@ -93,6 +106,10 @@ func (h *AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if inviteToken := r.URL.Query().Get("invite_token"); inviteToken != "" {
+		flowData.InviteToken = inviteToken
+	}
+
 	if err := h.cfg.SessionManager.SetFlowData(w, r, flowData); err != nil {
 		h.cfg.Logger.Error(r.Context(), "failed to store flow data", "error", err)
 		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store flow data"})
@@ -130,11 +147,42 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, credential, account, err := h.cfg.AuthService.FindOrCreateAgent(ctx, authResult.UserInfo)
-	if err != nil {
-		h.cfg.Logger.Error(ctx, "find or create agent failed", "error", err)
-		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to find or create agent"})
-		return
+	var agent *entities.Agent
+	var credential *entities.Credential
+	var account *entities.Account
+
+	if flowData.InviteToken != "" {
+		if h.cfg.InviteAcceptor == nil {
+			h.cfg.Logger.Error(ctx, "invite token present but InviteAcceptor not configured")
+			h.writeJSON(w, http.StatusInternalServerError,
+				map[string]string{"error": "invite system not configured"})
+			return
+		}
+		agent, credential, account, err = h.cfg.InviteAcceptor.AcceptInvite(
+			ctx, flowData.InviteToken, authResult.UserInfo)
+		if err != nil {
+			h.cfg.Logger.Error(ctx, "invite acceptance failed", "error", err)
+			status := http.StatusInternalServerError
+			msg := "failed to accept invite"
+			if errors.Is(err, application.ErrInviteNotFound) ||
+				errors.Is(err, application.ErrInviteNotPending) ||
+				errors.Is(err, application.ErrInviteExpired) ||
+				errors.Is(err, application.ErrInviteTokenInvalid) ||
+				errors.Is(err, application.ErrInviteEmailMismatch) {
+				status = http.StatusBadRequest
+				msg = "invalid or expired invite"
+			}
+			h.writeJSON(w, status, map[string]string{"error": msg})
+			return
+		}
+	} else {
+		agent, credential, account, err = h.cfg.AuthService.FindOrCreateAgent(ctx, authResult.UserInfo)
+		if err != nil {
+			h.cfg.Logger.Error(ctx, "find or create agent failed", "error", err)
+			h.writeJSON(w, http.StatusInternalServerError,
+				map[string]string{"error": "failed to find or create agent"})
+			return
+		}
 	}
 
 	ipAddress := realIP(r)

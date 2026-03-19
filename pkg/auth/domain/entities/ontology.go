@@ -108,6 +108,20 @@ const (
 	RoleAdmin  = "admin"
 )
 
+// Agent status constants.
+const (
+	AgentStatusActive      = "active"
+	AgentStatusInvited     = "invited"
+	AgentStatusDeactivated = "deactivated"
+)
+
+// Invite status constants.
+const (
+	InviteStatusPending  = "pending"
+	InviteStatusAccepted = "accepted"
+	InviteStatusRevoked  = "revoked"
+)
+
 // Event type patterns for LIKE queries.
 const (
 	PatternAgent      = "Agent.%"
@@ -116,6 +130,7 @@ const (
 	PatternAccount    = "Account.%"
 	PatternCredential = "Credential.%"
 	PatternSession    = "Session.%"
+	PatternInvite     = "Invite.%"
 )
 
 // Event type constants for auth domain events.
@@ -123,6 +138,8 @@ const (
 	EventTypeAgentCreated     = "Agent.Created"
 	EventTypeAgentDeactivated = "Agent.Deactivated"
 	EventTypeAgentActivated   = "Agent.Activated"
+	EventTypeAgentInvited     = "Agent.Invited"
+	EventTypeAgentNameUpdated = "Agent.NameUpdated"
 
 	EventTypeAgentRoleAssigned           = "Agent.RoleAssigned"
 	EventTypeAgentRoleRevoked            = "Agent.RoleRevoked"
@@ -159,4 +176,8 @@ const (
 	EventTypeSessionTouched       = "Session.Touched"
 	EventTypeSessionRevoked       = "Session.Revoked"
 	EventTypeSessionAccountScoped = "Session.AccountScoped"
+
+	EventTypeInviteCreated  = "Invite.Created"
+	EventTypeInviteAccepted = "Invite.Accepted"
+	EventTypeInviteRevoked  = "Invite.Revoked"
 )

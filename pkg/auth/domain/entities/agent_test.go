@@ -280,7 +280,7 @@ func TestAgent_ApplyEvent(t *testing.T) {
 
 	// Reconstruct from events
 	restored := &entities.Agent{}
-	if err := restored.Restore("agent-1", "placeholder", entities.AgentTypePerson, true, events[0].Created); err != nil {
+	if err := restored.Restore("agent-1", "placeholder", entities.AgentTypePerson, entities.AgentStatusActive, events[0].Created); err != nil {
 		t.Fatalf("Restore() error: %v", err)
 	}
 

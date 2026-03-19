@@ -31,6 +31,7 @@ const (
 	keyRedirectURI  = "redirect_uri"
 	keyFlowCreated  = "flow_created_at"
 	keyFlowMetadata = "flow_metadata"
+	keyInviteToken  = "invite_token"
 )
 
 var (
@@ -161,6 +162,10 @@ func (m *GorillaSessionManager) SetFlowData(w http.ResponseWriter, r *http.Reque
 		sess.Values[keyFlowMetadata] = string(raw)
 	}
 
+	if data.InviteToken != "" {
+		sess.Values[keyInviteToken] = data.InviteToken
+	}
+
 	return sess.Save(r, w)
 }
 
@@ -190,6 +195,8 @@ func (m *GorillaSessionManager) GetFlowData(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	inviteToken, _ := sess.Values[keyInviteToken].(string)
+
 	data := &FlowData{
 		State:        state,
 		CodeVerifier: codeVerifier,
@@ -198,6 +205,7 @@ func (m *GorillaSessionManager) GetFlowData(w http.ResponseWriter, r *http.Reque
 		RedirectURI:  redirectURI,
 		CreatedAt:    time.Unix(flowCreated, 0),
 		Metadata:     metadata,
+		InviteToken:  inviteToken,
 	}
 
 	// Clear flow data after retrieval (one-time use)
