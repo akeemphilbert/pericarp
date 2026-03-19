@@ -274,7 +274,7 @@ func TestCustomTTLAndIssuer(t *testing.T) {
 	}
 
 	// Verify TTL: ExpiresAt should be roughly 1 hour from IssuedAt
-	ttl := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time)
+	ttl := claims.ExpiresAt.Sub(claims.IssuedAt.Time)
 	if ttl < 59*time.Minute || ttl > 61*time.Minute {
 		t.Errorf("TTL = %v, want ~1h", ttl)
 	}
@@ -506,10 +506,10 @@ func TestReissueToken_FreshTimestamps(t *testing.T) {
 	if newClaims.ID == originalClaims.ID {
 		t.Error("reissued token should have a different JWT ID")
 	}
-	if !newClaims.IssuedAt.Time.After(originalClaims.IssuedAt.Time) {
+	if !newClaims.IssuedAt.After(originalClaims.IssuedAt.Time) {
 		t.Error("reissued token IssuedAt should be after original")
 	}
-	if !newClaims.ExpiresAt.Time.After(originalClaims.ExpiresAt.Time) {
+	if !newClaims.ExpiresAt.After(originalClaims.ExpiresAt.Time) {
 		t.Error("reissued token ExpiresAt should be after original")
 	}
 }

@@ -259,8 +259,7 @@ func (m *mockAccountRepo) Save(_ context.Context, account *entities.Account) err
 }
 
 func (m *mockAccountRepo) FindMemberRole(_ context.Context, accountID, agentID string) (string, error) {
-	role, _ := m.memberRoles[accountID+":"+agentID]
-	return role, nil
+	return m.memberRoles[accountID+":"+agentID], nil
 }
 
 func (m *mockAccountRepo) SaveMember(_ context.Context, accountID, agentID string, roleID string) error {

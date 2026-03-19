@@ -33,7 +33,7 @@ func (r *Role) With(id, name, description string) (*Role, error) {
 	r.createdAt = time.Now()
 
 	event := new(RoleCreated).With(name, description)
-	if err := r.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := r.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Role.Created event: %w", err)
 	}
 

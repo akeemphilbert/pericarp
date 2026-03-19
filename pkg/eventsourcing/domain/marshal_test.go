@@ -189,7 +189,7 @@ func TestDomainUnmarshalEventFromJSON(t *testing.T) {
 			t.Errorf("Expected AggregateID 'user-123', got %q", envelope.AggregateID)
 		}
 		// Metadata should be nil or empty if not present
-		if envelope.Metadata != nil && len(envelope.Metadata) > 0 {
+		if len(envelope.Metadata) > 0 {
 			t.Error("Expected nil or empty metadata when not present in JSON")
 		}
 	})

@@ -94,7 +94,7 @@ func (g *GitHub) Exchange(ctx context.Context, code string, codeVerifier string,
 	if err != nil {
 		return nil, fmt.Errorf("github: token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -169,10 +169,10 @@ func (g *GitHub) RevokeToken(ctx context.Context, token string) error {
 	if err != nil {
 		return fmt.Errorf("github: revoke request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Drain the response body to allow connection reuse.
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode == http.StatusNoContent {
 		return nil
@@ -200,7 +200,7 @@ func (g *GitHub) fetchUserInfo(ctx context.Context, accessToken string) (*applic
 	if err != nil {
 		return nil, fmt.Errorf("user request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -258,7 +258,7 @@ func (g *GitHub) fetchPrimaryEmail(ctx context.Context, accessToken string) (str
 	if err != nil {
 		return "", fmt.Errorf("emails request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

@@ -291,9 +291,13 @@ func TestBaseEntity_ApplyEvent(t *testing.T) {
 			wantSequenceNo: 0,
 		},
 		{
-			name:           "context timeout",
-			event:          toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1)),
-			ctx:            func() context.Context { ctx, _ := context.WithTimeout(context.Background(), 0); return ctx }(),
+			name:  "context timeout",
+			event: toAnyEvent(domain.NewEventEnvelope("payload", "test-id", "test.event", 1)),
+			ctx: func() context.Context {
+				ctx, cancel := context.WithTimeout(context.Background(), 0)
+				cancel()
+				return ctx
+			}(),
 			wantErr:        true,
 			wantSequenceNo: 0,
 		},
@@ -532,10 +536,8 @@ func TestBaseEntity_Concurrency(t *testing.T) {
 
 	close(errChan)
 
-	// Check for errors
-	var errors []error
-	for err := range errChan {
-		errors = append(errors, err)
+	// Drain error channel (errors expected due to concurrent access)
+	for range errChan {
 	}
 
 	// We expect some duplicate errors due to race conditions with event IDs

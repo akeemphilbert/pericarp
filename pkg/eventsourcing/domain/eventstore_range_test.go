@@ -109,7 +109,7 @@ func TestEventStore_GetEventsRange(t *testing.T) {
 			t.Parallel()
 
 			store := tt.setupStore(t)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			ctx := context.Background()
 			events, err := store.GetEventsRange(ctx, tt.aggregateID, tt.fromVersion, tt.toVersion)
@@ -172,7 +172,7 @@ func TestEventStore_GetEventsRange_FileStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create file store: %v", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 		defer cleanupTestDir(t, baseDir)
 
 		ctx := context.Background()

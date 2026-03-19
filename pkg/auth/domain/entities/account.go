@@ -45,7 +45,7 @@ func (a *Account) With(id, name, accountType string) (*Account, error) {
 	a.createdAt = time.Now()
 
 	event := new(AccountCreated).With(name, accountType)
-	if err := a.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := a.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Account.Created event: %w", err)
 	}
 
@@ -95,7 +95,7 @@ func (a *Account) Activate() error {
 	}
 	a.active = true
 	event := new(AccountActivated).With()
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // Deactivate deactivates the account.
@@ -105,7 +105,7 @@ func (a *Account) Deactivate() error {
 	}
 	a.active = false
 	event := new(AccountDeactivated).With()
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // AddMember adds an agent as a member of this account with the given role.
@@ -119,7 +119,7 @@ func (a *Account) AddMember(agentID, roleID string) error {
 	}
 
 	event := new(AccountMemberAdded).With(a.GetID(), agentID, roleID)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // RemoveMember removes an agent from this account.
@@ -130,7 +130,7 @@ func (a *Account) RemoveMember(agentID string) error {
 	}
 
 	event := new(AccountMemberRemoved).With(a.GetID(), agentID)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // ChangeMemberRole changes the role of an existing member within this account.
@@ -144,7 +144,7 @@ func (a *Account) ChangeMemberRole(agentID, newRoleID string) error {
 	}
 
 	event := new(AccountMemberRoleChanged).With(a.GetID(), agentID, newRoleID)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // ApplyEvent applies a domain event to reconstruct the aggregate state.

@@ -16,7 +16,7 @@ func TestMemoryStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := infrastructure.NewMemoryStore()
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		aggregateID := "test-aggregate"
@@ -96,7 +96,7 @@ func TestMemoryStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := infrastructure.NewMemoryStore()
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		aggregateID := "conflict-test"
@@ -122,7 +122,7 @@ func TestMemoryStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := infrastructure.NewMemoryStore()
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 
@@ -165,7 +165,7 @@ func TestMemoryStore_GetAllAggregateIDs(t *testing.T) {
 	t.Parallel()
 
 	store := infrastructure.NewMemoryStore()
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
 

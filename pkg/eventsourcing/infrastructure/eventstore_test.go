@@ -154,7 +154,7 @@ func TestEventStore_Append(t *testing.T) {
 			t.Parallel()
 
 			store := tt.setupStore(t)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			ctx := context.Background()
 			err := store.Append(ctx, tt.aggregateID, tt.expectedVersion, tt.events...)
@@ -221,7 +221,7 @@ func TestEventStore_GetEvents(t *testing.T) {
 			t.Parallel()
 
 			store := tt.setupStore(t)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			ctx := context.Background()
 			events, err := store.GetEvents(ctx, tt.aggregateID)
@@ -319,7 +319,7 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			t.Parallel()
 
 			store := tt.setupStore(t)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			ctx := context.Background()
 			events, err := store.GetEventsFromVersion(ctx, tt.aggregateID, tt.fromVersion)
@@ -401,7 +401,7 @@ func TestEventStore_GetEventByID(t *testing.T) {
 			t.Parallel()
 
 			store := tt.setupStore(t)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			ctx := context.Background()
 			event, err := store.GetEventByID(ctx, tt.eventID)
@@ -491,7 +491,7 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 			t.Parallel()
 
 			store := tt.setupStore(t)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			ctx := context.Background()
 			version, err := store.GetCurrentVersion(ctx, tt.aggregateID)
@@ -613,5 +613,5 @@ func setupTestDir(t *testing.T) string {
 
 func cleanupTestDir(t *testing.T, dir string) {
 	t.Helper()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 }

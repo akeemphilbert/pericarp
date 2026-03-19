@@ -141,7 +141,7 @@ func (uow *SimpleUnitOfWork) Commit(ctx context.Context) error {
 		// Append events to event store with expected version
 		if err := uow.eventStore.Append(ctx, aggregateID, expectedVersion, events...); err != nil {
 			// Rollback on failure
-			uow.Rollback()
+			_ = uow.Rollback()
 			return fmt.Errorf("failed to persist events for aggregate %q: %w", aggregateID, err)
 		}
 	}

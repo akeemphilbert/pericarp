@@ -105,34 +105,6 @@ func (d *EventDispatcher) SubscribeWildcard(handler func(context.Context, EventE
 	return nil
 }
 
-// matchPattern checks if an event type matches a pattern.
-// Patterns support wildcards: `*` matches any part, `entity.*` matches all actions for entity,
-// `*.action` matches all entities for action, `*.*` matches all events.
-func matchPattern(eventType, pattern string) bool {
-	// Exact match
-	if eventType == pattern {
-		return true
-	}
-
-	// Split event type and pattern by dot
-	eventParts := splitEventType(eventType)
-	patternParts := splitEventType(pattern)
-
-	// Both must have same number of parts
-	if len(eventParts) != len(patternParts) {
-		return false
-	}
-
-	// Match each part
-	for i := 0; i < len(eventParts); i++ {
-		if patternParts[i] != "*" && patternParts[i] != eventParts[i] {
-			return false
-		}
-	}
-
-	return true
-}
-
 // splitEventType splits an event type by dot, handling edge cases.
 // It filters out empty strings that may result from consecutive dots.
 func splitEventType(eventType string) []string {

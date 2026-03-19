@@ -186,7 +186,7 @@ func (g *Google) RevokeToken(ctx context.Context, token string) error {
 	if err != nil {
 		return fmt.Errorf("google: revoke request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -271,7 +271,7 @@ func (g *Google) requestToken(ctx context.Context, data url.Values) (*tokenRespo
 	if err != nil {
 		return nil, fmt.Errorf("token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -302,7 +302,7 @@ func (g *Google) fetchUserInfo(ctx context.Context, accessToken string) (*google
 	if err != nil {
 		return nil, fmt.Errorf("userinfo request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

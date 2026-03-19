@@ -47,7 +47,7 @@ func (s *AuthSession) With(id, agentID, credentialID, ipAddress, userAgent strin
 	s.userAgent = userAgent
 
 	event := new(SessionCreated).With(agentID, id, credentialID, ipAddress, userAgent, expiresAt)
-	if err := s.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := s.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Session.Created event: %w", err)
 	}
 
@@ -124,7 +124,7 @@ func (s *AuthSession) Restore(id, agentID, accountID, credentialID, ipAddress, u
 func (s *AuthSession) Touch() error {
 	s.lastAccessedAt = time.Now()
 	event := new(SessionTouched).With()
-	return s.BaseEntity.RecordEvent(event, event.EventType())
+	return s.RecordEvent(event, event.EventType())
 }
 
 // Revoke marks the session as inactive.
@@ -134,7 +134,7 @@ func (s *AuthSession) Revoke() error {
 	}
 	s.active = false
 	event := new(SessionRevoked).With()
-	return s.BaseEntity.RecordEvent(event, event.EventType())
+	return s.RecordEvent(event, event.EventType())
 }
 
 // IsExpired returns whether the session has passed its expiration time.
@@ -149,7 +149,7 @@ func (s *AuthSession) ScopeToAccount(accountID string) error {
 	}
 	s.accountID = accountID
 	event := new(SessionAccountScoped).With(s.GetID(), accountID)
-	return s.BaseEntity.RecordEvent(event, event.EventType())
+	return s.RecordEvent(event, event.EventType())
 }
 
 // ApplyEvent applies a domain event to reconstruct the aggregate state.

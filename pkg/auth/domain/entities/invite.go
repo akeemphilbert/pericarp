@@ -63,7 +63,7 @@ func (i *Invite) With(id, accountID, email, roleID, inviterAgentID, inviteeAgent
 		ExpiresAt:      expiresAt,
 		Timestamp:      i.createdAt,
 	}
-	if err := i.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := i.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Invite.Created event: %w", err)
 	}
 
@@ -81,7 +81,7 @@ func (i *Invite) Accept() error {
 	i.status = InviteStatusAccepted
 	i.acceptedAt = time.Now()
 	event := InviteAccepted{Timestamp: i.acceptedAt}
-	return i.BaseEntity.RecordEvent(event, event.EventType())
+	return i.RecordEvent(event, event.EventType())
 }
 
 // Revoke marks the invite as revoked.
@@ -91,7 +91,7 @@ func (i *Invite) Revoke() error {
 	}
 	i.status = InviteStatusRevoked
 	event := InviteRevoked{Timestamp: time.Now()}
-	return i.BaseEntity.RecordEvent(event, event.EventType())
+	return i.RecordEvent(event, event.EventType())
 }
 
 // IsExpired returns whether the invite has expired.

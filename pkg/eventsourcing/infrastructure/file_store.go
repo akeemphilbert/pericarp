@@ -127,7 +127,7 @@ func (f *FileStore) saveToFile(aggregateID string, events []domain.EventEnvelope
 	}
 
 	if err := os.Rename(tmpPath, filePath); err != nil {
-		os.Remove(tmpPath) // Clean up on error
+		_ = os.Remove(tmpPath) // Clean up on error
 		return fmt.Errorf("failed to rename temporary file: %w", err)
 	}
 
@@ -177,9 +177,7 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 	}
 
 	// Append events preserving their SequenceNo as set by the domain
-	for _, event := range events {
-		currentEvents = append(currentEvents, event)
-	}
+	currentEvents = append(currentEvents, events...)
 
 	// Save to disk
 	if err := f.saveToFile(aggregateID, currentEvents); err != nil {

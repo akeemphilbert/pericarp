@@ -236,7 +236,7 @@ func TestWatchableType(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 		w := d.Dispatch(context.Background(), makeEnvelope("test.cmd", "payload"))
 		if w == nil {
 			t.Fatal("Expected non-nil Watchable")
@@ -253,7 +253,7 @@ func TestRegisterReceiver(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return "user-created:" + env.Payload.Email, nil
@@ -286,7 +286,7 @@ func TestRegisterReceiverEmptyCommandType(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return nil, nil
@@ -310,7 +310,7 @@ func TestRegisterReceiverNilReceiver(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		err := regCU("user.create", nil)
 		if err == nil {
@@ -330,7 +330,7 @@ func TestRegisterMultipleReceivers(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var count int64
 
@@ -370,7 +370,7 @@ func TestRegisterWildcardReceiver(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var count int64
 
@@ -397,7 +397,7 @@ func TestRegisterWildcardReceiverNil(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		err := d.RegisterWildcardReceiver(nil)
 		if err == nil {
@@ -413,7 +413,7 @@ func TestRegisterWildcardReceiverCombinedWithSpecific(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var specificCount, wildcardCount int64
 
@@ -456,7 +456,7 @@ func TestDispatchSignature(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		ctx := context.Background()
 		env := makeEnvelope("test.cmd", "payload")
@@ -497,7 +497,7 @@ func TestCommandDispatcherPatternMatching(t *testing.T) {
 			t.Parallel()
 
 			runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-				defer d.Close()
+				defer func() { _ = d.Close() }()
 
 				var called int64
 				receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
@@ -536,7 +536,7 @@ func TestCommandDispatcherMultiplePatternsMatchSameCommand(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var exactCount, entityCount, actionCount, allCount int64
 
@@ -599,7 +599,7 @@ func TestDispatchNoReceivers(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		w := d.Dispatch(context.Background(), makeEnvelope("nonexistent.command", "payload"))
 		results := w.Wait()
@@ -614,7 +614,7 @@ func TestDispatchNoReceiversChannelsClosed(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		w := d.Dispatch(context.Background(), makeEnvelope("nonexistent.command", "payload"))
 
@@ -642,7 +642,7 @@ func TestWatchableResults(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return "result-value", nil
@@ -672,7 +672,7 @@ func TestWatchableResultsBufferSize(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		numReceivers := 3
 		for i := 0; i < numReceivers; i++ {
@@ -715,7 +715,7 @@ func TestWatchableResultsChannelClosed(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return "done", nil
@@ -747,7 +747,7 @@ func TestWatchableWait(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		numReceivers := 3
 		for i := 0; i < numReceivers; i++ {
@@ -785,7 +785,7 @@ func TestWatchableWaitBlocksUntilSlowReceiver(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			time.Sleep(50 * time.Millisecond)
@@ -820,7 +820,7 @@ func TestWatchableFirst(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return "first-result", nil
@@ -845,7 +845,7 @@ func TestWatchableFirstMultipleReceivers(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		for i := 0; i < 3; i++ {
 			idx := i
@@ -880,7 +880,7 @@ func TestWatchableFirstNoReceivers(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		w := d.Dispatch(context.Background(), makeEnvelope("nonexistent.cmd", "p"))
 		result, ok := w.First()
@@ -908,7 +908,7 @@ func TestWatchableDone(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			time.Sleep(30 * time.Millisecond)
@@ -933,7 +933,7 @@ func TestWatchableDoneClosedImmediatelyForNoReceivers(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		w := d.Dispatch(context.Background(), makeEnvelope("nope", "p"))
 
@@ -950,7 +950,7 @@ func TestWatchableDoneUsableInSelect(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return "ok", nil
@@ -985,7 +985,7 @@ func TestContextCancellationPropagated(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		ctx, cancel := context.WithCancel(context.Background())
 
@@ -1016,7 +1016,7 @@ func TestContextValuesPropagated(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		type ctxKey string
 		var receivedValue any
@@ -1048,7 +1048,7 @@ func TestAsyncConcurrentExecution(t *testing.T) {
 	t.Run("receivers execute concurrently", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewAsyncCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		startBarrier := make(chan struct{})
 		var running int64
@@ -1068,10 +1068,7 @@ func TestAsyncConcurrentExecution(t *testing.T) {
 
 		// Wait for all 3 to be running concurrently
 		deadline := time.After(2 * time.Second)
-		for {
-			if atomic.LoadInt64(&running) == 3 {
-				break
-			}
+		for atomic.LoadInt64(&running) != 3 {
 			select {
 			case <-deadline:
 				t.Fatalf("Timed out waiting for concurrent execution; only %d running", atomic.LoadInt64(&running))
@@ -1099,7 +1096,7 @@ func TestAsyncResultsSentImmediately(t *testing.T) {
 	t.Run("results available before all receivers complete", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewAsyncCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		slowGate := make(chan struct{})
 
@@ -1143,7 +1140,7 @@ func TestAsyncAllReceiversCompleteOnError(t *testing.T) {
 	t.Run("erroring receiver does not stop others", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewAsyncCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var count int64
 
@@ -1200,7 +1197,7 @@ func TestQueuedSequentialExecution(t *testing.T) {
 	t.Run("receivers execute in registration order", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var mu sync.Mutex
 		order := make([]int, 0, 3)
@@ -1245,7 +1242,7 @@ func TestQueuedResultSentBeforeNext(t *testing.T) {
 	t.Run("result available before next receiver executes", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		secondStarted := make(chan struct{})
 
@@ -1308,7 +1305,7 @@ func TestQueuedErrorDoesNotStopOthers(t *testing.T) {
 	t.Run("error in first receiver does not prevent second", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var secondCalled int64
 
@@ -1360,7 +1357,7 @@ func TestQueuedContextCancellationStopsSubsequent(t *testing.T) {
 	t.Run("context cancellation stops subsequent receivers", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		ctx, cancel := context.WithCancel(context.Background())
 
@@ -1406,7 +1403,7 @@ func TestReceiverErrorValueNil(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return nil, errors.New("something went wrong")
@@ -1441,7 +1438,7 @@ func TestReceiverPanicRecovery(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			panic("something terrible happened")
@@ -1475,7 +1472,7 @@ func TestReceiverPanicDoesNotPreventOthers(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var okCalled int64
 
@@ -1514,7 +1511,7 @@ func TestTypeAssertionFailure(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 			return env.Payload.Email, nil
@@ -1554,7 +1551,7 @@ func TestConcurrentRegistrationAndDispatch(t *testing.T) {
 	t.Run("AsyncCommandDispatcher concurrent registration and dispatch", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewAsyncCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var wg sync.WaitGroup
 		concurrency := 10
@@ -1587,7 +1584,7 @@ func TestConcurrentRegistrationAndDispatch(t *testing.T) {
 	t.Run("QueuedCommandDispatcher concurrent registration and dispatch", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var wg sync.WaitGroup
 		concurrency := 10
@@ -1624,7 +1621,7 @@ func TestConcurrentWildcardRegistrationAndDispatch(t *testing.T) {
 	t.Run("AsyncCommandDispatcher concurrent wildcard", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewAsyncCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var wg sync.WaitGroup
 		concurrency := 5
@@ -1657,7 +1654,7 @@ func TestConcurrentWildcardRegistrationAndDispatch(t *testing.T) {
 	t.Run("QueuedCommandDispatcher concurrent wildcard", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var wg sync.WaitGroup
 		concurrency := 5
@@ -1698,7 +1695,7 @@ func TestLockReleasedBeforeReceiverInvocation(t *testing.T) {
 	t.Run("AsyncCommandDispatcher receiver can register without deadlock", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewAsyncCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		done := make(chan struct{})
 
@@ -1735,7 +1732,7 @@ func TestLockReleasedBeforeReceiverInvocation(t *testing.T) {
 	t.Run("QueuedCommandDispatcher receiver can register without deadlock", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		done := make(chan struct{})
 
@@ -1780,7 +1777,7 @@ func TestWatchableConcurrentReads(t *testing.T) {
 	t.Run("AsyncCommandDispatcher concurrent reads", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewAsyncCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		for i := 0; i < 5; i++ {
 			idx := i
@@ -1817,7 +1814,7 @@ func TestWatchableConcurrentReads(t *testing.T) {
 	t.Run("QueuedCommandDispatcher concurrent reads", func(t *testing.T) {
 		t.Parallel()
 		d := cqrs.NewQueuedCommandDispatcher()
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		for i := 0; i < 5; i++ {
 			idx := i
@@ -1861,10 +1858,8 @@ func TestInterfaceCompliance(t *testing.T) {
 
 	t.Run("AsyncCommandDispatcher implements CommandDispatcher", func(t *testing.T) {
 		t.Parallel()
-		var d cqrs.CommandDispatcher = cqrs.NewAsyncCommandDispatcher()
-		if d == nil {
-			t.Fatal("Expected non-nil CommandDispatcher")
-		}
+		d := cqrs.NewAsyncCommandDispatcher()
+		var _ cqrs.CommandDispatcher = d // compile-time interface check
 		if err := d.Close(); err != nil {
 			t.Errorf("Close returned error: %v", err)
 		}
@@ -1872,10 +1867,8 @@ func TestInterfaceCompliance(t *testing.T) {
 
 	t.Run("QueuedCommandDispatcher implements CommandDispatcher", func(t *testing.T) {
 		t.Parallel()
-		var d cqrs.CommandDispatcher = cqrs.NewQueuedCommandDispatcher()
-		if d == nil {
-			t.Fatal("Expected non-nil CommandDispatcher")
-		}
+		d := cqrs.NewQueuedCommandDispatcher()
+		var _ cqrs.CommandDispatcher = d // compile-time interface check
 		if err := d.Close(); err != nil {
 			t.Errorf("Close returned error: %v", err)
 		}
@@ -1903,7 +1896,7 @@ func TestInterfaceCompliance(t *testing.T) {
 			if len(results) != 1 {
 				t.Errorf("Expected 1 result, got %d", len(results))
 			}
-			d.Close()
+			_ = d.Close()
 		}
 	})
 }
@@ -1916,7 +1909,7 @@ func TestCommandDispatcherEdgeCases(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		t.Run("dispatch preserves command type in result", func(t *testing.T) {
 			t.Parallel()
@@ -1937,7 +1930,7 @@ func TestCommandDispatcherEdgeCases(t *testing.T) {
 					return cqrs.RegisterReceiver(qd, ct, r)
 				}
 			}
-			defer dd.Close()
+			defer func() { _ = dd.Close() }()
 
 			receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
 				return nil, nil
@@ -1963,7 +1956,7 @@ func TestCommandDispatcherMetadataPassed(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var receivedMeta map[string]any
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {
@@ -2017,7 +2010,7 @@ func TestCommandDispatcherMultipleDispatchesIndependent(t *testing.T) {
 	t.Parallel()
 
 	runForBothDispatchers(t, func(t *testing.T, name string, d cqrs.CommandDispatcher, regCU func(string, cqrs.CommandReceiver[CommandDispatcherTestCreateUser]) error, _ func(string, cqrs.CommandReceiver[CommandDispatcherTestUpdateUser]) error) {
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 
 		var count int64
 		receiver := func(ctx context.Context, env cqrs.CommandEnvelope[CommandDispatcherTestCreateUser]) (any, error) {

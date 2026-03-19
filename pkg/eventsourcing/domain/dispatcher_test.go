@@ -332,7 +332,8 @@ func TestDispatch(t *testing.T) {
 			Metadata:    envelope.Metadata,
 		}
 
-		ctx := context.WithValue(context.Background(), "test-key", "test-value")
+		type testContextKey struct{}
+		ctx := context.WithValue(context.Background(), testContextKey{}, "test-value")
 		if err := d.Dispatch(ctx, anyEnvelope); err != nil {
 			t.Fatalf("Dispatch failed: %v", err)
 		}
@@ -340,7 +341,7 @@ func TestDispatch(t *testing.T) {
 		if receivedCtx == nil {
 			t.Fatal("Context was not propagated")
 		}
-		if receivedCtx.Value("test-key") != "test-value" {
+		if receivedCtx.Value(testContextKey{}) != "test-value" {
 			t.Error("Context value was not propagated correctly")
 		}
 	})

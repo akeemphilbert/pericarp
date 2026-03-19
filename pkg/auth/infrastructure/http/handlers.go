@@ -352,6 +352,6 @@ func (h *AuthHandlers) writeJSON(w http.ResponseWriter, status int, v interface{
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		h.cfg.Logger.Error(nil, "failed to write JSON response", "error", err)
+		h.cfg.Logger.Error(context.Background(), "failed to write JSON response", "error", err)
 	}
 }

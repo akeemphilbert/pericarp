@@ -48,7 +48,7 @@ func (c *Credential) With(id, agentID, provider, providerUserID, email, displayN
 	c.createdAt = time.Now()
 
 	event := new(CredentialCreated).With(agentID, id, provider, providerUserID, email, displayName)
-	if err := c.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := c.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Credential.Created event: %w", err)
 	}
 
@@ -119,7 +119,7 @@ func (c *Credential) Restore(id, agentID, provider, providerUserID, email, displ
 func (c *Credential) MarkUsed() error {
 	c.lastUsedAt = time.Now()
 	event := new(CredentialUsed).With()
-	return c.BaseEntity.RecordEvent(event, event.EventType())
+	return c.RecordEvent(event, event.EventType())
 }
 
 // Deactivate marks the credential as inactive.
@@ -129,7 +129,7 @@ func (c *Credential) Deactivate() error {
 	}
 	c.active = false
 	event := new(CredentialDeactivated).With()
-	return c.BaseEntity.RecordEvent(event, event.EventType())
+	return c.RecordEvent(event, event.EventType())
 }
 
 // Reactivate marks the credential as active.
@@ -139,7 +139,7 @@ func (c *Credential) Reactivate() error {
 	}
 	c.active = true
 	event := new(CredentialReactivated).With()
-	return c.BaseEntity.RecordEvent(event, event.EventType())
+	return c.RecordEvent(event, event.EventType())
 }
 
 // ApplyEvent applies a domain event to reconstruct the aggregate state.

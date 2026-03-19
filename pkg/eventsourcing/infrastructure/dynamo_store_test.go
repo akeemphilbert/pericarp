@@ -163,23 +163,6 @@ func setupDynamoStoreWithEvents(t *testing.T) domain.EventStore {
 	return store
 }
 
-func setupDynamoStoreWithMultipleEvents(t *testing.T) domain.EventStore {
-	t.Helper()
-	store := setupDynamoStore(t)
-	ctx := context.Background()
-
-	events := []domain.EventEnvelope[any]{
-		createTestEvent("agg-4", "event-1", "test.created", 1),
-		createTestEvent("agg-4", "event-2", "test.updated", 2),
-		createTestEvent("agg-4", "event-3", "test.updated", 3),
-	}
-
-	if err := store.Append(ctx, "agg-4", -1, events...); err != nil {
-		t.Fatalf("failed to setup store: %v", err)
-	}
-	return store
-}
-
 func TestDynamoStore_Integration(t *testing.T) {
 	t.Parallel()
 
@@ -187,7 +170,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		aggregateID := "test-aggregate"
@@ -257,7 +240,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStoreWithEvents(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 
@@ -275,7 +258,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 
@@ -310,7 +293,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		_, err := store.GetEventByID(ctx, "nonexistent")
@@ -323,7 +306,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		payload := map[string]any{
@@ -370,7 +353,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		now := time.Now().UTC().Truncate(time.Millisecond)
@@ -402,7 +385,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		event := domain.EventEnvelope[any]{
@@ -447,7 +430,7 @@ func TestDynamoStore_Integration(t *testing.T) {
 		}
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-struct", "test.created", 1)
@@ -482,7 +465,7 @@ func TestDynamoStore_GetEventsRange(t *testing.T) {
 		t.Parallel()
 
 		store := setupDynamoStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		aggregateID := "range-test"

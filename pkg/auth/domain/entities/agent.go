@@ -39,7 +39,7 @@ func (a *Agent) With(id, name, agentType string) (*Agent, error) {
 	a.createdAt = time.Now()
 
 	event := new(AgentCreated).With(name, agentType)
-	if err := a.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := a.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Agent.Created event: %w", err)
 	}
 
@@ -63,7 +63,7 @@ func (a *Agent) WithInvite(id, email string) (*Agent, error) {
 	a.createdAt = time.Now()
 
 	event := new(AgentInvited).With(email)
-	if err := a.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := a.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Agent.Invited event: %w", err)
 	}
 
@@ -118,7 +118,7 @@ func (a *Agent) Deactivate() error {
 	}
 	a.status = AgentStatusDeactivated
 	event := new(AgentDeactivated).With()
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // Activate marks the agent as active.
@@ -128,7 +128,7 @@ func (a *Agent) Activate() error {
 	}
 	a.status = AgentStatusActive
 	event := new(AgentActivated).With()
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // UpdateName changes the agent's display name.
@@ -141,7 +141,7 @@ func (a *Agent) UpdateName(name string) error {
 	}
 	a.name = name
 	event := new(AgentNameUpdated).With(name)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // AssignRole assigns a role to this agent.
@@ -151,7 +151,7 @@ func (a *Agent) AssignRole(roleID string) error {
 		return fmt.Errorf("role ID cannot be empty")
 	}
 	event := new(AgentRoleAssigned).With(a.GetID(), roleID)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // RevokeRole revokes a role from this agent.
@@ -161,7 +161,7 @@ func (a *Agent) RevokeRole(roleID string) error {
 		return fmt.Errorf("role ID cannot be empty")
 	}
 	event := new(AgentRoleRevoked).With(a.GetID(), roleID)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // AddToGroup adds this agent to a group.
@@ -171,7 +171,7 @@ func (a *Agent) AddToGroup(groupID string) error {
 		return fmt.Errorf("group ID cannot be empty")
 	}
 	event := new(AgentGroupMembershipAdded).With(a.GetID(), groupID)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // RemoveFromGroup removes this agent from a group.
@@ -180,7 +180,7 @@ func (a *Agent) RemoveFromGroup(groupID string) error {
 		return fmt.Errorf("group ID cannot be empty")
 	}
 	event := new(AgentGroupMembershipRemoved).With(a.GetID(), groupID)
-	return a.BaseEntity.RecordEvent(event, event.EventType())
+	return a.RecordEvent(event, event.EventType())
 }
 
 // ApplyEvent applies a domain event to reconstruct the aggregate state.

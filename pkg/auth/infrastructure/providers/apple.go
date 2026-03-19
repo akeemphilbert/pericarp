@@ -220,7 +220,7 @@ func (a *Apple) RevokeToken(ctx context.Context, token string) error {
 	if err != nil {
 		return fmt.Errorf("apple: revoke request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -378,7 +378,7 @@ func (a *Apple) requestToken(ctx context.Context, data url.Values) (*appleTokenR
 	if err != nil {
 		return nil, fmt.Errorf("token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

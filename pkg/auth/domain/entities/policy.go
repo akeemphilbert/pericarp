@@ -39,7 +39,7 @@ func (p *Policy) With(id, name, policyType string) (*Policy, error) {
 	p.createdAt = time.Now()
 
 	event := new(PolicyCreated).With(name, policyType)
-	if err := p.BaseEntity.RecordEvent(event, event.EventType()); err != nil {
+	if err := p.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Policy.Created event: %w", err)
 	}
 
@@ -89,7 +89,7 @@ func (p *Policy) Activate() error {
 	}
 	p.active = true
 	event := new(PolicyActivated).With()
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // Deactivate deactivates the policy.
@@ -99,7 +99,7 @@ func (p *Policy) Deactivate() error {
 	}
 	p.active = false
 	event := new(PolicyDeactivated).With()
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // GrantPermission adds a permission rule to this policy.
@@ -116,7 +116,7 @@ func (p *Policy) GrantPermission(assignee, action, target string) error {
 	}
 
 	event := new(PermissionGranted).With(assignee, target, action)
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // RevokePermission revokes a previously granted permission.
@@ -132,7 +132,7 @@ func (p *Policy) RevokePermission(assignee, action, target string) error {
 	}
 
 	event := new(PermissionRevoked).With(assignee, target, action)
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // SetProhibition adds a prohibition rule to this policy.
@@ -149,7 +149,7 @@ func (p *Policy) SetProhibition(assignee, action, target string) error {
 	}
 
 	event := new(ProhibitionSet).With(assignee, target, action)
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // RevokeProhibition revokes a previously set prohibition.
@@ -165,7 +165,7 @@ func (p *Policy) RevokeProhibition(assignee, action, target string) error {
 	}
 
 	event := new(ProhibitionRevoked).With(assignee, target, action)
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // ImposeDuty adds a duty (obligation) to this policy.
@@ -182,7 +182,7 @@ func (p *Policy) ImposeDuty(assignee, action, target string) error {
 	}
 
 	event := new(DutyImposed).With(assignee, target, action)
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // DischargeDuty marks a duty as fulfilled.
@@ -198,7 +198,7 @@ func (p *Policy) DischargeDuty(assignee, action, target string) error {
 	}
 
 	event := new(DutyDischarged).With(assignee, target, action)
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // Assign assigns this policy to an agent or role.
@@ -208,7 +208,7 @@ func (p *Policy) Assign(assigneeID string) error {
 		return fmt.Errorf("assignee ID cannot be empty")
 	}
 	event := new(PolicyAssigned).With(p.GetID(), assigneeID)
-	return p.BaseEntity.RecordEvent(event, event.EventType())
+	return p.RecordEvent(event, event.EventType())
 }
 
 // ApplyEvent applies a domain event to reconstruct the aggregate state.

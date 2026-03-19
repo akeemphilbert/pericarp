@@ -22,7 +22,7 @@ func TestFileStore_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create file store: %v", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 		defer cleanupTestDir(t, baseDir)
 
 		ctx := context.Background()
@@ -65,7 +65,7 @@ func TestFileStore_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to recreate file store: %v", err)
 		}
-		defer store2.Close()
+		defer func() { _ = store2.Close() }()
 
 		// Verify events persist after reopening
 		retrieved2, err := store2.GetEvents(ctx, aggregateID)
@@ -90,7 +90,7 @@ func TestFileStore_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create file store: %v", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 		defer cleanupTestDir(t, baseDir)
 
 		ctx := context.Background()
@@ -121,7 +121,7 @@ func TestFileStore_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create file store: %v", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 		defer cleanupTestDir(t, baseDir)
 
 		ctx := context.Background()
@@ -179,7 +179,7 @@ func TestFileStore_Integration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create file store: %v", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 		defer cleanupTestDir(t, baseDir)
 
 		ctx := context.Background()
@@ -220,7 +220,7 @@ func TestFileStore_NewFileStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create file store: %v", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 	})
 
 	t.Run("create with non-existent directory", func(t *testing.T) {
@@ -231,7 +231,7 @@ func TestFileStore_NewFileStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected directory to be created, got error: %v", err)
 		}
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		// Verify directory was created
 		if _, err := os.Stat(baseDir); err != nil {

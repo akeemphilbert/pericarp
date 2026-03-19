@@ -70,7 +70,7 @@ func TestGormStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		aggregateID := "test-aggregate"
@@ -140,7 +140,7 @@ func TestGormStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStoreWithEvents(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 
@@ -159,7 +159,7 @@ func TestGormStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 
@@ -194,7 +194,7 @@ func TestGormStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		_, err := store.GetEventByID(ctx, "nonexistent")
@@ -207,7 +207,7 @@ func TestGormStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		payload := map[string]any{
@@ -253,7 +253,7 @@ func TestGormStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		now := time.Now().Truncate(time.Second)
@@ -285,7 +285,7 @@ func TestGormStore_Integration(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		event := domain.EventEnvelope[any]{
@@ -330,7 +330,7 @@ func TestGormStore_Integration(t *testing.T) {
 		}
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		original := domain.NewEventEnvelope(TestPayload{Name: "test", Value: 42}, "agg-struct", "test.created", 1)
@@ -365,7 +365,7 @@ func TestGormStore_GetEventsRange(t *testing.T) {
 		t.Parallel()
 
 		store := setupGormStore(t)
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 
 		ctx := context.Background()
 		aggregateID := "range-test"
