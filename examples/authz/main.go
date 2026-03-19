@@ -202,7 +202,7 @@ func RunAuthorizationDemo(ctx context.Context) (*DemoResult, error) {
 	for _, c := range checks {
 		ok, err := checker.IsAuthorized(ctx, c.agent, c.action, c.target)
 		if err != nil {
-			return nil, fmt.Errorf("Casbin IsAuthorized(%s): %w", c.label, err)
+			return nil, fmt.Errorf("casbin IsAuthorized(%s): %w", c.label, err)
 		}
 		result.Casbin[c.label] = ok
 		fmt.Printf("  Casbin %-20s → %v\n", c.label, ok)
@@ -211,21 +211,21 @@ func RunAuthorizationDemo(ctx context.Context) (*DemoResult, error) {
 	// Frank's account-scoped checks via Casbin
 	frankModifyAcme, err := checker.IsAuthorizedInAccount(ctx, "frank", "account-acme", entities.ActionModify, "doc-1")
 	if err != nil {
-		return nil, fmt.Errorf("Casbin frank:modify@acme: %w", err)
+		return nil, fmt.Errorf("casbin frank:modify@acme: %w", err)
 	}
 	result.Casbin["frank:modify@acme"] = frankModifyAcme
 	fmt.Printf("  Casbin %-20s → %v\n", "frank:modify@acme", frankModifyAcme)
 
 	frankReadAcme, err := checker.IsAuthorizedInAccount(ctx, "frank", "account-acme", entities.ActionRead, "doc-1")
 	if err != nil {
-		return nil, fmt.Errorf("Casbin frank:read@acme: %w", err)
+		return nil, fmt.Errorf("casbin frank:read@acme: %w", err)
 	}
 	result.Casbin["frank:read@acme"] = frankReadAcme
 	fmt.Printf("  Casbin %-20s → %v\n", "frank:read@acme", frankReadAcme)
 
 	frankModifyGlobal, err := checker.IsAuthorized(ctx, "frank", entities.ActionModify, "doc-1")
 	if err != nil {
-		return nil, fmt.Errorf("Casbin frank:modify@global: %w", err)
+		return nil, fmt.Errorf("casbin frank:modify@global: %w", err)
 	}
 	result.Casbin["frank:modify@global"] = frankModifyGlobal
 	fmt.Printf("  Casbin %-20s → %v\n", "frank:modify@global", frankModifyGlobal)

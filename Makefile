@@ -57,7 +57,7 @@ ci: deps fmt lint test ## Run CI pipeline
 
 # Install tools
 install-tools: ## Install development tools
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
 # Version targets
 version: ## Show version information
