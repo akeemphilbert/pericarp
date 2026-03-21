@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// AutoMigrate creates or updates the auth tables (agents, credentials, auth_sessions, accounts, account_members).
+// AutoMigrate creates or updates all auth-related database tables.
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&models.AgentModel{},
@@ -13,5 +13,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.AuthSessionModel{},
 		&models.AccountModel{},
 		&models.AccountMemberModel{},
+		&models.InviteModel{},
 	)
 }

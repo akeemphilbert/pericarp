@@ -421,3 +421,80 @@ func (r *authSessionRepository) RevokeAllForAgent(ctx context.Context, agentID s
 		Where("agent_id = ? AND active = ?", agentID, true).
 		Update("active", false).Error
 }
+
+// inviteRepository implements repositories.InviteRepository using GORM.
+type inviteRepository struct {
+	db *gorm.DB
+}
+
+// NewInviteRepository creates a new GORM-backed InviteRepository.
+func NewInviteRepository(db *gorm.DB) repositories.InviteRepository {
+	return &inviteRepository{db: db}
+}
+
+func (r *inviteRepository) Save(ctx context.Context, invite *entities.Invite) error {
+	m := models.InviteModelFromEntity(invite)
+	return r.db.WithContext(ctx).Save(m).Error
+}
+
+func (r *inviteRepository) FindByID(ctx context.Context, id string) (*entities.Invite, error) {
+	var m models.InviteModel
+	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&m).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return m.ToEntity()
+}
+
+func (r *inviteRepository) FindByEmail(ctx context.Context, email string) ([]*entities.Invite, error) {
+	var records []models.InviteModel
+	if err := r.db.WithContext(ctx).Where("email = ?", email).Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]*entities.Invite, 0, len(records))
+	for i := range records {
+		invite, err := records[i].ToEntity()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, invite)
+	}
+	return result, nil
+}
+
+func (r *inviteRepository) FindByAccount(ctx context.Context, accountID string) ([]*entities.Invite, error) {
+	var records []models.InviteModel
+	if err := r.db.WithContext(ctx).Where("account_id = ?", accountID).Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]*entities.Invite, 0, len(records))
+	for i := range records {
+		invite, err := records[i].ToEntity()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, invite)
+	}
+	return result, nil
+}
+
+func (r *inviteRepository) FindPendingByEmail(ctx context.Context, email string) ([]*entities.Invite, error) {
+	var records []models.InviteModel
+	if err := r.db.WithContext(ctx).Where("email = ? AND status = ? AND expires_at > ?", email, entities.InviteStatusPending, time.Now()).Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]*entities.Invite, 0, len(records))
+	for i := range records {
+		invite, err := records[i].ToEntity()
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, invite)
+	}
+	return result, nil
+}
