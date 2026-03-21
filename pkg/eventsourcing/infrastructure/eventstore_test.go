@@ -146,6 +146,68 @@ func TestEventStore_Append(t *testing.T) {
 			events:          []domain.EventEnvelope[any]{},
 			wantErr:         false,
 		},
+		// BigQuery store test cases
+		{
+			name:            "bigquery: append single event to new aggregate",
+			setupStore:      setupBigQueryStore,
+			aggregateID:     "agg-1",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-1", "event-1", "test.created", 1),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "bigquery: append multiple events",
+			setupStore:      setupBigQueryStore,
+			aggregateID:     "agg-2",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-2", "event-1", "test.created", 1),
+				createTestEvent("agg-2", "event-2", "test.updated", 2),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "bigquery: append with version check success",
+			setupStore:      setupBigQueryStoreWithEvents,
+			aggregateID:     "agg-3",
+			expectedVersion: 1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "bigquery: append with version check failure",
+			setupStore:      setupBigQueryStoreWithEvents,
+			aggregateID:     "agg-3",
+			expectedVersion: 5,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
+			},
+			wantErr: true,
+			errType: domain.ErrConcurrencyConflict,
+		},
+		{
+			name:            "bigquery: append event with mismatched aggregate ID",
+			setupStore:      setupBigQueryStore,
+			aggregateID:     "agg-5",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-6", "event-1", "test.created", 1),
+			},
+			wantErr: true,
+			errType: domain.ErrInvalidEvent,
+		},
+		{
+			name:            "bigquery: append empty events slice",
+			setupStore:      setupBigQueryStore,
+			aggregateID:     "agg-7",
+			expectedVersion: -1,
+			events:          []domain.EventEnvelope[any]{},
+			wantErr:         false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -209,6 +271,20 @@ func TestEventStore_GetEvents(t *testing.T) {
 		{
 			name:        "gorm: get events for non-existent aggregate",
 			setupStore:  setupGormStore,
+			aggregateID: "agg-nonexistent",
+			wantCount:   0,
+			wantErr:     false,
+		},
+		{
+			name:        "bigquery: get events for existing aggregate",
+			setupStore:  setupBigQueryStoreWithEvents,
+			aggregateID: "agg-3",
+			wantCount:   1,
+			wantErr:     false,
+		},
+		{
+			name:        "bigquery: get events for non-existent aggregate",
+			setupStore:  setupBigQueryStore,
 			aggregateID: "agg-nonexistent",
 			wantCount:   0,
 			wantErr:     false,
@@ -311,6 +387,30 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			wantCount:   0,
 			wantErr:     false,
 		},
+		{
+			name:        "bigquery: get events from version 1",
+			setupStore:  setupBigQueryStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 1,
+			wantCount:   3,
+			wantErr:     false,
+		},
+		{
+			name:        "bigquery: get events from version 2",
+			setupStore:  setupBigQueryStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 2,
+			wantCount:   2,
+			wantErr:     false,
+		},
+		{
+			name:        "bigquery: get events from version beyond existing",
+			setupStore:  setupBigQueryStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 10,
+			wantCount:   0,
+			wantErr:     false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -388,6 +488,22 @@ func TestEventStore_GetEventByID(t *testing.T) {
 		{
 			name:       "gorm: get non-existent event",
 			setupStore: setupGormStore,
+			eventID:    "event-nonexistent",
+			wantFound:  false,
+			wantErr:    true,
+			errType:    domain.ErrEventNotFound,
+		},
+		{
+			name:       "bigquery: get existing event by ID",
+			setupStore: setupBigQueryStoreWithEvents,
+			eventID:    "event-1",
+			wantFound:  true,
+			wantAggID:  "agg-3",
+			wantErr:    false,
+		},
+		{
+			name:       "bigquery: get non-existent event",
+			setupStore: setupBigQueryStore,
 			eventID:    "event-nonexistent",
 			wantFound:  false,
 			wantErr:    true,
@@ -479,6 +595,27 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 		{
 			name:        "gorm: get version for aggregate with multiple events",
 			setupStore:  setupGormStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			wantVersion: 3,
+			wantErr:     false,
+		},
+		{
+			name:        "bigquery: get version for existing aggregate",
+			setupStore:  setupBigQueryStoreWithEvents,
+			aggregateID: "agg-3",
+			wantVersion: 1,
+			wantErr:     false,
+		},
+		{
+			name:        "bigquery: get version for non-existent aggregate",
+			setupStore:  setupBigQueryStore,
+			aggregateID: "agg-nonexistent",
+			wantVersion: 0,
+			wantErr:     false,
+		},
+		{
+			name:        "bigquery: get version for aggregate with multiple events",
+			setupStore:  setupBigQueryStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			wantVersion: 3,
 			wantErr:     false,
