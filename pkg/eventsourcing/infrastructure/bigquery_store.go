@@ -172,7 +172,7 @@ func (s *BigQueryEventStore) buildInsertQuery(events []domain.EventEnvelope[any]
 		metaParam := fmt.Sprintf("meta_%d", i)
 		tsParam := fmt.Sprintf("ts_%d", i)
 
-		valuePlaceholders = append(valuePlaceholders, fmt.Sprintf("(@%s, @%s, @%s, @%s, @%s, @%s, @%s)",
+		valuePlaceholders = append(valuePlaceholders, fmt.Sprintf("(@%s, @%s, @%s, @%s, PARSE_JSON(@%s), PARSE_JSON(@%s), @%s)",
 			idParam, aggParam, typeParam, seqParam, payParam, metaParam, tsParam))
 
 		params = append(params,
