@@ -1,9 +1,21 @@
 package infrastructure
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+
+	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 )
+
+// compareEnvelopes orders envelopes by aggregate ID then sequence number.
+// Used to guarantee deterministic ordering from stores that don't natively sort.
+func compareEnvelopes(a, b domain.EventEnvelope[any]) int {
+	if c := cmp.Compare(a.AggregateID, b.AggregateID); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.SequenceNo, b.SequenceNo)
+}
 
 // toAnyMap converts a value to map[string]any using JSON round-trip.
 // Used by multiple EventStore implementations to normalize typed payloads.

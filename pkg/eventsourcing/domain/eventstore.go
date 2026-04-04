@@ -43,6 +43,12 @@ type EventStore interface {
 	// Returns ErrEventNotFound if the event doesn't exist.
 	GetEventByID(ctx context.Context, eventID string) (EventEnvelope[any], error)
 
+	// GetEventsByTransactionID retrieves all events that share the given transaction ID,
+	// ordered by aggregate ID then sequence number.
+	// transactionID must not be empty; implementations return ErrInvalidEvent if it is.
+	// Returns an empty slice if no events are found.
+	GetEventsByTransactionID(ctx context.Context, transactionID string) ([]EventEnvelope[any], error)
+
 	// GetCurrentVersion returns the current version number for an aggregate.
 	// Returns 0 if the aggregate doesn't exist.
 	GetCurrentVersion(ctx context.Context, aggregateID string) (int, error)

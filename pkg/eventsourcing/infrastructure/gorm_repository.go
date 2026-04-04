@@ -58,6 +58,16 @@ func (r *GormEventRepository) GetEventByID(ctx context.Context, eventID string) 
 	return &event, nil
 }
 
+// GetEventsByTransactionID retrieves all events with a given transaction ID, ordered by aggregate and sequence.
+func (r *GormEventRepository) GetEventsByTransactionID(ctx context.Context, transactionID string) ([]GormEventModel, error) {
+	var events []GormEventModel
+	err := r.db.WithContext(ctx).
+		Where("transaction_id = ?", transactionID).
+		Order("aggregate_id ASC, sequence_no ASC").
+		Find(&events).Error
+	return events, err
+}
+
 // GetCurrentVersion returns the highest sequence number for a given aggregate.
 // Returns 0 if no events exist.
 func (r *GormEventRepository) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {

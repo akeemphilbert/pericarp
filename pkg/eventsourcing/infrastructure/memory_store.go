@@ -3,11 +3,14 @@ package infrastructure
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 )
+
+var _ domain.EventStore = (*MemoryStore)(nil)
 
 // MemoryStore is an in-memory implementation of EventStore.
 // It's useful for testing and development, but not suitable for production
@@ -147,6 +150,31 @@ func (m *MemoryStore) GetEventByID(ctx context.Context, eventID string) (domain.
 
 	// Return a copy to prevent external modification
 	return event, nil
+}
+
+// GetEventsByTransactionID retrieves all events with the given transaction ID.
+func (m *MemoryStore) GetEventsByTransactionID(ctx context.Context, transactionID string) ([]domain.EventEnvelope[any], error) {
+	if transactionID == "" {
+		return nil, fmt.Errorf("%w: transaction ID must not be empty", domain.ErrInvalidEvent)
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []domain.EventEnvelope[any]
+	for _, events := range m.events {
+		for _, event := range events {
+			if event.TransactionID == transactionID {
+				result = append(result, event)
+			}
+		}
+	}
+
+	if result == nil {
+		return []domain.EventEnvelope[any]{}, nil
+	}
+	slices.SortFunc(result, compareEnvelopes)
+	return result, nil
 }
 
 // GetCurrentVersion returns the current version for the aggregate.

@@ -124,6 +124,19 @@ func (s *GormEventStore) GetEventByID(ctx context.Context, eventID string) (doma
 	return modelToEnvelope(*model), nil
 }
 
+// GetEventsByTransactionID retrieves all events with the given transaction ID.
+func (s *GormEventStore) GetEventsByTransactionID(ctx context.Context, transactionID string) ([]domain.EventEnvelope[any], error) {
+	if transactionID == "" {
+		return nil, fmt.Errorf("%w: transaction ID must not be empty", domain.ErrInvalidEvent)
+	}
+
+	models, err := s.repo.GetEventsByTransactionID(ctx, transactionID)
+	if err != nil {
+		return nil, err
+	}
+	return modelsToEnvelopes(models), nil
+}
+
 // GetCurrentVersion returns the current version for the aggregate.
 func (s *GormEventStore) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {
 	return s.repo.GetCurrentVersion(ctx, aggregateID)

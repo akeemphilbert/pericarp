@@ -243,6 +243,23 @@ func (s *BigQueryEventStore) GetEventByID(ctx context.Context, eventID string) (
 	return bigqueryRowToEnvelope(row)
 }
 
+// GetEventsByTransactionID retrieves all events with the given transaction ID.
+func (s *BigQueryEventStore) GetEventsByTransactionID(ctx context.Context, transactionID string) ([]domain.EventEnvelope[any], error) {
+	if transactionID == "" {
+		return nil, fmt.Errorf("%w: transaction ID must not be empty", domain.ErrInvalidEvent)
+	}
+
+	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, transaction_id, payload, metadata, created_at FROM %s WHERE transaction_id = @txid ORDER BY aggregate_id ASC, sequence_no ASC",
+		s.fullTableID())
+
+	q := s.client.Query(query)
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "txid", Value: transactionID},
+	}
+
+	return s.queryEnvelopes(ctx, q)
+}
+
 // GetCurrentVersion returns the current version for the aggregate.
 // Returns 0 if the aggregate doesn't exist.
 func (s *BigQueryEventStore) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {
