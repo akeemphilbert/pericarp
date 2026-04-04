@@ -641,6 +641,175 @@ func TestCommit_RecordBeforeTrack(t *testing.T) {
 	})
 }
 
+func TestCommit_TransactionID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single entity events share same transaction ID", func(t *testing.T) {
+		t.Parallel()
+		eventStore := infrastructure.NewMemoryStore()
+		uow := application.NewSimpleUnitOfWork(eventStore, nil)
+
+		entity := NewTestEntity("entity-1", "Test", "test@example.com")
+		if err := uow.Track(entity); err != nil {
+			t.Fatalf("Failed to track entity: %v", err)
+		}
+
+		if err := entity.RecordEvent(map[string]string{"name": "Test"}, "test.created"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+		if err := entity.RecordEvent(map[string]string{"name": "Updated"}, "test.updated"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+
+		ctx := context.Background()
+		if err := uow.Commit(ctx); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+
+		events, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("Expected 2 events, got %d", len(events))
+		}
+
+		if events[0].TransactionID == "" {
+			t.Error("Expected non-empty TransactionID on first event")
+		}
+		if events[0].TransactionID != events[1].TransactionID {
+			t.Errorf("Expected same TransactionID on both events, got %q and %q",
+				events[0].TransactionID, events[1].TransactionID)
+		}
+	})
+
+	t.Run("multiple entities share same transaction ID", func(t *testing.T) {
+		t.Parallel()
+		eventStore := infrastructure.NewMemoryStore()
+		uow := application.NewSimpleUnitOfWork(eventStore, nil)
+
+		entity1 := NewTestEntity("entity-1", "Test1", "test1@example.com")
+		entity2 := NewTestEntity("entity-2", "Test2", "test2@example.com")
+
+		if err := uow.Track(entity1, entity2); err != nil {
+			t.Fatalf("Failed to track entities: %v", err)
+		}
+
+		if err := entity1.RecordEvent(map[string]string{"name": "Test1"}, "test.created"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+		if err := entity2.RecordEvent(map[string]string{"name": "Test2"}, "test.created"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+
+		ctx := context.Background()
+		if err := uow.Commit(ctx); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+
+		events1, _ := eventStore.GetEvents(ctx, "entity-1")
+		events2, _ := eventStore.GetEvents(ctx, "entity-2")
+
+		if len(events1) != 1 || len(events2) != 1 {
+			t.Fatalf("Expected 1 event each, got %d and %d", len(events1), len(events2))
+		}
+
+		if events1[0].TransactionID == "" {
+			t.Error("Expected non-empty TransactionID")
+		}
+		if events1[0].TransactionID != events2[0].TransactionID {
+			t.Errorf("Expected same TransactionID across aggregates, got %q and %q",
+				events1[0].TransactionID, events2[0].TransactionID)
+		}
+	})
+
+	t.Run("different commits have different transaction IDs", func(t *testing.T) {
+		t.Parallel()
+		eventStore := infrastructure.NewMemoryStore()
+
+		// First commit
+		uow1 := application.NewSimpleUnitOfWork(eventStore, nil)
+		entity1 := NewTestEntity("entity-1", "Test", "test@example.com")
+		if err := uow1.Track(entity1); err != nil {
+			t.Fatalf("Failed to track: %v", err)
+		}
+		if err := entity1.RecordEvent(map[string]string{"name": "Test"}, "test.created"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+
+		ctx := context.Background()
+		if err := uow1.Commit(ctx); err != nil {
+			t.Fatalf("First commit failed: %v", err)
+		}
+
+		events1, _ := eventStore.GetEvents(ctx, "entity-1")
+		txID1 := events1[0].TransactionID
+
+		// Second commit on a different aggregate
+		uow2 := application.NewSimpleUnitOfWork(eventStore, nil)
+		entity2 := NewTestEntity("entity-2", "Test2", "test2@example.com")
+		if err := uow2.Track(entity2); err != nil {
+			t.Fatalf("Failed to track: %v", err)
+		}
+		if err := entity2.RecordEvent(map[string]string{"name": "Test2"}, "test.created"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+		if err := uow2.Commit(ctx); err != nil {
+			t.Fatalf("Second commit failed: %v", err)
+		}
+
+		events2, _ := eventStore.GetEvents(ctx, "entity-2")
+		txID2 := events2[0].TransactionID
+
+		if txID1 == txID2 {
+			t.Errorf("Expected different TransactionIDs for different commits, both got %q", txID1)
+		}
+	})
+
+	t.Run("transaction ID is dispatched with events", func(t *testing.T) {
+		t.Parallel()
+		eventStore := infrastructure.NewMemoryStore()
+		dispatcher := domain.NewEventDispatcher()
+
+		var dispatchedTxID string
+		handler := func(ctx context.Context, env domain.EventEnvelope[map[string]string]) error {
+			dispatchedTxID = env.TransactionID
+			return nil
+		}
+
+		if err := domain.Subscribe[map[string]string](dispatcher, "test.created", handler); err != nil {
+			t.Fatalf("Failed to subscribe: %v", err)
+		}
+
+		uow := application.NewSimpleUnitOfWork(eventStore, dispatcher)
+		entity := NewTestEntity("entity-1", "Test", "test@example.com")
+		if err := uow.Track(entity); err != nil {
+			t.Fatalf("Failed to track: %v", err)
+		}
+		if err := entity.RecordEvent(map[string]string{"name": "Test"}, "test.created"); err != nil {
+			t.Fatalf("Failed to record event: %v", err)
+		}
+
+		ctx := context.Background()
+		if err := uow.Commit(ctx); err != nil {
+			t.Fatalf("Commit failed: %v", err)
+		}
+
+		// Give dispatcher time to process
+		time.Sleep(10 * time.Millisecond)
+
+		if dispatchedTxID == "" {
+			t.Error("Expected dispatched event to have a TransactionID")
+		}
+
+		events, _ := eventStore.GetEvents(ctx, "entity-1")
+		if dispatchedTxID != events[0].TransactionID {
+			t.Errorf("Expected dispatched TransactionID %q to match stored %q",
+				dispatchedTxID, events[0].TransactionID)
+		}
+	})
+}
+
 // failingEventStore is a test helper that fails on Append
 type failingEventStore struct {
 	*infrastructure.MemoryStore

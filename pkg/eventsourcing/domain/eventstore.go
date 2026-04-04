@@ -55,12 +55,13 @@ type EventStore interface {
 // This allows storing events with different payload types together in the event store.
 func ToAnyEnvelope[T any](envelope EventEnvelope[T]) EventEnvelope[any] {
 	return EventEnvelope[any]{
-		ID:          envelope.ID,
-		AggregateID: envelope.AggregateID,
-		EventType:   envelope.EventType,
-		Payload:     envelope.Payload,
-		Created:     envelope.Created,
-		SequenceNo:  envelope.SequenceNo,
-		Metadata:    envelope.Metadata,
+		ID:            envelope.ID,
+		AggregateID:   envelope.AggregateID,
+		EventType:     envelope.EventType,
+		Payload:       envelope.Payload,
+		Created:       envelope.Created,
+		SequenceNo:    envelope.SequenceNo,
+		TransactionID: envelope.TransactionID,
+		Metadata:      envelope.Metadata,
 	}
 }
