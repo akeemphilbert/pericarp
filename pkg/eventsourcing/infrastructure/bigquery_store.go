@@ -137,25 +137,28 @@ func (s *BigQueryEventStore) buildInsertQuery(events []domain.EventEnvelope[any]
 		aggParam := fmt.Sprintf("agg_%d", i)
 		typeParam := fmt.Sprintf("type_%d", i)
 		seqParam := fmt.Sprintf("seq_%d", i)
+		txParam := fmt.Sprintf("tx_%d", i)
 		payParam := fmt.Sprintf("pay_%d", i)
 		metaParam := fmt.Sprintf("meta_%d", i)
 		tsParam := fmt.Sprintf("ts_%d", i)
 
-		valuePlaceholders = append(valuePlaceholders, fmt.Sprintf("(@%s, @%s, @%s, @%s, @%s, @%s, @%s)",
-			idParam, aggParam, typeParam, seqParam, payParam, metaParam, tsParam))
+		valuePlaceholders = append(valuePlaceholders, fmt.Sprintf("(@%s, @%s, @%s, @%s, @%s, @%s, @%s, @%s)",
+			idParam, aggParam, typeParam, seqParam, txParam, payParam, metaParam, tsParam))
 
+		txValue := bigquery.NullString{StringVal: event.TransactionID, Valid: event.TransactionID != ""}
 		params = append(params,
 			bigquery.QueryParameter{Name: idParam, Value: event.ID},
 			bigquery.QueryParameter{Name: aggParam, Value: event.AggregateID},
 			bigquery.QueryParameter{Name: typeParam, Value: event.EventType},
 			bigquery.QueryParameter{Name: seqParam, Value: event.SequenceNo},
+			bigquery.QueryParameter{Name: txParam, Value: txValue},
 			bigquery.QueryParameter{Name: payParam, Value: payloadJSON},
 			bigquery.QueryParameter{Name: metaParam, Value: metadataJSON},
 			bigquery.QueryParameter{Name: tsParam, Value: event.Created.UTC()},
 		)
 	}
 
-	querySQL := fmt.Sprintf("INSERT INTO %s (id, aggregate_id, event_type, sequence_no, payload, metadata, created_at) VALUES %s",
+	querySQL := fmt.Sprintf("INSERT INTO %s (id, aggregate_id, event_type, sequence_no, transaction_id, payload, metadata, created_at) VALUES %s",
 		s.fullTableID(), strings.Join(valuePlaceholders, ", "))
 
 	return querySQL, params, nil
@@ -163,7 +166,7 @@ func (s *BigQueryEventStore) buildInsertQuery(events []domain.EventEnvelope[any]
 
 // GetEvents retrieves all events for the given aggregate ID.
 func (s *BigQueryEventStore) GetEvents(ctx context.Context, aggregateID string) ([]domain.EventEnvelope[any], error) {
-	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, payload, metadata, created_at FROM %s WHERE aggregate_id = @agg ORDER BY sequence_no ASC",
+	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, transaction_id, payload, metadata, created_at FROM %s WHERE aggregate_id = @agg ORDER BY sequence_no ASC",
 		s.fullTableID())
 
 	q := s.client.Query(query)
@@ -176,7 +179,7 @@ func (s *BigQueryEventStore) GetEvents(ctx context.Context, aggregateID string) 
 
 // GetEventsFromVersion retrieves events starting from the specified version.
 func (s *BigQueryEventStore) GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]domain.EventEnvelope[any], error) {
-	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, payload, metadata, created_at FROM %s WHERE aggregate_id = @agg AND sequence_no >= @from_ver ORDER BY sequence_no ASC",
+	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, transaction_id, payload, metadata, created_at FROM %s WHERE aggregate_id = @agg AND sequence_no >= @from_ver ORDER BY sequence_no ASC",
 		s.fullTableID())
 
 	q := s.client.Query(query)
@@ -199,7 +202,7 @@ func (s *BigQueryEventStore) GetEventsRange(ctx context.Context, aggregateID str
 		return s.GetEventsFromVersion(ctx, aggregateID, fromVersion)
 	}
 
-	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, payload, metadata, created_at FROM %s WHERE aggregate_id = @agg AND sequence_no >= @from_ver AND sequence_no <= @to_ver ORDER BY sequence_no ASC",
+	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, transaction_id, payload, metadata, created_at FROM %s WHERE aggregate_id = @agg AND sequence_no >= @from_ver AND sequence_no <= @to_ver ORDER BY sequence_no ASC",
 		s.fullTableID())
 
 	q := s.client.Query(query)
@@ -215,7 +218,7 @@ func (s *BigQueryEventStore) GetEventsRange(ctx context.Context, aggregateID str
 // GetEventByID retrieves a specific event by its ID.
 // Note: This performs a full table scan since id is not in the clustering key.
 func (s *BigQueryEventStore) GetEventByID(ctx context.Context, eventID string) (domain.EventEnvelope[any], error) {
-	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, payload, metadata, created_at FROM %s WHERE id = @event_id LIMIT 1",
+	query := fmt.Sprintf("SELECT id, aggregate_id, event_type, sequence_no, transaction_id, payload, metadata, created_at FROM %s WHERE id = @event_id LIMIT 1",
 		s.fullTableID())
 
 	q := s.client.Query(query)
@@ -307,14 +310,17 @@ func (s *BigQueryEventStore) queryEnvelopes(ctx context.Context, q *bigquery.Que
 
 // bigqueryEventRow is the persistence-layer DTO for BigQuery rows.
 // Fields must stay in sync with the BigQuery table schema.
+// TransactionID uses bigquery.NullString so that existing rows with NULL
+// transaction_id decode without error.
 type bigqueryEventRow struct {
-	ID          string    `bigquery:"id"`
-	AggregateID string    `bigquery:"aggregate_id"`
-	EventType   string    `bigquery:"event_type"`
-	SequenceNo  int64     `bigquery:"sequence_no"`
-	Payload     string    `bigquery:"payload"`
-	Metadata    string    `bigquery:"metadata"`
-	CreatedAt   time.Time `bigquery:"created_at"`
+	ID            string              `bigquery:"id"`
+	AggregateID   string              `bigquery:"aggregate_id"`
+	EventType     string              `bigquery:"event_type"`
+	SequenceNo    int64               `bigquery:"sequence_no"`
+	TransactionID bigquery.NullString `bigquery:"transaction_id"`
+	Payload       string              `bigquery:"payload"`
+	Metadata      string              `bigquery:"metadata"`
+	CreatedAt     time.Time           `bigquery:"created_at"`
 }
 
 func marshalPayloadAndMetadata(env domain.EventEnvelope[any]) (string, string, error) {
@@ -357,13 +363,19 @@ func bigqueryRowToEnvelope(row bigqueryEventRow) (domain.EventEnvelope[any], err
 		metadata = make(map[string]any)
 	}
 
+	txID := ""
+	if row.TransactionID.Valid {
+		txID = row.TransactionID.StringVal
+	}
+
 	return domain.EventEnvelope[any]{
-		ID:          row.ID,
-		AggregateID: row.AggregateID,
-		EventType:   row.EventType,
-		Payload:     map[string]any(payload),
-		Created:     row.CreatedAt,
-		SequenceNo:  int(row.SequenceNo),
-		Metadata:    metadata,
+		ID:            row.ID,
+		AggregateID:   row.AggregateID,
+		EventType:     row.EventType,
+		Payload:       map[string]any(payload),
+		Created:       row.CreatedAt,
+		SequenceNo:    int(row.SequenceNo),
+		TransactionID: txID,
+		Metadata:      metadata,
 	}, nil
 }

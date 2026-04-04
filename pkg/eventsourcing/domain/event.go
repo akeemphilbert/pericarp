@@ -18,13 +18,14 @@ type Event interface {
 // for transport and persistence. The type parameter T represents the strongly-typed
 // event payload.
 type EventEnvelope[T any] struct {
-	ID          string                 `json:"id"`
-	AggregateID string                 `json:"aggregate_id"`
-	EventType   string                 `json:"event_type"`
-	Payload     T                      `json:"payload"`
-	Created     time.Time              `json:"timestamp"`
-	SequenceNo  int                    `json:"sequence_no"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	ID            string                 `json:"id"`
+	AggregateID   string                 `json:"aggregate_id"`
+	EventType     string                 `json:"event_type"`
+	Payload       T                      `json:"payload"`
+	Created       time.Time              `json:"timestamp"`
+	SequenceNo    int                    `json:"sequence_no"`
+	TransactionID string                 `json:"transaction_id,omitempty"`
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // NewEventEnvelope creates a new EventEnvelope with the given payload and metadata.

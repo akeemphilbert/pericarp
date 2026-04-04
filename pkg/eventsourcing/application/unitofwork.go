@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+	"github.com/segmentio/ksuid"
 )
 
 // UnitOfWork is an interface for managing transactions across multiple entities.
@@ -104,13 +105,11 @@ func (uow *SimpleUnitOfWork) Commit(ctx context.Context) error {
 
 	// Collect all uncommitted events from all tracked entities
 	eventsByAggregate := make(map[string][]domain.EventEnvelope[any])
-	var allEvents []domain.EventEnvelope[any]
 
 	for aggregateID, entity := range uow.entities {
 		uncommitted := entity.GetUncommittedEvents()
 		if len(uncommitted) > 0 {
 			eventsByAggregate[aggregateID] = uncommitted
-			allEvents = append(allEvents, uncommitted...)
 		}
 	}
 
@@ -120,6 +119,16 @@ func (uow *SimpleUnitOfWork) Commit(ctx context.Context) error {
 		uow.expectedVersions = make(map[string]int)
 		uow.mu.Unlock()
 		return nil
+	}
+
+	// Stamp all events with the same transaction ID, then build allEvents from the stamped slices
+	transactionID := ksuid.New().String()
+	var allEvents []domain.EventEnvelope[any]
+	for _, events := range eventsByAggregate {
+		for i := range events {
+			events[i].TransactionID = transactionID
+		}
+		allEvents = append(allEvents, events...)
 	}
 
 	// Store references before unlocking

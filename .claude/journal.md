@@ -27,3 +27,14 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 - Integration tests use `ghcr.io/goccy/bigquery-emulator` via testcontainers; skip gracefully without Docker
 - Added BigQuery variants to shared table-driven tests in `eventstore_test.go` and `eventstore_range_test.go`
 - **Why:** BigQuery is append-optimized and enables powerful analytics over event streams — natural fit for event sourcing at scale
+
+---
+
+### 2026-04-04: Transaction ID for unit of work correlation
+
+- Added `TransactionID` field to `EventEnvelope[T]` — a KSUID string that correlates all events committed in the same unit of work
+- `SimpleUnitOfWork.Commit()` generates a single transaction ID and stamps it on every event before persisting
+- Updated `ToAnyEnvelope` to copy the `TransactionID` field
+- Field is `omitempty` in JSON so existing events without a transaction ID remain backward-compatible
+- Added tests: same-commit events share a transaction ID, different commits get different IDs, dispatched events carry the transaction ID
+- **Why:** Enables correlating events across multiple aggregates that were committed together, useful for auditing, debugging, and cross-aggregate consistency tracking

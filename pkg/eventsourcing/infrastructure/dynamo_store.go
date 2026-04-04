@@ -337,6 +337,10 @@ func envelopeToDynamoItem(env domain.EventEnvelope[any]) (map[string]types.Attri
 		"created_at":   &types.AttributeValueMemberS{Value: env.Created.UTC().Format(dynamoTimeFormat)},
 	}
 
+	if env.TransactionID != "" {
+		item["transaction_id"] = &types.AttributeValueMemberS{Value: env.TransactionID}
+	}
+
 	return item, nil
 }
 
@@ -390,14 +394,21 @@ func dynamoItemToEnvelope(item map[string]types.AttributeValue) (domain.EventEnv
 		metadata = make(map[string]any)
 	}
 
+	var transactionID string
+	if txAV, ok := item["transaction_id"]; ok {
+		if err := attributevalue.Unmarshal(txAV, &transactionID); err != nil {
+			return domain.EventEnvelope[any]{}, fmt.Errorf("failed to unmarshal transaction_id: %w", err)
+		}
+	}
+
 	return domain.EventEnvelope[any]{
-		ID:          id,
-		AggregateID: aggregateID,
-		EventType:   eventType,
-		Payload:     map[string]any(payload),
-		Created:     created,
-		SequenceNo:  sequenceNo,
-		Metadata:    metadata,
+		ID:            id,
+		AggregateID:   aggregateID,
+		EventType:     eventType,
+		Payload:       map[string]any(payload),
+		Created:       created,
+		SequenceNo:    sequenceNo,
+		TransactionID: transactionID,
+		Metadata:      metadata,
 	}, nil
 }
-
