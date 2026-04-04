@@ -70,6 +70,27 @@ func startDynamoContainer(t *testing.T) (string, error) {
 		}
 
 		dynamoEndpoint = fmt.Sprintf("http://%s:%s", host, port.Port())
+
+		// Probe DynamoDB readiness — the TCP port may be open before the
+		// service is ready to accept API calls, which causes "use of closed
+		// network connection" errors on the first real request.
+		probeClient := dynamodb.New(dynamodb.Options{
+			Region:       "us-east-1",
+			BaseEndpoint: &dynamoEndpoint,
+			Credentials:  credentials.NewStaticCredentialsProvider("dummy", "dummy", "dummy"),
+		})
+		for i := 0; i < 10; i++ {
+			_, err := probeClient.ListTables(ctx, &dynamodb.ListTablesInput{})
+			if err == nil {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+			if i == 9 {
+				dynamoSetupErr = fmt.Errorf("DynamoDB not ready after probing: %w", err)
+				_ = container.Terminate(ctx)
+				return
+			}
+		}
 	})
 
 	return dynamoEndpoint, dynamoSetupErr
