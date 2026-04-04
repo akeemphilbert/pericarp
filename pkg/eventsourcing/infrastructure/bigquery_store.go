@@ -19,10 +19,12 @@ var _ domain.EventStore = (*BigQueryEventStore)(nil)
 //
 // Concurrency model: the version check in Append uses a read-then-write approach.
 // The current version is read first; if it matches expectedVersion the events are
-// inserted. Under very high contention two concurrent callers could read the same
-// MAX(sequence_no) before either inserts, resulting in a duplicate sequence number.
-// For most event sourcing workloads (low per-aggregate contention) this provides
-// sufficient protection.
+// inserted. This is a known limitation: two concurrent callers targeting the same
+// aggregate can both pass the version check and insert events with duplicate
+// sequence numbers. This violates strict optimistic concurrency guarantees.
+// Production deployments should either enforce uniqueness on (aggregate_id, sequence_no)
+// at the table level, or accept that serializable isolation is not provided by this
+// implementation. For low-contention workloads this risk is typically acceptable.
 type BigQueryEventStore struct {
 	client    *bigquery.Client
 	projectID string
