@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/ddd"
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/application"
@@ -312,9 +311,6 @@ func TestCommit(t *testing.T) {
 		if err := uow.Commit(ctx); err != nil {
 			t.Fatalf("Commit failed: %v", err)
 		}
-
-		// Give dispatcher time to process (since it's async)
-		time.Sleep(10 * time.Millisecond)
 
 		if callCount != 1 {
 			t.Errorf("Expected handler to be called once, got %d", callCount)
@@ -794,9 +790,6 @@ func TestCommit_TransactionID(t *testing.T) {
 		if err := uow.Commit(ctx); err != nil {
 			t.Fatalf("Commit failed: %v", err)
 		}
-
-		// Give dispatcher time to process
-		time.Sleep(10 * time.Millisecond)
 
 		if dispatchedTxID == "" {
 			t.Error("Expected dispatched event to have a TransactionID")
