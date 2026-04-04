@@ -105,13 +105,11 @@ func (uow *SimpleUnitOfWork) Commit(ctx context.Context) error {
 
 	// Collect all uncommitted events from all tracked entities
 	eventsByAggregate := make(map[string][]domain.EventEnvelope[any])
-	var allEvents []domain.EventEnvelope[any]
 
 	for aggregateID, entity := range uow.entities {
 		uncommitted := entity.GetUncommittedEvents()
 		if len(uncommitted) > 0 {
 			eventsByAggregate[aggregateID] = uncommitted
-			allEvents = append(allEvents, uncommitted...)
 		}
 	}
 
@@ -123,16 +121,14 @@ func (uow *SimpleUnitOfWork) Commit(ctx context.Context) error {
 		return nil
 	}
 
-	// Stamp all events with the same transaction ID to correlate events in this unit of work
+	// Stamp all events with the same transaction ID, then build allEvents from the stamped slices
 	transactionID := ksuid.New().String()
-	for aggregateID, events := range eventsByAggregate {
+	var allEvents []domain.EventEnvelope[any]
+	for _, events := range eventsByAggregate {
 		for i := range events {
 			events[i].TransactionID = transactionID
 		}
-		eventsByAggregate[aggregateID] = events
-	}
-	for i := range allEvents {
-		allEvents[i].TransactionID = transactionID
+		allEvents = append(allEvents, events...)
 	}
 
 	// Store references before unlocking
