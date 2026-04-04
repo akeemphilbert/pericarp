@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -244,6 +245,45 @@ func (s *DynamoEventStore) GetEventByID(ctx context.Context, eventID string) (do
 	}
 
 	return dynamoItemToEnvelope(result.Items[0])
+}
+
+// GetEventsByTransactionID retrieves all events with the given transaction ID.
+// This performs a full table scan since transaction_id is not a key attribute.
+func (s *DynamoEventStore) GetEventsByTransactionID(ctx context.Context, transactionID string) ([]domain.EventEnvelope[any], error) {
+	if transactionID == "" {
+		return nil, fmt.Errorf("%w: transaction ID must not be empty", domain.ErrInvalidEvent)
+	}
+
+	var envelopes []domain.EventEnvelope[any]
+
+	input := &dynamodb.ScanInput{
+		TableName:        &s.tableName,
+		FilterExpression: aws.String("transaction_id = :txid"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":txid": &types.AttributeValueMemberS{Value: transactionID},
+		},
+	}
+
+	paginator := dynamodb.NewScanPaginator(s.client, input)
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan events by transaction ID %s: %w", transactionID, err)
+		}
+		for _, item := range page.Items {
+			env, err := dynamoItemToEnvelope(item)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert item for transaction %s: %w", transactionID, err)
+			}
+			envelopes = append(envelopes, env)
+		}
+	}
+
+	if envelopes == nil {
+		return []domain.EventEnvelope[any]{}, nil
+	}
+	slices.SortFunc(envelopes, compareEnvelopes)
+	return envelopes, nil
 }
 
 // GetCurrentVersion returns the current version for the aggregate.

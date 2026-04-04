@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
@@ -305,6 +306,50 @@ func (f *FileStore) GetEventByID(ctx context.Context, eventID string) (domain.Ev
 	}
 
 	return domain.EventEnvelope[any]{}, domain.ErrEventNotFound
+}
+
+// GetEventsByTransactionID retrieves all events with the given transaction ID.
+func (f *FileStore) GetEventsByTransactionID(ctx context.Context, transactionID string) ([]domain.EventEnvelope[any], error) {
+	if transactionID == "" {
+		return nil, fmt.Errorf("%w: transaction ID must not be empty", domain.ErrInvalidEvent)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Ensure aggregates on disk but not yet cached are loaded.
+	entries, err := os.ReadDir(f.baseDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to read event directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		aggregateID := entry.Name()[:len(entry.Name())-5]
+		if _, cached := f.cache[aggregateID]; !cached {
+			loaded, loadErr := f.loadFromFile(filepath.Join(f.baseDir, entry.Name()))
+			if loadErr != nil {
+				return nil, fmt.Errorf("failed to load events from %s: %w", entry.Name(), loadErr)
+			}
+			f.cache[aggregateID] = loaded
+		}
+	}
+
+	var result []domain.EventEnvelope[any]
+	for _, events := range f.cache {
+		for _, event := range events {
+			if event.TransactionID == transactionID {
+				result = append(result, event)
+			}
+		}
+	}
+
+	if result == nil {
+		return []domain.EventEnvelope[any]{}, nil
+	}
+	slices.SortFunc(result, compareEnvelopes)
+	return result, nil
 }
 
 // GetCurrentVersion returns the current version for the aggregate.

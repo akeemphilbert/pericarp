@@ -479,6 +479,59 @@ func TestDynamoStore_Integration(t *testing.T) {
 	})
 }
 
+func TestDynamoStore_GetEventsByTransactionID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("transaction ID retrieval", func(t *testing.T) {
+		t.Parallel()
+
+		store := setupDynamoStore(t)
+		defer func() { _ = store.Close() }()
+
+		ctx := context.Background()
+
+		// Append events with different transaction IDs
+		if err := store.Append(ctx, "agg-1", -1,
+			createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-100"),
+			createTestEventWithTxID("agg-1", "ev-2", "test.updated", 2, "tx-100"),
+		); err != nil {
+			t.Fatalf("failed to append events: %v", err)
+		}
+		if err := store.Append(ctx, "agg-2", -1,
+			createTestEventWithTxID("agg-2", "ev-3", "test.created", 1, "tx-200"),
+		); err != nil {
+			t.Fatalf("failed to append events: %v", err)
+		}
+
+		// Query by tx-100
+		events, err := store.GetEventsByTransactionID(ctx, "tx-100")
+		if err != nil {
+			t.Fatalf("failed to get events by transaction ID: %v", err)
+		}
+		if len(events) != 2 {
+			t.Fatalf("expected 2 events for tx-100, got %d", len(events))
+		}
+
+		// Query by tx-200
+		events, err = store.GetEventsByTransactionID(ctx, "tx-200")
+		if err != nil {
+			t.Fatalf("failed to get events by transaction ID: %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("expected 1 event for tx-200, got %d", len(events))
+		}
+
+		// Query non-existent
+		events, err = store.GetEventsByTransactionID(ctx, "tx-nonexistent")
+		if err != nil {
+			t.Fatalf("failed to get events by transaction ID: %v", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("expected 0 events for nonexistent tx, got %d", len(events))
+		}
+	})
+}
+
 func TestDynamoStore_GetEventsRange(t *testing.T) {
 	t.Parallel()
 

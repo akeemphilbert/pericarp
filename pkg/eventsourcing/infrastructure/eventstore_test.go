@@ -701,6 +701,246 @@ func createTestEvent(aggregateID, eventID, eventType string, version int) domain
 	}
 }
 
+func createTestEventWithTxID(aggregateID, eventID, eventType string, version int, txID string) domain.EventEnvelope[any] {
+	return domain.EventEnvelope[any]{
+		ID:            eventID,
+		AggregateID:   aggregateID,
+		EventType:     eventType,
+		Payload:       map[string]interface{}{"test": "data"},
+		Created:       time.Now(),
+		SequenceNo:    version,
+		TransactionID: txID,
+		Metadata:      make(map[string]interface{}),
+	}
+}
+
+func setupMemoryStoreWithTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := infrastructure.NewMemoryStore()
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-100"),
+		createTestEventWithTxID("agg-1", "ev-2", "test.updated", 2, "tx-100"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-3", "test.created", 1, "tx-200"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func setupGormStoreWithTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := setupGormStore(t)
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-100"),
+		createTestEventWithTxID("agg-1", "ev-2", "test.updated", 2, "tx-100"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-3", "test.created", 1, "tx-200"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func setupFileStoreWithTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	baseDir := t.TempDir()
+	store, err := infrastructure.NewFileStore(baseDir)
+	if err != nil {
+		t.Fatalf("failed to create file store: %v", err)
+	}
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-100"),
+		createTestEventWithTxID("agg-1", "ev-2", "test.updated", 2, "tx-100"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-3", "test.created", 1, "tx-200"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func setupMemoryStoreWithCrossAggTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := infrastructure.NewMemoryStore()
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-2", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func setupBigQueryStoreWithTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := setupBigQueryStore(t)
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-100"),
+		createTestEventWithTxID("agg-1", "ev-2", "test.updated", 2, "tx-100"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-3", "test.created", 1, "tx-200"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func TestEventStore_GetEventsByTransactionID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		setupStore    func(t *testing.T) domain.EventStore
+		transactionID string
+		wantCount     int
+		wantErr       bool
+	}{
+		{
+			name:          "empty transaction ID returns error",
+			setupStore:    setupMemoryStoreWithTxEvents,
+			transactionID: "",
+			wantErr:       true,
+		},
+		{
+			name:          "get events by transaction ID with multiple matches",
+			setupStore:    setupMemoryStoreWithTxEvents,
+			transactionID: "tx-100",
+			wantCount:     2,
+		},
+		{
+			name:          "get events by transaction ID with single match",
+			setupStore:    setupMemoryStoreWithTxEvents,
+			transactionID: "tx-200",
+			wantCount:     1,
+		},
+		{
+			name:          "get events by non-existent transaction ID",
+			setupStore:    setupMemoryStoreWithTxEvents,
+			transactionID: "tx-nonexistent",
+			wantCount:     0,
+		},
+		{
+			name:          "cross-aggregate transaction ID returns events from both aggregates",
+			setupStore:    setupMemoryStoreWithCrossAggTxEvents,
+			transactionID: "tx-cross",
+			wantCount:     2,
+		},
+		{
+			name:          "file: get events by transaction ID with multiple matches",
+			setupStore:    setupFileStoreWithTxEvents,
+			transactionID: "tx-100",
+			wantCount:     2,
+		},
+		{
+			name:          "file: get events by transaction ID with single match",
+			setupStore:    setupFileStoreWithTxEvents,
+			transactionID: "tx-200",
+			wantCount:     1,
+		},
+		{
+			name:          "file: get events by non-existent transaction ID",
+			setupStore:    setupFileStoreWithTxEvents,
+			transactionID: "tx-nonexistent",
+			wantCount:     0,
+		},
+		{
+			name:          "gorm: get events by transaction ID with multiple matches",
+			setupStore:    setupGormStoreWithTxEvents,
+			transactionID: "tx-100",
+			wantCount:     2,
+		},
+		{
+			name:          "gorm: get events by transaction ID with single match",
+			setupStore:    setupGormStoreWithTxEvents,
+			transactionID: "tx-200",
+			wantCount:     1,
+		},
+		{
+			name:          "gorm: get events by non-existent transaction ID",
+			setupStore:    setupGormStoreWithTxEvents,
+			transactionID: "tx-nonexistent",
+			wantCount:     0,
+		},
+		{
+			name:          "bigquery: get events by transaction ID with multiple matches",
+			setupStore:    setupBigQueryStoreWithTxEvents,
+			transactionID: "tx-100",
+			wantCount:     2,
+		},
+		{
+			name:          "bigquery: get events by transaction ID with single match",
+			setupStore:    setupBigQueryStoreWithTxEvents,
+			transactionID: "tx-200",
+			wantCount:     1,
+		},
+		{
+			name:          "bigquery: get events by non-existent transaction ID",
+			setupStore:    setupBigQueryStoreWithTxEvents,
+			transactionID: "tx-nonexistent",
+			wantCount:     0,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := tt.setupStore(t)
+			defer func() { _ = store.Close() }()
+
+			ctx := context.Background()
+			events, err := store.GetEventsByTransactionID(ctx, tt.transactionID)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(events) != tt.wantCount {
+				t.Fatalf("expected %d events, got %d", tt.wantCount, len(events))
+			}
+
+			for _, event := range events {
+				if event.TransactionID != tt.transactionID {
+					t.Errorf("expected transaction ID %s, got %s", tt.transactionID, event.TransactionID)
+				}
+			}
+		})
+	}
+}
+
 func TestToAnyEnvelope(t *testing.T) {
 	t.Parallel()
 
