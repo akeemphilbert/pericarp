@@ -61,13 +61,14 @@ func Subscribe[T any](d *EventDispatcher, eventType string, handler EventHandler
 
 		// Reconstruct EventEnvelope[T] with the typed payload
 		typedEnv := EventEnvelope[T]{
-			ID:          env.ID,
-			AggregateID: env.AggregateID,
-			EventType:   env.EventType,
-			Payload:     payload,
-			Created:     env.Created,
-			SequenceNo:  env.SequenceNo,
-			Metadata:    env.Metadata,
+			ID:            env.ID,
+			AggregateID:   env.AggregateID,
+			EventType:     env.EventType,
+			Payload:       payload,
+			Created:       env.Created,
+			SequenceNo:    env.SequenceNo,
+			TransactionID: env.TransactionID,
+			Metadata:      env.Metadata,
 		}
 
 		// Call the typed handler
@@ -279,13 +280,14 @@ func (d *EventDispatcher) UnmarshalEvent(ctx context.Context, data []byte, event
 
 	// Unmarshal the JSON into a temporary struct to extract metadata
 	var temp struct {
-		ID          string                 `json:"id"`
-		AggregateID string                 `json:"aggregate_id"`
-		EventType   string                 `json:"event_type"`
-		Payload     json.RawMessage        `json:"payload"`
-		Created     string                 `json:"timestamp"`
-		SequenceNo  int                    `json:"sequence_no"`
-		Metadata    map[string]interface{} `json:"metadata,omitempty"`
+		ID            string                 `json:"id"`
+		AggregateID   string                 `json:"aggregate_id"`
+		EventType     string                 `json:"event_type"`
+		Payload       json.RawMessage        `json:"payload"`
+		Created       string                 `json:"timestamp"`
+		SequenceNo    int                    `json:"sequence_no"`
+		TransactionID string                 `json:"transaction_id,omitempty"`
+		Metadata      map[string]interface{} `json:"metadata,omitempty"`
 	}
 
 	if err := json.Unmarshal(data, &temp); err != nil {
@@ -305,13 +307,14 @@ func (d *EventDispatcher) UnmarshalEvent(ctx context.Context, data []byte, event
 
 	// Reconstruct EventEnvelope[any]
 	envelope := EventEnvelope[any]{
-		ID:          temp.ID,
-		AggregateID: temp.AggregateID,
-		EventType:   temp.EventType,
-		Payload:     payload,
-		Created:     created,
-		SequenceNo:  temp.SequenceNo,
-		Metadata:    temp.Metadata,
+		ID:            temp.ID,
+		AggregateID:   temp.AggregateID,
+		EventType:     temp.EventType,
+		Payload:       payload,
+		Created:       created,
+		SequenceNo:    temp.SequenceNo,
+		TransactionID: temp.TransactionID,
+		Metadata:      temp.Metadata,
 	}
 
 	return envelope, nil
