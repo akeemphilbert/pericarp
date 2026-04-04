@@ -100,6 +100,7 @@ func createBigQueryTable(t *testing.T, client *bigquery.Client, tableID string) 
 		{Name: "aggregate_id", Type: bigquery.StringFieldType, Required: true},
 		{Name: "event_type", Type: bigquery.StringFieldType, Required: true},
 		{Name: "sequence_no", Type: bigquery.IntegerFieldType, Required: true},
+		{Name: "transaction_id", Type: bigquery.StringFieldType},
 		{Name: "payload", Type: bigquery.StringFieldType, Required: true},
 		{Name: "metadata", Type: bigquery.StringFieldType},
 		{Name: "created_at", Type: bigquery.TimestampFieldType, Required: true},
