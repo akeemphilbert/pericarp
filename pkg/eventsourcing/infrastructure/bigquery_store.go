@@ -145,12 +145,13 @@ func (s *BigQueryEventStore) buildInsertQuery(events []domain.EventEnvelope[any]
 		valuePlaceholders = append(valuePlaceholders, fmt.Sprintf("(@%s, @%s, @%s, @%s, @%s, @%s, @%s, @%s)",
 			idParam, aggParam, typeParam, seqParam, txParam, payParam, metaParam, tsParam))
 
+		txValue := bigquery.NullString{StringVal: event.TransactionID, Valid: event.TransactionID != ""}
 		params = append(params,
 			bigquery.QueryParameter{Name: idParam, Value: event.ID},
 			bigquery.QueryParameter{Name: aggParam, Value: event.AggregateID},
 			bigquery.QueryParameter{Name: typeParam, Value: event.EventType},
 			bigquery.QueryParameter{Name: seqParam, Value: event.SequenceNo},
-			bigquery.QueryParameter{Name: txParam, Value: event.TransactionID},
+			bigquery.QueryParameter{Name: txParam, Value: txValue},
 			bigquery.QueryParameter{Name: payParam, Value: payloadJSON},
 			bigquery.QueryParameter{Name: metaParam, Value: metadataJSON},
 			bigquery.QueryParameter{Name: tsParam, Value: event.Created.UTC()},
@@ -309,15 +310,17 @@ func (s *BigQueryEventStore) queryEnvelopes(ctx context.Context, q *bigquery.Que
 
 // bigqueryEventRow is the persistence-layer DTO for BigQuery rows.
 // Fields must stay in sync with the BigQuery table schema.
+// TransactionID uses bigquery.NullString so that existing rows with NULL
+// transaction_id decode without error.
 type bigqueryEventRow struct {
-	ID            string    `bigquery:"id"`
-	AggregateID   string    `bigquery:"aggregate_id"`
-	EventType     string    `bigquery:"event_type"`
-	SequenceNo    int64     `bigquery:"sequence_no"`
-	TransactionID string    `bigquery:"transaction_id"`
-	Payload       string    `bigquery:"payload"`
-	Metadata      string    `bigquery:"metadata"`
-	CreatedAt     time.Time `bigquery:"created_at"`
+	ID            string              `bigquery:"id"`
+	AggregateID   string              `bigquery:"aggregate_id"`
+	EventType     string              `bigquery:"event_type"`
+	SequenceNo    int64               `bigquery:"sequence_no"`
+	TransactionID bigquery.NullString `bigquery:"transaction_id"`
+	Payload       string              `bigquery:"payload"`
+	Metadata      string              `bigquery:"metadata"`
+	CreatedAt     time.Time           `bigquery:"created_at"`
 }
 
 func marshalPayloadAndMetadata(env domain.EventEnvelope[any]) (string, string, error) {
@@ -360,6 +363,11 @@ func bigqueryRowToEnvelope(row bigqueryEventRow) (domain.EventEnvelope[any], err
 		metadata = make(map[string]any)
 	}
 
+	txID := ""
+	if row.TransactionID.Valid {
+		txID = row.TransactionID.StringVal
+	}
+
 	return domain.EventEnvelope[any]{
 		ID:            row.ID,
 		AggregateID:   row.AggregateID,
@@ -367,7 +375,7 @@ func bigqueryRowToEnvelope(row bigqueryEventRow) (domain.EventEnvelope[any], err
 		Payload:       map[string]any(payload),
 		Created:       row.CreatedAt,
 		SequenceNo:    int(row.SequenceNo),
-		TransactionID: row.TransactionID,
+		TransactionID: txID,
 		Metadata:      metadata,
 	}, nil
 }
