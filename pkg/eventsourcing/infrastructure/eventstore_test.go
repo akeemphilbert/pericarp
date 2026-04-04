@@ -793,6 +793,64 @@ func setupMemoryStoreWithCrossAggTxEvents(t *testing.T) domain.EventStore {
 	return store
 }
 
+func setupFileStoreWithCrossAggTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	baseDir := t.TempDir()
+	store, err := infrastructure.NewFileStore(baseDir)
+	if err != nil {
+		t.Fatalf("failed to create file store: %v", err)
+	}
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-2", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func setupGormStoreWithCrossAggTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := setupGormStore(t)
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-2", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func setupBigQueryStoreWithCrossAggTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := setupBigQueryStore(t)
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-2", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
 func setupBigQueryStoreWithTxEvents(t *testing.T) domain.EventStore {
 	t.Helper()
 	store := setupBigQueryStore(t)
@@ -812,6 +870,11 @@ func setupBigQueryStoreWithTxEvents(t *testing.T) domain.EventStore {
 	return store
 }
 
+type txEventOrder struct {
+	aggregateID string
+	seqNo       int
+}
+
 func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 	t.Parallel()
 
@@ -821,6 +884,7 @@ func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 		transactionID string
 		wantCount     int
 		wantErr       bool
+		wantOrder     []txEventOrder
 	}{
 		{
 			name:          "empty transaction ID returns error",
@@ -833,12 +897,14 @@ func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 			setupStore:    setupMemoryStoreWithTxEvents,
 			transactionID: "tx-100",
 			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-1", 2}},
 		},
 		{
 			name:          "get events by transaction ID with single match",
 			setupStore:    setupMemoryStoreWithTxEvents,
 			transactionID: "tx-200",
 			wantCount:     1,
+			wantOrder:     []txEventOrder{{"agg-2", 1}},
 		},
 		{
 			name:          "get events by non-existent transaction ID",
@@ -847,22 +913,25 @@ func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 			wantCount:     0,
 		},
 		{
-			name:          "cross-aggregate transaction ID returns events from both aggregates",
+			name:          "cross-aggregate transaction ID returns events ordered by aggregate_id then sequence_no",
 			setupStore:    setupMemoryStoreWithCrossAggTxEvents,
 			transactionID: "tx-cross",
 			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-2", 1}},
 		},
 		{
 			name:          "file: get events by transaction ID with multiple matches",
 			setupStore:    setupFileStoreWithTxEvents,
 			transactionID: "tx-100",
 			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-1", 2}},
 		},
 		{
 			name:          "file: get events by transaction ID with single match",
 			setupStore:    setupFileStoreWithTxEvents,
 			transactionID: "tx-200",
 			wantCount:     1,
+			wantOrder:     []txEventOrder{{"agg-2", 1}},
 		},
 		{
 			name:          "file: get events by non-existent transaction ID",
@@ -871,16 +940,25 @@ func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 			wantCount:     0,
 		},
 		{
+			name:          "file: cross-aggregate transaction ID returns events ordered by aggregate_id then sequence_no",
+			setupStore:    setupFileStoreWithCrossAggTxEvents,
+			transactionID: "tx-cross",
+			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-2", 1}},
+		},
+		{
 			name:          "gorm: get events by transaction ID with multiple matches",
 			setupStore:    setupGormStoreWithTxEvents,
 			transactionID: "tx-100",
 			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-1", 2}},
 		},
 		{
 			name:          "gorm: get events by transaction ID with single match",
 			setupStore:    setupGormStoreWithTxEvents,
 			transactionID: "tx-200",
 			wantCount:     1,
+			wantOrder:     []txEventOrder{{"agg-2", 1}},
 		},
 		{
 			name:          "gorm: get events by non-existent transaction ID",
@@ -889,22 +967,38 @@ func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 			wantCount:     0,
 		},
 		{
+			name:          "gorm: cross-aggregate transaction ID returns events ordered by aggregate_id then sequence_no",
+			setupStore:    setupGormStoreWithCrossAggTxEvents,
+			transactionID: "tx-cross",
+			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-2", 1}},
+		},
+		{
 			name:          "bigquery: get events by transaction ID with multiple matches",
 			setupStore:    setupBigQueryStoreWithTxEvents,
 			transactionID: "tx-100",
 			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-1", 2}},
 		},
 		{
 			name:          "bigquery: get events by transaction ID with single match",
 			setupStore:    setupBigQueryStoreWithTxEvents,
 			transactionID: "tx-200",
 			wantCount:     1,
+			wantOrder:     []txEventOrder{{"agg-2", 1}},
 		},
 		{
 			name:          "bigquery: get events by non-existent transaction ID",
 			setupStore:    setupBigQueryStoreWithTxEvents,
 			transactionID: "tx-nonexistent",
 			wantCount:     0,
+		},
+		{
+			name:          "bigquery: cross-aggregate transaction ID returns events ordered by aggregate_id then sequence_no",
+			setupStore:    setupBigQueryStoreWithCrossAggTxEvents,
+			transactionID: "tx-cross",
+			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-2", 1}},
 		},
 	}
 
@@ -935,6 +1029,15 @@ func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 			for _, event := range events {
 				if event.TransactionID != tt.transactionID {
 					t.Errorf("expected transaction ID %s, got %s", tt.transactionID, event.TransactionID)
+				}
+			}
+
+			for i, want := range tt.wantOrder {
+				if events[i].AggregateID != want.aggregateID {
+					t.Errorf("event[%d]: expected aggregate_id %q, got %q", i, want.aggregateID, events[i].AggregateID)
+				}
+				if events[i].SequenceNo != want.seqNo {
+					t.Errorf("event[%d]: expected sequence_no %d, got %d", i, want.seqNo, events[i].SequenceNo)
 				}
 			}
 		})
