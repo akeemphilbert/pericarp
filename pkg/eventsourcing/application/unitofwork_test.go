@@ -238,9 +238,18 @@ func TestCommit(t *testing.T) {
 		}
 
 		// Verify all events were persisted
-		events1, _ := eventStore.GetEvents(ctx, "entity-1")
-		events2, _ := eventStore.GetEvents(ctx, "entity-2")
-		events3, _ := eventStore.GetEvents(ctx, "entity-3")
+		events1, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events for entity-1: %v", err)
+		}
+		events2, err := eventStore.GetEvents(ctx, "entity-2")
+		if err != nil {
+			t.Fatalf("Failed to get events for entity-2: %v", err)
+		}
+		events3, err := eventStore.GetEvents(ctx, "entity-3")
+		if err != nil {
+			t.Fatalf("Failed to get events for entity-3: %v", err)
+		}
 
 		if len(events1) != 1 {
 			t.Errorf("Expected 1 event for entity1, got %d", len(events1))
@@ -381,7 +390,10 @@ func TestCommitFailure(t *testing.T) {
 		}
 
 		// Verify event was not persisted
-		events, _ := eventStore.GetEvents(ctx, "entity-1")
+		events, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events: %v", err)
+		}
 		if len(events) != 0 {
 			t.Errorf("Expected 0 events after failed commit, got %d", len(events))
 		}
@@ -703,8 +715,14 @@ func TestCommit_TransactionID(t *testing.T) {
 			t.Fatalf("Commit failed: %v", err)
 		}
 
-		events1, _ := eventStore.GetEvents(ctx, "entity-1")
-		events2, _ := eventStore.GetEvents(ctx, "entity-2")
+		events1, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events for entity-1: %v", err)
+		}
+		events2, err := eventStore.GetEvents(ctx, "entity-2")
+		if err != nil {
+			t.Fatalf("Failed to get events for entity-2: %v", err)
+		}
 
 		if len(events1) != 1 || len(events2) != 1 {
 			t.Fatalf("Expected 1 event each, got %d and %d", len(events1), len(events2))
@@ -738,7 +756,10 @@ func TestCommit_TransactionID(t *testing.T) {
 			t.Fatalf("First commit failed: %v", err)
 		}
 
-		events1, _ := eventStore.GetEvents(ctx, "entity-1")
+		events1, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events for entity-1: %v", err)
+		}
 		txID1 := events1[0].TransactionID
 
 		// Second commit on a different aggregate
@@ -754,7 +775,10 @@ func TestCommit_TransactionID(t *testing.T) {
 			t.Fatalf("Second commit failed: %v", err)
 		}
 
-		events2, _ := eventStore.GetEvents(ctx, "entity-2")
+		events2, err := eventStore.GetEvents(ctx, "entity-2")
+		if err != nil {
+			t.Fatalf("Failed to get events for entity-2: %v", err)
+		}
 		txID2 := events2[0].TransactionID
 
 		if txID1 == txID2 {
@@ -795,7 +819,10 @@ func TestCommit_TransactionID(t *testing.T) {
 			t.Error("Expected dispatched event to have a TransactionID")
 		}
 
-		events, _ := eventStore.GetEvents(ctx, "entity-1")
+		events, err := eventStore.GetEvents(ctx, "entity-1")
+		if err != nil {
+			t.Fatalf("Failed to get events: %v", err)
+		}
 		if dispatchedTxID != events[0].TransactionID {
 			t.Errorf("Expected dispatched TransactionID %q to match stored %q",
 				dispatchedTxID, events[0].TransactionID)
