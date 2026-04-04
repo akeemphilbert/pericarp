@@ -40,13 +40,14 @@ func (j *JSONB) Scan(value any) error {
 
 // GormEventModel is the GORM model for persisting events.
 type GormEventModel struct {
-	ID          string    `gorm:"primaryKey;column:id"`
-	AggregateID string    `gorm:"column:aggregate_id;index;uniqueIndex:idx_aggregate_sequence"`
-	EventType   string    `gorm:"column:event_type"`
-	SequenceNo  int       `gorm:"column:sequence_no;uniqueIndex:idx_aggregate_sequence"`
-	Payload     JSONB     `gorm:"column:payload;type:jsonb"`
-	Metadata    JSONB     `gorm:"column:metadata;type:jsonb"`
-	CreatedAt   time.Time `gorm:"column:created_at"`
+	ID            string    `gorm:"primaryKey;column:id"`
+	AggregateID   string    `gorm:"column:aggregate_id;index;uniqueIndex:idx_aggregate_sequence"`
+	EventType     string    `gorm:"column:event_type"`
+	SequenceNo    int       `gorm:"column:sequence_no;uniqueIndex:idx_aggregate_sequence"`
+	TransactionID string    `gorm:"column:transaction_id;index"`
+	Payload       JSONB     `gorm:"column:payload;type:jsonb"`
+	Metadata      JSONB     `gorm:"column:metadata;type:jsonb"`
+	CreatedAt     time.Time `gorm:"column:created_at"`
 }
 
 // TableName returns the table name for the event model.

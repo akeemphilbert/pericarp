@@ -146,13 +146,14 @@ func envelopeToModel(env domain.EventEnvelope[any]) (GormEventModel, error) {
 	}
 
 	return GormEventModel{
-		ID:          env.ID,
-		AggregateID: env.AggregateID,
-		EventType:   env.EventType,
-		SequenceNo:  env.SequenceNo,
-		Payload:     payload,
-		Metadata:    metadata,
-		CreatedAt:   env.Created,
+		ID:            env.ID,
+		AggregateID:   env.AggregateID,
+		EventType:     env.EventType,
+		SequenceNo:    env.SequenceNo,
+		TransactionID: env.TransactionID,
+		Payload:       payload,
+		Metadata:      metadata,
+		CreatedAt:     env.Created,
 	}, nil
 }
 
@@ -187,13 +188,14 @@ func modelToEnvelope(m GormEventModel) domain.EventEnvelope[any] {
 	}
 
 	return domain.EventEnvelope[any]{
-		ID:          m.ID,
-		AggregateID: m.AggregateID,
-		EventType:   m.EventType,
-		Payload:     payload,
-		Created:     m.CreatedAt,
-		SequenceNo:  m.SequenceNo,
-		Metadata:    metadata,
+		ID:            m.ID,
+		AggregateID:   m.AggregateID,
+		EventType:     m.EventType,
+		Payload:       payload,
+		Created:       m.CreatedAt,
+		SequenceNo:    m.SequenceNo,
+		TransactionID: m.TransactionID,
+		Metadata:      metadata,
 	}
 }
 
