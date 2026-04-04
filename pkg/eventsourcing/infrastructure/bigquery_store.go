@@ -15,17 +15,14 @@ import (
 
 var _ domain.EventStore = (*BigQueryEventStore)(nil)
 
-const bigqueryConflictSignal = "CONCURRENCY_CONFLICT"
-
 // BigQueryEventStore is a BigQuery-based implementation of EventStore.
 //
-// Concurrency model: the version check in Append uses a BigQuery scripting block
-// with RAISE to signal conflicts. BigQuery DML provides snapshot isolation at the
-// statement level within a script, which serializes concurrent writes to the same
-// table. However, this is not equivalent to serializable isolation across concurrent
-// jobs — under very high contention, two scripts could read the same MAX(sequence_no)
-// before either inserts. For most event sourcing workloads (low per-aggregate contention),
-// this provides sufficient protection.
+// Concurrency model: the version check in Append uses a read-then-write approach.
+// The current version is read first; if it matches expectedVersion the events are
+// inserted. Under very high contention two concurrent callers could read the same
+// MAX(sequence_no) before either inserts, resulting in a duplicate sequence number.
+// For most event sourcing workloads (low per-aggregate contention) this provides
+// sufficient protection.
 type BigQueryEventStore struct {
 	client    *bigquery.Client
 	projectID string
@@ -112,46 +109,16 @@ func (s *BigQueryEventStore) appendWithoutVersionCheck(ctx context.Context, even
 }
 
 func (s *BigQueryEventStore) appendWithVersionCheck(ctx context.Context, aggregateID string, expectedVersion int, events []domain.EventEnvelope[any]) error {
-	insertSQL, params, err := s.buildInsertQuery(events)
+	currentVersion, err := s.GetCurrentVersion(ctx, aggregateID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get current version for conflict check: %w", err)
 	}
 
-	// BigQuery scripting block: check version then insert.
-	// Uses RAISE to signal conflict — deterministic error detection via job failure
-	// rather than fragile result set parsing.
-	script := fmt.Sprintf(`
-DECLARE current_version INT64;
-SET current_version = (SELECT COALESCE(MAX(sequence_no), 0) FROM %s WHERE aggregate_id = @check_agg_id);
-IF current_version != @check_expected_ver THEN
-  RAISE USING MESSAGE = '%s';
-END IF;
-%s
-`, s.fullTableID(), bigqueryConflictSignal, insertSQL)
-
-	q := s.client.Query(script)
-	q.Parameters = append(params,
-		bigquery.QueryParameter{Name: "check_agg_id", Value: aggregateID},
-		bigquery.QueryParameter{Name: "check_expected_ver", Value: expectedVersion},
-	)
-
-	job, err := q.Run(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to run version-check script: %w", err)
+	if currentVersion != expectedVersion {
+		return fmt.Errorf("%w: expected version %d", domain.ErrConcurrencyConflict, expectedVersion)
 	}
 
-	status, err := job.Wait(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to wait for version-check job: %w", err)
-	}
-	if err := status.Err(); err != nil {
-		if strings.Contains(err.Error(), bigqueryConflictSignal) {
-			return fmt.Errorf("%w: expected version %d", domain.ErrConcurrencyConflict, expectedVersion)
-		}
-		return fmt.Errorf("version-check job failed: %w", err)
-	}
-
-	return nil
+	return s.appendWithoutVersionCheck(ctx, events)
 }
 
 func (s *BigQueryEventStore) buildInsertQuery(events []domain.EventEnvelope[any]) (string, []bigquery.QueryParameter, error) {
@@ -172,7 +139,7 @@ func (s *BigQueryEventStore) buildInsertQuery(events []domain.EventEnvelope[any]
 		metaParam := fmt.Sprintf("meta_%d", i)
 		tsParam := fmt.Sprintf("ts_%d", i)
 
-		valuePlaceholders = append(valuePlaceholders, fmt.Sprintf("(@%s, @%s, @%s, @%s, PARSE_JSON(@%s), PARSE_JSON(@%s), @%s)",
+		valuePlaceholders = append(valuePlaceholders, fmt.Sprintf("(@%s, @%s, @%s, @%s, @%s, @%s, @%s)",
 			idParam, aggParam, typeParam, seqParam, payParam, metaParam, tsParam))
 
 		params = append(params,
