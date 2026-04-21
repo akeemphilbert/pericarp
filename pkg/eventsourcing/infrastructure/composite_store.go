@@ -148,8 +148,12 @@ func (c *CompositeEventStore) reportError(idx int, err error, envelopes []domain
 //
 // Note: if ctx expires after the primary has committed but before every
 // secondary has been enqueued, the primary write stands (it is authoritative)
-// and Append returns ctx.Err(). The missed secondary writes will be observed
-// by the error handler when the caller's next commit updates versions.
+// and Append returns ctx.Err(). Secondaries are appended with
+// expectedVersion=-1, so a skipped enqueue does not later surface as a
+// version conflict — the missed events are silently dropped for those
+// secondaries unless the secondary itself errors on some future write.
+// Callers that must not lose replication should either use an unbounded
+// context for Append or reconcile secondaries out of band.
 func (c *CompositeEventStore) Append(ctx context.Context, aggregateID string, expectedVersion int, events ...domain.EventEnvelope[any]) error {
 	c.sendMu.RLock()
 	defer c.sendMu.RUnlock()

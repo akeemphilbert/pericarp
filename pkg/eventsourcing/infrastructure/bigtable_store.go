@@ -94,6 +94,35 @@ func eventPrefixRange(aggregateID string) bigtable.RowRange {
 	return bigtable.PrefixRange(btEventPrefix + aggregateID + "#")
 }
 
+// eventPrefixEnd returns the exclusive upper bound for rows under the
+// aggregate's event prefix: "#" (0x23) is bumped to "$" (0x24), which is
+// safe because aggregate IDs are validated to contain neither.
+func eventPrefixEnd(aggregateID string) string {
+	return btEventPrefix + aggregateID + "$"
+}
+
+// eventRangeFrom returns the half-open range [padSeq(fromVersion), end-of-prefix)
+// so Bigtable can seek directly to the requested seq rather than scanning the
+// full aggregate history.
+func eventRangeFrom(aggregateID string, fromVersion int) bigtable.RowRange {
+	if fromVersion < 1 {
+		fromVersion = 1
+	}
+	return bigtable.NewRange(eventRowKey(aggregateID, fromVersion), eventPrefixEnd(aggregateID))
+}
+
+// eventRangeBetween returns [padSeq(fromVersion), padSeq(toVersion+1)), or
+// the unbounded-right variant when toVersion == -1.
+func eventRangeBetween(aggregateID string, fromVersion, toVersion int) bigtable.RowRange {
+	if fromVersion < 1 {
+		fromVersion = 1
+	}
+	if toVersion == -1 {
+		return bigtable.NewRange(eventRowKey(aggregateID, fromVersion), eventPrefixEnd(aggregateID))
+	}
+	return bigtable.NewRange(eventRowKey(aggregateID, fromVersion), eventRowKey(aggregateID, toVersion+1))
+}
+
 func padSeq(seq int) string {
 	return fmt.Sprintf("%0*d", btSeqWidth, seq)
 }
@@ -217,69 +246,13 @@ func (s *BigtableEventStore) GetEvents(ctx context.Context, aggregateID string) 
 }
 
 func (s *BigtableEventStore) GetEventsFromVersion(ctx context.Context, aggregateID string, fromVersion int) ([]domain.EventEnvelope[any], error) {
-	// PrefixRange already bounds to rows with the aggregate prefix; we further
-	// filter by seq within the callback to avoid the `#`/`$` byte-range trap.
-	r := eventPrefixRange(aggregateID)
-	var out []domain.EventEnvelope[any]
-	var decodeErr error
-	err := s.table.ReadRows(ctx, r, func(row bigtable.Row) bool {
-		env, err := decodeEventRow(row)
-		if err != nil {
-			decodeErr = err
-			return false
-		}
-		if env.SequenceNo < fromVersion {
-			return true
-		}
-		out = append(out, env)
-		return true
-	}, latestVersionRead())
-	if err != nil {
-		return nil, fmt.Errorf("bigtable: range scan failed: %w", err)
-	}
-	if decodeErr != nil {
-		return nil, decodeErr
-	}
-	if out == nil {
-		return []domain.EventEnvelope[any]{}, nil
-	}
-	return out, nil
+	return s.readEventRange(ctx, eventRangeFrom(aggregateID, fromVersion))
 }
 
 // GetEventsRange returns events whose seq is within [fromVersion, toVersion].
 // -1 sentinels match the EventStore interface contract.
 func (s *BigtableEventStore) GetEventsRange(ctx context.Context, aggregateID string, fromVersion, toVersion int) ([]domain.EventEnvelope[any], error) {
-	if fromVersion == -1 {
-		fromVersion = 1
-	}
-	r := eventPrefixRange(aggregateID)
-	var out []domain.EventEnvelope[any]
-	var decodeErr error
-	err := s.table.ReadRows(ctx, r, func(row bigtable.Row) bool {
-		env, err := decodeEventRow(row)
-		if err != nil {
-			decodeErr = err
-			return false
-		}
-		if env.SequenceNo < fromVersion {
-			return true
-		}
-		if toVersion != -1 && env.SequenceNo > toVersion {
-			return true
-		}
-		out = append(out, env)
-		return true
-	}, latestVersionRead())
-	if err != nil {
-		return nil, fmt.Errorf("bigtable: range scan failed: %w", err)
-	}
-	if decodeErr != nil {
-		return nil, decodeErr
-	}
-	if out == nil {
-		return []domain.EventEnvelope[any]{}, nil
-	}
-	return out, nil
+	return s.readEventRange(ctx, eventRangeBetween(aggregateID, fromVersion, toVersion))
 }
 
 func (s *BigtableEventStore) GetEventByID(ctx context.Context, eventID string) (domain.EventEnvelope[any], error) {
@@ -290,7 +263,10 @@ func (s *BigtableEventStore) GetEventByID(ctx context.Context, eventID string) (
 	if len(idRow) == 0 {
 		return domain.EventEnvelope[any]{}, domain.ErrEventNotFound
 	}
-	agg, seq, ok := extractAggSeq(idRow)
+	agg, seq, ok, err := extractAggSeq(idRow)
+	if err != nil {
+		return domain.EventEnvelope[any]{}, err
+	}
 	if !ok {
 		return domain.EventEnvelope[any]{}, fmt.Errorf("%w: id-index row missing agg/seq columns", domain.ErrInvalidEvent)
 	}
@@ -321,7 +297,11 @@ func (s *BigtableEventStore) GetEventsByTransactionID(ctx context.Context, trans
 	var hits []hit
 	var scanErr error
 	err := s.table.ReadRows(ctx, bigtable.PrefixRange(btTxPrefix+transactionID+"#"), func(row bigtable.Row) bool {
-		agg, seq, ok := extractAggSeq(row)
+		agg, seq, ok, parseErr := extractAggSeq(row)
+		if parseErr != nil {
+			scanErr = fmt.Errorf("tx-index row %q: %w", row.Key(), parseErr)
+			return false
+		}
 		if !ok {
 			scanErr = fmt.Errorf("%w: tx-index row %q missing agg/seq columns", domain.ErrInvalidEvent, row.Key())
 			return false
@@ -346,20 +326,37 @@ func (s *BigtableEventStore) GetEventsByTransactionID(ctx context.Context, trans
 		return hits[i].seq < hits[j].seq
 	})
 
+	// Batch the dereference into a single RPC; collecting N separate ReadRows
+	// would be O(N) round trips for a single logical transaction lookup.
+	keys := make(bigtable.RowList, 0, len(hits))
+	for _, h := range hits {
+		keys = append(keys, eventRowKey(h.agg, h.seq))
+	}
+	found := make(map[string]domain.EventEnvelope[any], len(hits))
+	var decodeErr error
+	err = s.table.ReadRows(ctx, keys, func(row bigtable.Row) bool {
+		env, derr := decodeEventRow(row)
+		if derr != nil {
+			decodeErr = derr
+			return false
+		}
+		found[row.Key()] = env
+		return true
+	}, latestVersionRead())
+	if err != nil {
+		return nil, fmt.Errorf("bigtable: tx-ref batch read failed: %w", err)
+	}
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+
 	out := make([]domain.EventEnvelope[any], 0, len(hits))
 	for _, h := range hits {
-		row, err := s.table.ReadRow(ctx, eventRowKey(h.agg, h.seq), latestVersionRead())
-		if err != nil {
-			return nil, fmt.Errorf("bigtable: tx-ref read failed for %s#%d: %w", h.agg, h.seq, err)
-		}
-		if len(row) == 0 {
+		env, ok := found[eventRowKey(h.agg, h.seq)]
+		if !ok {
 			// Orphan index row (Append partial failure or out-of-band deletion).
 			// Surface rather than silently drop; callers can decide to reindex.
 			return nil, fmt.Errorf("%w: tx-index references missing event %s#%d", domain.ErrInvalidEvent, h.agg, h.seq)
-		}
-		env, err := decodeEventRow(row)
-		if err != nil {
-			return nil, err
 		}
 		out = append(out, env)
 	}
@@ -374,7 +371,13 @@ func (s *BigtableEventStore) GetCurrentVersion(ctx context.Context, aggregateID 
 	var found bool
 	var decodeErr error
 	err := s.table.ReadRows(ctx, eventPrefixRange(aggregateID), func(row bigtable.Row) bool {
-		_, seq, ok := extractAggSeq(row)
+		_, seq, ok, parseErr := extractAggSeq(row)
+		if parseErr != nil {
+			// A malformed seq column is row corruption, not a missing column —
+			// surface it rather than silently falling back.
+			decodeErr = parseErr
+			return false
+		}
 		if !ok {
 			// Fall back to parsing the row key; if that also fails, surface an
 			// error rather than returning 0 (which Append would read as
@@ -435,7 +438,13 @@ func (s *BigtableEventStore) readEventRange(ctx context.Context, r bigtable.RowR
 
 // extractAggSeq pulls the "agg" and "seq" columns out of a Row (as written by
 // id-index, tx-index, or event rows). seq is always a zero-padded decimal.
-func extractAggSeq(row bigtable.Row) (string, int, bool) {
+//
+// Three outcomes:
+//   - all required columns present and valid: (agg, seq, true, nil)
+//   - columns missing: (agg-if-seen, 0, false, nil) — caller decides the fallback
+//   - column present but malformed (seq can't parse): ("", 0, false, err) — caller
+//     should surface the parse error rather than treat the row as "missing"
+func extractAggSeq(row bigtable.Row) (string, int, bool, error) {
 	items := row[BigtableColumnFamily]
 	var agg string
 	var seq int
@@ -449,13 +458,13 @@ func extractAggSeq(row bigtable.Row) (string, int, bool) {
 		case btColSeq:
 			n, err := parseSeq(string(it.Value))
 			if err != nil {
-				return "", 0, false
+				return "", 0, false, fmt.Errorf("%w: %v", domain.ErrInvalidEvent, err)
 			}
 			seq = n
 			seenSeq = true
 		}
 	}
-	return agg, seq, seenAgg && seenSeq
+	return agg, seq, seenAgg && seenSeq, nil
 }
 
 func seqFromRowKey(rowKey, aggregateID string) (int, error) {
@@ -513,7 +522,7 @@ func decodeEventRow(row bigtable.Row) (domain.EventEnvelope[any], error) {
 			haveCreated = true
 		}
 	}
-	if id == "" || agg == "" || !haveSeq || !haveCreated {
+	if id == "" || agg == "" || typ == "" || !haveSeq || !haveCreated {
 		return domain.EventEnvelope[any]{}, fmt.Errorf("%w: event row missing required fields", domain.ErrInvalidEvent)
 	}
 

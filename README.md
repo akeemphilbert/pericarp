@@ -54,7 +54,10 @@ Use a composite when you want a backup/replica sink whose latency must not affec
 
 ```go
 primary := infrastructure.NewMemoryStore()
-backup, _ := infrastructure.NewFileStore("/var/lib/myapp/backup")
+backup, err := infrastructure.NewFileStore("/var/lib/myapp/backup")
+if err != nil {
+    log.Fatalf("open backup store: %v", err)
+}
 
 store := infrastructure.NewCompositeEventStore(
     primary,
@@ -63,7 +66,12 @@ store := infrastructure.NewCompositeEventStore(
         log.Printf("secondary[%d] replication failed for %d events: %v", idx, len(envs), err)
     }),
 )
-defer store.Close() // drains pending secondary writes before returning
+defer func() {
+    // Close drains pending secondary writes, then closes primary + secondaries.
+    if err := store.Close(); err != nil {
+        log.Printf("composite close: %v", err)
+    }
+}()
 ```
 
 All reads forward to the primary. `Close()` drains in-flight secondary writes, then closes the underlying stores. See the godoc on `CompositeEventStore` for details.
