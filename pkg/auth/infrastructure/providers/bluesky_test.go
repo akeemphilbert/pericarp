@@ -421,6 +421,115 @@ func TestBluesky_ValidateAuthServerEndpoints(t *testing.T) {
 	}
 }
 
+func TestBluesky_ValidateRefreshTokenURLs_SSRFGuard(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		insecureOK  bool
+		pdsURL      string
+		tokenURL    string
+		issuer      string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:     "all same-host https allowed",
+			pdsURL:   "https://pds.example.com",
+			tokenURL: "https://pds.example.com/oauth/token",
+			issuer:   "https://pds.example.com",
+		},
+		{
+			name:        "tokenURL on different host rejected",
+			pdsURL:      "https://pds.example.com",
+			tokenURL:    "https://attacker.example.com/oauth/token",
+			issuer:      "https://pds.example.com",
+			wantErr:     true,
+			errContains: "tokenURL host",
+		},
+		{
+			name:        "issuer on different host rejected",
+			pdsURL:      "https://pds.example.com",
+			tokenURL:    "https://pds.example.com/oauth/token",
+			issuer:      "https://attacker.example.com",
+			wantErr:     true,
+			errContains: "issuer host",
+		},
+		{
+			name:        "loopback tokenURL rejected",
+			pdsURL:      "https://pds.example.com",
+			tokenURL:    "https://127.0.0.1/oauth/token",
+			issuer:      "https://pds.example.com",
+			wantErr:     true,
+			errContains: "tokenURL",
+		},
+		{
+			name:        "http pdsURL rejected",
+			pdsURL:      "http://pds.example.com",
+			tokenURL:    "https://pds.example.com/oauth/token",
+			issuer:      "https://pds.example.com",
+			wantErr:     true,
+			errContains: "pdsURL",
+		},
+		{
+			name:       "insecure flag bypasses validation",
+			insecureOK: true,
+			pdsURL:     "http://127.0.0.1:9000",
+			tokenURL:   "http://other-host:8080/oauth/token",
+			issuer:     "http://127.0.0.1:9000",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: tc.insecureOK})
+			b.lookupHostFn = func(string) ([]string, error) { return []string{"93.184.216.34"}, nil }
+			err := b.validateRefreshTokenURLs(tc.pdsURL, tc.tokenURL, tc.issuer)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateRefreshTokenURLs = nil, want error")
+				}
+				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("validateRefreshTokenURLs = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestBluesky_RefreshToken_RejectsTamperedURLs ensures a wrapped refresh
+// token whose decoded tokenURL points elsewhere fails fast with an SSRF
+// error rather than triggering a POST at the attacker-chosen host.
+func TestBluesky_RefreshToken_RejectsTamperedURLs(t *testing.T) {
+	t.Parallel()
+
+	// Strict mode (no AllowInsecurePDSURLs).
+	b := NewBluesky(BlueskyConfig{
+		ClientMetadataURL: "https://app.example.com/c.json",
+		RedirectURI:       "https://app.example.com/cb",
+	})
+	b.lookupHostFn = func(string) ([]string, error) { return []string{"93.184.216.34"}, nil }
+
+	tampered := encodeBlueskyRefreshToken(
+		"https://pds.example.com",
+		"https://attacker.example.com/oauth/token",
+		"https://pds.example.com",
+		"opaque-refresh",
+	)
+	_, err := b.RefreshToken(context.Background(), tampered)
+	if err == nil {
+		t.Fatal("expected error for tampered tokenURL host")
+	}
+	if !strings.Contains(err.Error(), "tokenURL host") {
+		t.Errorf("err = %q, want it to mention tokenURL host mismatch", err.Error())
+	}
+}
+
 func TestBluesky_PARSucceeds_AuthURLContainsRequestURI(t *testing.T) {
 	t.Parallel()
 

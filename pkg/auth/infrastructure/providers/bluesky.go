@@ -366,6 +366,15 @@ func (b *Bluesky) RefreshToken(ctx context.Context, refreshToken string) (*appli
 	if err != nil {
 		return nil, fmt.Errorf("bluesky: refresh token format: %w (issued by Exchange)", err)
 	}
+	// The wrapped refresh token is application-layer state and may have been
+	// tampered with in storage. Re-validate the decoded URLs against the
+	// same SSRF rules `fetchAuthServerMetadata` enforces during Exchange:
+	// scheme/host/non-internal checks plus a same-host check tying
+	// tokenURL/issuer to pdsURL. Without this, a poisoned `btr.v2.` payload
+	// could redirect refresh POSTs at internal services.
+	if err := b.validateRefreshTokenURLs(pdsURL, tokenURL, issuer); err != nil {
+		return nil, fmt.Errorf("bluesky: refresh token URLs: %w", err)
+	}
 
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
@@ -662,6 +671,47 @@ func (b *Bluesky) validateAuthServerEndpoints(pdsURL string, meta *blueskyAuthSe
 		}
 		if strings.ToLower(u.Hostname()) != pdsHost {
 			return fmt.Errorf("auth server %s host %q does not match PDS host %q", ep.name, u.Hostname(), pdsHost)
+		}
+	}
+	return nil
+}
+
+// validateRefreshTokenURLs guards the URLs decoded from a wrapped Bluesky
+// refresh token against tampering. Persisted refresh tokens are
+// application-layer state, so a malicious or compromised store could craft
+// a btr.v2 payload that points tokenURL at an internal host; without this
+// check, RefreshToken would happily POST at it. The rules mirror
+// validateAuthServerEndpoints: each URL goes through validatePDSURL, and
+// tokenURL / issuer must share a host with pdsURL. AllowInsecurePDSURLs
+// bypasses both layers for tests/dev.
+func (b *Bluesky) validateRefreshTokenURLs(pdsURL, tokenURL, issuer string) error {
+	if b.allowInsecurePDSURLs {
+		return nil
+	}
+	if err := b.validatePDSURL(pdsURL); err != nil {
+		return fmt.Errorf("pdsURL: %w", err)
+	}
+	pdsParsed, err := url.Parse(pdsURL)
+	if err != nil {
+		return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
+	}
+	pdsHost := strings.ToLower(pdsParsed.Hostname())
+	for _, ep := range []struct {
+		name string
+		raw  string
+	}{
+		{"tokenURL", tokenURL},
+		{"issuer", issuer},
+	} {
+		if err := b.validatePDSURL(ep.raw); err != nil {
+			return fmt.Errorf("%s: %w", ep.name, err)
+		}
+		u, err := url.Parse(ep.raw)
+		if err != nil {
+			return fmt.Errorf("parse %s %q: %w", ep.name, ep.raw, err)
+		}
+		if strings.ToLower(u.Hostname()) != pdsHost {
+			return fmt.Errorf("%s host %q does not match pdsURL host %q", ep.name, u.Hostname(), pdsHost)
 		}
 	}
 	return nil
