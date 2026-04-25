@@ -820,7 +820,7 @@ func TestCallback_WithJWT_SetsCookie(t *testing.T) {
 	svc := &mockAuthService{
 		issueIdentityTokenFunc: func(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
 			account, _ := new(entities.Account).With("account-1", "Test Account", entities.AccountTypePersonal)
-			return jwtSvc.IssueToken(ctx, agent, []*entities.Account{account}, activeAccountID)
+			return jwtSvc.IssueToken(ctx, agent, []*entities.Account{account}, activeAccountID, nil)
 		},
 	}
 

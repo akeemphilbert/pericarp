@@ -16,15 +16,18 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/providers"
 )
 
-// BuildProviderRegistry returns an OAuthProviderRegistry containing all
-// seven Pericarp-shipped providers. Real consumers replace each *Config with
-// values loaded from secrets management.
+// BuildProviderRegistry returns an OAuthProviderRegistry containing the
+// full Pericarp-shipped provider catalog plus a mock provider used by the
+// example authentication flow. Real consumers replace each *Config with
+// values loaded from secrets management and drop the providers they don't
+// need (along with the mock).
 //
 // The Mastodon and Bluesky entries use the in-memory app cache / keystore
 // for demo purposes; multi-replica deployments must back both with shared
 // stores so app credentials and DPoP signing keys survive restarts and span
 // replicas.
 func BuildProviderRegistry() application.OAuthProviderRegistry {
+	mock := NewMockOAuthProvider("mock-idp")
 	apple := providers.NewApple(providers.AppleConfig{
 		ClientID:   "com.example.app.web",
 		TeamID:     "TEAMID0000",
@@ -58,8 +61,18 @@ func BuildProviderRegistry() application.OAuthProviderRegistry {
 		RedirectURI:       "https://app.example.com/cb",
 		KeyStore:          providers.NewMemoryBlueskyKeyStore(),
 	})
+	netsuite := providers.NewNetSuite(providers.NetSuiteConfig{
+		ClientID:     "your-netsuite-client-id",
+		ClientSecret: "your-netsuite-client-secret",
+		AccountID:    "1234567", // sandbox: "1234567_SB1" — auto-normalized to "1234567-sb1" in URLs
+		// AuthEndpoint / TokenEndpoint / RevokeEndpoint / UserInfoEndpoint
+		// can be set to point at a non-standard NetSuite host (e.g. a corporate
+		// proxy or a future endpoint change). Each takes precedence over the
+		// AccountID-derived URL when set.
+	})
 
 	return application.OAuthProviderRegistry{
+		"mock-idp":       mock,
 		apple.Name():     apple,
 		github.Name():    github,
 		google.Name():    google,
@@ -67,6 +80,7 @@ func BuildProviderRegistry() application.OAuthProviderRegistry {
 		facebook.Name():  facebook,
 		mastodon.Name():  mastodon,
 		bluesky.Name():   bluesky,
+		netsuite.Name():  netsuite,
 	}
 }
 

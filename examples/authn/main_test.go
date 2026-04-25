@@ -11,18 +11,23 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 )
 
-func TestProviderCatalog_AllSevenProvidersRegistered(t *testing.T) {
+func TestProviderCatalog_AllProvidersRegistered(t *testing.T) {
 	t.Parallel()
 
 	registry := BuildProviderRegistry()
 
-	want := []string{"apple", "github", "google", "microsoft", "facebook", "mastodon", "bluesky"}
+	want := []string{"mock-idp", "apple", "github", "google", "microsoft", "facebook", "mastodon", "bluesky", "netsuite"}
 	if got := len(registry); got != len(want) {
-		t.Errorf("registry size = %d, want %d", got, len(want))
+		t.Errorf("registry size = %d, want %d (keys: %v)", got, len(want), keysOf(registry))
 	}
 	for _, name := range want {
-		if _, ok := registry[name]; !ok {
+		p, ok := registry[name]
+		if !ok {
 			t.Errorf("registry missing provider %q", name)
+			continue
+		}
+		if got := p.Name(); got != name {
+			t.Errorf("provider %q Name() = %q, want %q", name, got, name)
 		}
 	}
 }
@@ -32,6 +37,14 @@ func TestRunMastodonAgainstFake_EndToEnd(t *testing.T) {
 	if err := RunMastodonAgainstFake(context.Background()); err != nil {
 		t.Fatalf("RunMastodonAgainstFake: %v", err)
 	}
+}
+
+func keysOf(m application.OAuthProviderRegistry) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func TestAuthenticationFlow_FullLifecycle(t *testing.T) {

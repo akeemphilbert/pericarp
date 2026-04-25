@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akeemphilbert/pericarp/pkg/auth"
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
@@ -52,7 +53,7 @@ func TestIssueAndValidate_RoundTrip(t *testing.T) {
 		createTestAccount(t, "acc-2", "Account Two"),
 	}
 
-	tokenString, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1")
+	tokenString, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestIssueToken_NoSigningKey(t *testing.T) {
 	svc := authjwt.NewRSAJWTService() // no key
 	agent := createTestAgent(t, "agent-1", "Test User")
 
-	_, err := svc.IssueToken(context.Background(), agent, nil, "")
+	_, err := svc.IssueToken(context.Background(), agent, nil, "", nil)
 	if err != application.ErrNoSigningKey {
 		t.Errorf("expected ErrNoSigningKey, got %v", err)
 	}
@@ -110,7 +111,7 @@ func TestIssueToken_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := svc.IssueToken(ctx, agent, nil, "")
+	_, err := svc.IssueToken(ctx, agent, nil, "", nil)
 	if err != context.Canceled {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
@@ -126,7 +127,7 @@ func TestValidateToken_ExpiredToken(t *testing.T) {
 	)
 	agent := createTestAgent(t, "agent-1", "Test User")
 
-	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "")
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestValidateToken_WrongKey(t *testing.T) {
 	svcB := authjwt.NewRSAJWTService(authjwt.WithSigningKey(keyB))
 
 	agent := createTestAgent(t, "agent-1", "Test User")
-	tokenString, err := svcA.IssueToken(context.Background(), agent, nil, "")
+	tokenString, err := svcA.IssueToken(context.Background(), agent, nil, "", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestIssueToken_EmptyAccounts(t *testing.T) {
 	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
 	agent := createTestAgent(t, "agent-1", "Test User")
 
-	tokenString, err := svc.IssueToken(context.Background(), agent, []*entities.Account{}, "")
+	tokenString, err := svc.IssueToken(context.Background(), agent, []*entities.Account{}, "", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -209,7 +210,7 @@ func TestIssueToken_MultipleAccounts(t *testing.T) {
 		createTestAccount(t, "acc-3", "Account Three"),
 	}
 
-	tokenString, err := svc.IssueToken(context.Background(), agent, accounts, "acc-2")
+	tokenString, err := svc.IssueToken(context.Background(), agent, accounts, "acc-2", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -235,7 +236,7 @@ func TestSubjectEqualsAgentID(t *testing.T) {
 	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
 	agent := createTestAgent(t, "agent-42", "Test User")
 
-	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "")
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -260,7 +261,7 @@ func TestCustomTTLAndIssuer(t *testing.T) {
 	)
 	agent := createTestAgent(t, "agent-1", "Test User")
 
-	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "")
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -287,7 +288,7 @@ func TestValidateToken_CancelledContext(t *testing.T) {
 	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
 	agent := createTestAgent(t, "agent-1", "Test User")
 
-	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "")
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -318,9 +319,118 @@ func TestIssueToken_NilAgent(t *testing.T) {
 	key := generateTestKey(t)
 	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
 
-	_, err := svc.IssueToken(context.Background(), nil, nil, "")
+	_, err := svc.IssueToken(context.Background(), nil, nil, "", nil)
 	if err == nil {
 		t.Fatal("expected error for nil agent, got nil")
+	}
+}
+
+func TestIssueToken_SubscriptionRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	agent := createTestAgent(t, "agent-1", "Test User")
+	expires := time.Now().Add(30 * 24 * time.Hour).UTC().Truncate(time.Second)
+	subscription := &auth.SubscriptionClaim{
+		Status:    auth.SubscriptionStatusActive,
+		Plan:      "pro",
+		Provider:  "stripe",
+		ExpiresAt: expires,
+		Metadata:  map[string]any{"price_id": "price_123"},
+	}
+
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", subscription)
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	claims, err := svc.ValidateToken(context.Background(), tokenString)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+	if claims.Subscription == nil {
+		t.Fatal("expected subscription claim, got nil")
+	}
+	if claims.Subscription.Status != auth.SubscriptionStatusActive {
+		t.Errorf("Status = %q, want %q", claims.Subscription.Status, auth.SubscriptionStatusActive)
+	}
+	if claims.Subscription.Plan != "pro" {
+		t.Errorf("Plan = %q, want %q", claims.Subscription.Plan, "pro")
+	}
+	if claims.Subscription.Provider != "stripe" {
+		t.Errorf("Provider = %q, want %q", claims.Subscription.Provider, "stripe")
+	}
+	if !claims.Subscription.ExpiresAt.Equal(expires) {
+		t.Errorf("ExpiresAt = %v, want %v", claims.Subscription.ExpiresAt, expires)
+	}
+	if got := claims.Subscription.Metadata["price_id"]; got != "price_123" {
+		t.Errorf("Metadata[price_id] = %v, want %q", got, "price_123")
+	}
+	if !claims.Subscription.IsActive() {
+		t.Error("IsActive() = false, want true for active status")
+	}
+}
+
+func TestIssueToken_NoSubscription_OmitsClaim(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	agent := createTestAgent(t, "agent-1", "Test User")
+
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", nil)
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	claims, err := svc.ValidateToken(context.Background(), tokenString)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+	if claims.Subscription != nil {
+		t.Errorf("expected nil subscription, got %+v", claims.Subscription)
+	}
+}
+
+func TestReissueToken_PreservesSubscription(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+
+	agent := createTestAgent(t, "agent-1", "Test User")
+	subscription := &auth.SubscriptionClaim{Status: auth.SubscriptionStatusTrialing, Plan: "trial"}
+
+	originalToken, err := svc.IssueToken(context.Background(), agent, nil, "acc-1", subscription)
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	originalClaims, err := svc.ValidateToken(context.Background(), originalToken)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+
+	reissuedToken, err := svc.ReissueToken(context.Background(), originalClaims, "acc-2")
+	if err != nil {
+		t.Fatalf("ReissueToken failed: %v", err)
+	}
+
+	newClaims, err := svc.ValidateToken(context.Background(), reissuedToken)
+	if err != nil {
+		t.Fatalf("ValidateToken on reissued token failed: %v", err)
+	}
+	if newClaims.Subscription == nil {
+		t.Fatal("reissued token should preserve subscription claim")
+	}
+	if newClaims.Subscription.Status != auth.SubscriptionStatusTrialing {
+		t.Errorf("Status = %q, want %q", newClaims.Subscription.Status, auth.SubscriptionStatusTrialing)
+	}
+	if newClaims.Subscription.Plan != "trial" {
+		t.Errorf("Plan = %q, want %q", newClaims.Subscription.Plan, "trial")
 	}
 }
 
@@ -432,7 +542,7 @@ func TestReissueToken_RoundTrip(t *testing.T) {
 		createTestAccount(t, "acc-2", "Account Two"),
 	}
 
-	originalToken, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1")
+	originalToken, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -480,7 +590,7 @@ func TestReissueToken_FreshTimestamps(t *testing.T) {
 		createTestAccount(t, "acc-1", "Account One"),
 	}
 
-	originalToken, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1")
+	originalToken, err := svc.IssueToken(context.Background(), agent, accounts, "acc-1", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}

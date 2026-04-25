@@ -9,11 +9,14 @@ type contextKey struct{ name string }
 var identityKey = &contextKey{"pericarp-identity"}
 
 // Identity represents an authenticated agent's identity, independent of the
-// underlying authentication mechanism (JWT, session, etc.).
+// underlying authentication mechanism (JWT, session, etc.). Subscription
+// carries the snapshot from a JWT subscription claim when present; session-
+// only auth paths have nothing to snapshot and leave it nil.
 type Identity struct {
 	AgentID         string
 	AccountIDs      []string
 	ActiveAccountID string
+	Subscription    *SubscriptionClaim
 }
 
 // AgentFromCtx extracts the Identity from ctx. Returns nil if no identity is present.
