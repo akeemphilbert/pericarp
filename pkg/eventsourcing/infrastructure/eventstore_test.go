@@ -208,6 +208,68 @@ func TestEventStore_Append(t *testing.T) {
 			events:          []domain.EventEnvelope[any]{},
 			wantErr:         false,
 		},
+		// Bigtable store test cases
+		{
+			name:            "bigtable: append single event to new aggregate",
+			setupStore:      setupBigtableStore,
+			aggregateID:     "agg-1",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-1", "event-1", "test.created", 1),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "bigtable: append multiple events",
+			setupStore:      setupBigtableStore,
+			aggregateID:     "agg-2",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-2", "event-1", "test.created", 1),
+				createTestEvent("agg-2", "event-2", "test.updated", 2),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "bigtable: append with version check success",
+			setupStore:      setupBigtableStoreWithEvents,
+			aggregateID:     "agg-3",
+			expectedVersion: 1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
+			},
+			wantErr: false,
+		},
+		{
+			name:            "bigtable: append with version check failure",
+			setupStore:      setupBigtableStoreWithEvents,
+			aggregateID:     "agg-3",
+			expectedVersion: 5,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-3", "event-2", "test.updated", 2),
+			},
+			wantErr: true,
+			errType: domain.ErrConcurrencyConflict,
+		},
+		{
+			name:            "bigtable: append event with mismatched aggregate ID",
+			setupStore:      setupBigtableStore,
+			aggregateID:     "agg-5",
+			expectedVersion: -1,
+			events: []domain.EventEnvelope[any]{
+				createTestEvent("agg-6", "event-1", "test.created", 1),
+			},
+			wantErr: true,
+			errType: domain.ErrInvalidEvent,
+		},
+		{
+			name:            "bigtable: append empty events slice",
+			setupStore:      setupBigtableStore,
+			aggregateID:     "agg-7",
+			expectedVersion: -1,
+			events:          []domain.EventEnvelope[any]{},
+			wantErr:         false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -285,6 +347,20 @@ func TestEventStore_GetEvents(t *testing.T) {
 		{
 			name:        "bigquery: get events for non-existent aggregate",
 			setupStore:  setupBigQueryStore,
+			aggregateID: "agg-nonexistent",
+			wantCount:   0,
+			wantErr:     false,
+		},
+		{
+			name:        "bigtable: get events for existing aggregate",
+			setupStore:  setupBigtableStoreWithEvents,
+			aggregateID: "agg-3",
+			wantCount:   1,
+			wantErr:     false,
+		},
+		{
+			name:        "bigtable: get events for non-existent aggregate",
+			setupStore:  setupBigtableStore,
 			aggregateID: "agg-nonexistent",
 			wantCount:   0,
 			wantErr:     false,
@@ -411,6 +487,30 @@ func TestEventStore_GetEventsFromVersion(t *testing.T) {
 			wantCount:   0,
 			wantErr:     false,
 		},
+		{
+			name:        "bigtable: get events from version 1",
+			setupStore:  setupBigtableStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 1,
+			wantCount:   3,
+			wantErr:     false,
+		},
+		{
+			name:        "bigtable: get events from version 2",
+			setupStore:  setupBigtableStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 2,
+			wantCount:   2,
+			wantErr:     false,
+		},
+		{
+			name:        "bigtable: get events from version beyond existing",
+			setupStore:  setupBigtableStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			fromVersion: 10,
+			wantCount:   0,
+			wantErr:     false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -504,6 +604,22 @@ func TestEventStore_GetEventByID(t *testing.T) {
 		{
 			name:       "bigquery: get non-existent event",
 			setupStore: setupBigQueryStore,
+			eventID:    "event-nonexistent",
+			wantFound:  false,
+			wantErr:    true,
+			errType:    domain.ErrEventNotFound,
+		},
+		{
+			name:       "bigtable: get existing event by ID",
+			setupStore: setupBigtableStoreWithEvents,
+			eventID:    "event-1",
+			wantFound:  true,
+			wantAggID:  "agg-3",
+			wantErr:    false,
+		},
+		{
+			name:       "bigtable: get non-existent event",
+			setupStore: setupBigtableStore,
 			eventID:    "event-nonexistent",
 			wantFound:  false,
 			wantErr:    true,
@@ -616,6 +732,27 @@ func TestEventStore_GetCurrentVersion(t *testing.T) {
 		{
 			name:        "bigquery: get version for aggregate with multiple events",
 			setupStore:  setupBigQueryStoreWithMultipleEvents,
+			aggregateID: "agg-4",
+			wantVersion: 3,
+			wantErr:     false,
+		},
+		{
+			name:        "bigtable: get version for existing aggregate",
+			setupStore:  setupBigtableStoreWithEvents,
+			aggregateID: "agg-3",
+			wantVersion: 1,
+			wantErr:     false,
+		},
+		{
+			name:        "bigtable: get version for non-existent aggregate",
+			setupStore:  setupBigtableStore,
+			aggregateID: "agg-nonexistent",
+			wantVersion: 0,
+			wantErr:     false,
+		},
+		{
+			name:        "bigtable: get version for aggregate with multiple events",
+			setupStore:  setupBigtableStoreWithMultipleEvents,
 			aggregateID: "agg-4",
 			wantVersion: 3,
 			wantErr:     false,
@@ -870,6 +1007,43 @@ func setupBigQueryStoreWithTxEvents(t *testing.T) domain.EventStore {
 	return store
 }
 
+func setupBigtableStoreWithCrossAggTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := setupBigtableStore(t)
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-2", "test.created", 1, "tx-cross"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
+func setupBigtableStoreWithTxEvents(t *testing.T) domain.EventStore {
+	t.Helper()
+	store := setupBigtableStore(t)
+	ctx := context.Background()
+
+	if err := store.Append(ctx, "agg-1", -1,
+		createTestEventWithTxID("agg-1", "ev-1", "test.created", 1, "tx-100"),
+		createTestEventWithTxID("agg-1", "ev-2", "test.updated", 2, "tx-100"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	if err := store.Append(ctx, "agg-2", -1,
+		createTestEventWithTxID("agg-2", "ev-3", "test.created", 1, "tx-200"),
+	); err != nil {
+		t.Fatalf("failed to setup store: %v", err)
+	}
+	return store
+}
+
 type txEventOrder struct {
 	aggregateID string
 	seqNo       int
@@ -996,6 +1170,33 @@ func TestEventStore_GetEventsByTransactionID(t *testing.T) {
 		{
 			name:          "bigquery: cross-aggregate transaction ID returns events ordered by aggregate_id then sequence_no",
 			setupStore:    setupBigQueryStoreWithCrossAggTxEvents,
+			transactionID: "tx-cross",
+			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-2", 1}},
+		},
+		{
+			name:          "bigtable: get events by transaction ID with multiple matches",
+			setupStore:    setupBigtableStoreWithTxEvents,
+			transactionID: "tx-100",
+			wantCount:     2,
+			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-1", 2}},
+		},
+		{
+			name:          "bigtable: get events by transaction ID with single match",
+			setupStore:    setupBigtableStoreWithTxEvents,
+			transactionID: "tx-200",
+			wantCount:     1,
+			wantOrder:     []txEventOrder{{"agg-2", 1}},
+		},
+		{
+			name:          "bigtable: get events by non-existent transaction ID",
+			setupStore:    setupBigtableStoreWithTxEvents,
+			transactionID: "tx-nonexistent",
+			wantCount:     0,
+		},
+		{
+			name:          "bigtable: cross-aggregate transaction ID returns events ordered by aggregate_id then sequence_no",
+			setupStore:    setupBigtableStoreWithCrossAggTxEvents,
 			transactionID: "tx-cross",
 			wantCount:     2,
 			wantOrder:     []txEventOrder{{"agg-1", 1}, {"agg-2", 1}},

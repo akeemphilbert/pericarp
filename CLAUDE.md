@@ -44,8 +44,13 @@ pkg/
 │   │   ├── event_type.go             # EventTypeFor() helper, standard type constants
 │   │   └── entity.go                 # Entity interface (for UnitOfWork tracking)
 │   ├── infrastructure/               # EventStore implementations
-│   │   ├── memory_eventstore.go      # In-memory store (testing)
-│   │   └── file_eventstore.go        # File-based JSON store (development)
+│   │   ├── memory_store.go           # In-memory store (testing)
+│   │   ├── file_store.go             # File-based JSON store (development)
+│   │   ├── gorm_store.go             # GORM store (SQLite/Postgres)
+│   │   ├── bigquery_store.go         # BigQuery store (analytics at scale)
+│   │   ├── bigtable_store.go         # Bigtable store (managed NoSQL on GCP)
+│   │   ├── dynamo_store.go           # DynamoDB store
+│   │   └── composite_store.go        # Primary-sync + secondaries-async wrapper
 │   └── application/                  # UnitOfWork
 │       └── unit_of_work.go           # SimpleUnitOfWork — tracks entities, atomic commit
 ```
