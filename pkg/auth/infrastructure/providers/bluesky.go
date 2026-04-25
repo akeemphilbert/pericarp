@@ -619,7 +619,52 @@ func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*
 	if meta.AuthorizationEndpoint == "" || meta.TokenEndpoint == "" || meta.PushedAuthorizationRequestEndpoint == "" {
 		return nil, fmt.Errorf("auth server metadata missing required endpoints: %s", string(body))
 	}
+	if err := b.validateAuthServerEndpoints(pdsURL, &meta); err != nil {
+		return nil, err
+	}
 	return &meta, nil
+}
+
+// validateAuthServerEndpoints checks that the AS metadata's authorization /
+// token / PAR endpoints are safe to call. The earlier validatePDSURL guard
+// only protects the metadata-fetch URL itself; without this check a
+// reachable-but-malicious PDS could return endpoints pointing at http:// or
+// internal hosts and we would happily POST PAR/token requests there.
+//
+// Each endpoint is run through validatePDSURL (https + non-internal host),
+// and additionally must share a host with the PDS — AT Protocol's design
+// makes the PDS the authorization server, so a different host on any
+// endpoint indicates either a mis-configured server or a redirect attempt.
+// AllowInsecurePDSURLs bypasses both layers.
+func (b *Bluesky) validateAuthServerEndpoints(pdsURL string, meta *blueskyAuthServerMetadata) error {
+	if b.allowInsecurePDSURLs {
+		return nil
+	}
+	pdsParsed, err := url.Parse(pdsURL)
+	if err != nil {
+		return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
+	}
+	pdsHost := strings.ToLower(pdsParsed.Hostname())
+	for _, ep := range []struct {
+		name string
+		raw  string
+	}{
+		{"authorization_endpoint", meta.AuthorizationEndpoint},
+		{"token_endpoint", meta.TokenEndpoint},
+		{"pushed_authorization_request_endpoint", meta.PushedAuthorizationRequestEndpoint},
+	} {
+		if err := b.validatePDSURL(ep.raw); err != nil {
+			return fmt.Errorf("auth server %s: %w", ep.name, err)
+		}
+		u, err := url.Parse(ep.raw)
+		if err != nil {
+			return fmt.Errorf("auth server %s parse %q: %w", ep.name, ep.raw, err)
+		}
+		if strings.ToLower(u.Hostname()) != pdsHost {
+			return fmt.Errorf("auth server %s host %q does not match PDS host %q", ep.name, u.Hostname(), pdsHost)
+		}
+	}
+	return nil
 }
 
 // pushAuthorizationRequest performs PAR with a DPoP proof. The PAR endpoint

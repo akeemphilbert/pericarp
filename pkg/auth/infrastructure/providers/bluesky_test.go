@@ -334,6 +334,93 @@ func TestBluesky_ValidatePDSURL_SSRFGuard(t *testing.T) {
 	}
 }
 
+func TestBluesky_ValidateAuthServerEndpoints(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		insecureOK  bool
+		pdsURL      string
+		meta        blueskyAuthServerMetadata
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:   "all endpoints same-host https allowed",
+			pdsURL: "https://pds.example.com",
+			meta: blueskyAuthServerMetadata{
+				AuthorizationEndpoint:              "https://pds.example.com/oauth/authorize",
+				TokenEndpoint:                      "https://pds.example.com/oauth/token",
+				PushedAuthorizationRequestEndpoint: "https://pds.example.com/oauth/par",
+			},
+		},
+		{
+			name:   "endpoint on different host rejected",
+			pdsURL: "https://pds.example.com",
+			meta: blueskyAuthServerMetadata{
+				AuthorizationEndpoint:              "https://pds.example.com/oauth/authorize",
+				TokenEndpoint:                      "https://attacker.example.com/oauth/token",
+				PushedAuthorizationRequestEndpoint: "https://pds.example.com/oauth/par",
+			},
+			wantErr:     true,
+			errContains: "token_endpoint host",
+		},
+		{
+			name:   "http endpoint rejected",
+			pdsURL: "https://pds.example.com",
+			meta: blueskyAuthServerMetadata{
+				AuthorizationEndpoint:              "http://pds.example.com/oauth/authorize",
+				TokenEndpoint:                      "https://pds.example.com/oauth/token",
+				PushedAuthorizationRequestEndpoint: "https://pds.example.com/oauth/par",
+			},
+			wantErr:     true,
+			errContains: "authorization_endpoint",
+		},
+		{
+			name:   "loopback endpoint rejected",
+			pdsURL: "https://pds.example.com",
+			meta: blueskyAuthServerMetadata{
+				AuthorizationEndpoint:              "https://pds.example.com/oauth/authorize",
+				TokenEndpoint:                      "https://pds.example.com/oauth/token",
+				PushedAuthorizationRequestEndpoint: "https://127.0.0.1/oauth/par",
+			},
+			wantErr:     true,
+			errContains: "pushed_authorization_request_endpoint",
+		},
+		{
+			name:       "insecure flag bypasses validation",
+			insecureOK: true,
+			pdsURL:     "http://127.0.0.1:9000",
+			meta: blueskyAuthServerMetadata{
+				AuthorizationEndpoint:              "http://other-host:8080/oauth/authorize",
+				TokenEndpoint:                      "http://127.0.0.1:9000/oauth/token",
+				PushedAuthorizationRequestEndpoint: "http://127.0.0.1:9000/oauth/par",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: tc.insecureOK})
+			b.lookupHostFn = func(string) ([]string, error) { return []string{"93.184.216.34"}, nil }
+			err := b.validateAuthServerEndpoints(tc.pdsURL, &tc.meta)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateAuthServerEndpoints = nil, want error")
+				}
+				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("validateAuthServerEndpoints = %v, want nil", err)
+			}
+		})
+	}
+}
+
 func TestBluesky_PARSucceeds_AuthURLContainsRequestURI(t *testing.T) {
 	t.Parallel()
 
