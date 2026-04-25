@@ -347,13 +347,115 @@ func TestUpdatePassword_WithEventStore(t *testing.T) {
 	// UpdatePassword on a rehydrated aggregate must not conflict with the
 	// optimistic-concurrency check on the event store — see the comment in
 	// UpdatePassword. This test fails with "expected version 0" if the
-	// implementation regresses to using a UoW.
+	// implementation regresses to using a UoW without first reseating the
+	// aggregate's sequence number to the stream's current version.
 	if err := svc.UpdatePassword(ctx, agent.GetID(), "hunter2", "newpass1"); err != nil {
 		t.Fatalf("UpdatePassword with event store: %v", err)
 	}
 
 	if _, _, _, err := svc.VerifyPassword(ctx, "alice@example.com", "newpass1"); err != nil {
 		t.Errorf("verify after update failed: %v", err)
+	}
+
+	// Regression: the PasswordUpdated event must reach the event store so
+	// password rotations remain auditable. A previous implementation
+	// dropped the event by calling ClearUncommittedEvents().
+	credRepo := gorminfra.NewCredentialRepository(db)
+	cred, err := credRepo.FindByProvider(ctx, entities.ProviderPassword, "alice@example.com")
+	if err != nil || cred == nil {
+		t.Fatalf("locate credential: %v %+v", err, cred)
+	}
+	pcRepo := gorminfra.NewPasswordCredentialRepository(db)
+	pc, err := pcRepo.FindByCredentialID(ctx, cred.GetID())
+	if err != nil || pc == nil {
+		t.Fatalf("locate password credential: %v %+v", err, pc)
+	}
+	events, err := store.GetEvents(ctx, pc.GetID())
+	if err != nil {
+		t.Fatalf("GetEvents: %v", err)
+	}
+	var sawUpdated bool
+	for _, ev := range events {
+		if ev.EventType == entities.EventTypePasswordUpdated {
+			sawUpdated = true
+		}
+	}
+	if !sawUpdated {
+		t.Errorf("event store missing %q event for aggregate %s; got %d events", entities.EventTypePasswordUpdated, pc.GetID(), len(events))
+	}
+}
+
+// TestVerifyPassword_DoesNotTouchRotatedAt is a regression test for the
+// GORM auto-update timestamp footgun: PasswordCredentialModel previously
+// named its rotated-at column field UpdatedAt, which GORM silently bumped
+// on every Save (including the LastVerifiedAt update done after a
+// successful verify), corrupting the domain meaning of UpdatedAt() as
+// "password rotated at."
+func TestVerifyPassword_DoesNotTouchRotatedAt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, db := newSQLiteDeps(t)
+	pcRepo := gorminfra.NewPasswordCredentialRepository(db)
+	credRepo := gorminfra.NewCredentialRepository(db)
+
+	if _, _, _, err := svc.RegisterPassword(ctx, "alice@example.com", "Alice", "hunter2"); err != nil {
+		t.Fatalf("RegisterPassword: %v", err)
+	}
+	cred, err := credRepo.FindByProvider(ctx, entities.ProviderPassword, "alice@example.com")
+	if err != nil || cred == nil {
+		t.Fatalf("locate credential: %v %+v", err, cred)
+	}
+	before, err := pcRepo.FindByCredentialID(ctx, cred.GetID())
+	if err != nil || before == nil {
+		t.Fatalf("locate password credential: %v %+v", err, before)
+	}
+	rotatedBefore := before.UpdatedAt()
+
+	if _, _, _, err := svc.VerifyPassword(ctx, "alice@example.com", "hunter2"); err != nil {
+		t.Fatalf("VerifyPassword: %v", err)
+	}
+
+	after, err := pcRepo.FindByCredentialID(ctx, cred.GetID())
+	if err != nil || after == nil {
+		t.Fatalf("locate password credential after verify: %v %+v", err, after)
+	}
+	if !after.UpdatedAt().Equal(rotatedBefore) {
+		t.Errorf("VerifyPassword bumped UpdatedAt (rotated_at): before=%s after=%s", rotatedBefore, after.UpdatedAt())
+	}
+	// LastVerifiedAt should advance, confirming the row was actually
+	// written and we are not testing a no-op.
+	if !after.LastVerifiedAt().After(before.LastVerifiedAt()) {
+		t.Errorf("expected LastVerifiedAt to advance after verify: before=%s after=%s", before.LastVerifiedAt(), after.LastVerifiedAt())
+	}
+}
+
+// TestImportPasswordCredential_RejectsMalformedHash covers the validation
+// gap where any non-empty string was accepted as a bcrypt hash, which
+// would silently turn into ErrInvalidPassword on every future login.
+func TestImportPasswordCredential_RejectsMalformedHash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, _ := newSQLiteDeps(t)
+
+	owner, _, ownerAccount, err := svc.RegisterPassword(ctx, "owner@example.com", "Owner", "ownerpass")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	cases := []string{
+		"not-a-bcrypt-hash",
+		"$2a$10$abc",          // truncated
+		"plaintext-password", // obvious migration mistake
+	}
+	for _, badHash := range cases {
+		err := svc.ImportPasswordCredential(ctx, "legacy@example.com", "Legacy", badHash, owner.GetID(), ownerAccount.GetID())
+		if err == nil {
+			t.Errorf("ImportPasswordCredential(%q) accepted malformed hash; want error", badHash)
+			continue
+		}
+		if !strings.Contains(err.Error(), "invalid bcrypt hash") {
+			t.Errorf("ImportPasswordCredential(%q) error = %v, want invalid-bcrypt-hash", badHash, err)
+		}
 	}
 }
 

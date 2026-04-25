@@ -11,6 +11,7 @@ import (
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
+	"github.com/akeemphilbert/pericarp/pkg/ddd"
 	esApplication "github.com/akeemphilbert/pericarp/pkg/eventsourcing/application"
 	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 	"github.com/segmentio/ksuid"
@@ -709,6 +710,12 @@ func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Cont
 	if bcryptHash == "" {
 		return fmt.Errorf("authentication: bcrypt hash must not be empty")
 	}
+	// Reject malformed hashes upfront so a corrupt migration row fails at
+	// import time rather than silently turning into ErrInvalidPassword on
+	// every future login attempt for that account.
+	if _, costErr := bcrypt.Cost([]byte(bcryptHash)); costErr != nil {
+		return fmt.Errorf("authentication: invalid bcrypt hash: %w", costErr)
+	}
 	if agentID == "" {
 		return fmt.Errorf("authentication: agent ID must not be empty")
 	}
@@ -815,19 +822,41 @@ func (s *DefaultAuthenticationService) UpdatePassword(ctx context.Context, agent
 	if err != nil {
 		return fmt.Errorf("authentication: hash new password: %w", err)
 	}
+
+	// The aggregate was rehydrated from the projection via Restore(), which
+	// resets sequenceNo to 0. If an EventStore is configured we must reseat
+	// the BaseEntity to the stream's true current version before recording
+	// a new event, otherwise UnitOfWork.Commit would call Append with
+	// expectedVersion=0 and conflict with the existing stream — and skipping
+	// the commit would silently drop the PasswordUpdated event, breaking
+	// the audit trail.
+	if s.eventStore != nil {
+		currentVersion, verErr := s.eventStore.GetCurrentVersion(ctx, pc.GetID())
+		if verErr != nil {
+			return fmt.Errorf("authentication: load password credential version: %w", verErr)
+		}
+		pc.BaseEntity = ddd.RestoreBaseEntity(pc.GetID(), currentVersion)
+	}
+
 	if err := pc.Update(algorithm, hash); err != nil {
 		return fmt.Errorf("authentication: update password credential: %w", err)
 	}
 
-	// The aggregate was rehydrated via Restore(), which resets sequenceNo
-	// to 0; committing a UnitOfWork now would call EventStore.Append with
-	// expectedVersion=0 and conflict with the existing event stream. As a
-	// stop-gap we drop the PasswordUpdated event recorded by pc.Update by
-	// clearing the uncommitted slice — this keeps the projection update
-	// safe but means password rotations are NOT in the audit log. A
-	// follow-up should rebuild the aggregate from the event store before
-	// updating so the event lands durably.
-	pc.ClearUncommittedEvents()
+	if s.eventStore != nil {
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		if err := uow.Track(pc); err != nil {
+			return fmt.Errorf("authentication: track password credential: %w", err)
+		}
+		if err := uow.Commit(ctx); err != nil {
+			return fmt.Errorf("authentication: commit password update: %w", err)
+		}
+	} else {
+		// No event store wired: the recorded event has nowhere durable to
+		// land, so drop it from the aggregate before saving the projection
+		// to keep state consistent on subsequent operations.
+		pc.ClearUncommittedEvents()
+	}
+
 	if err := s.passwordCredentials.Save(ctx, pc); err != nil {
 		return fmt.Errorf("authentication: save password credential: %w", err)
 	}
