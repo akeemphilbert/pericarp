@@ -11,6 +11,29 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 )
 
+func TestProviderCatalog_AllSevenProvidersRegistered(t *testing.T) {
+	t.Parallel()
+
+	registry := BuildProviderRegistry()
+
+	want := []string{"apple", "github", "google", "microsoft", "facebook", "mastodon", "bluesky"}
+	if got := len(registry); got != len(want) {
+		t.Errorf("registry size = %d, want %d", got, len(want))
+	}
+	for _, name := range want {
+		if _, ok := registry[name]; !ok {
+			t.Errorf("registry missing provider %q", name)
+		}
+	}
+}
+
+func TestRunMastodonAgainstFake_EndToEnd(t *testing.T) {
+	t.Parallel()
+	if err := RunMastodonAgainstFake(context.Background()); err != nil {
+		t.Fatalf("RunMastodonAgainstFake: %v", err)
+	}
+}
+
 func TestAuthenticationFlow_FullLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

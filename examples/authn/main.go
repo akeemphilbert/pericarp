@@ -187,6 +187,20 @@ func main() {
 	}
 
 	fmt.Println()
+	fmt.Println("=== Provider catalog wiring ===")
+	registry := BuildProviderRegistry()
+	for name := range registry {
+		fmt.Printf("  registered provider: %s\n", name)
+	}
+
+	fmt.Println()
+	fmt.Println("=== End-to-end Mastodon flow against an httptest fake ===")
+	if err := RunMastodonAgainstFake(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Mastodon demo ERROR: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println()
 	fmt.Println("=== All steps completed successfully ===")
 	fmt.Printf("Agent: %s | Account: %s | Session: %s\n", result.AgentID, result.AccountID, result.SessionID)
 }

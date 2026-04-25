@@ -119,6 +119,12 @@ type MastodonConfig struct {
 	AppCache MastodonAppCache
 	// Website is optional; populated in the app registration request.
 	Website string
+	// InstanceBase resolves a host (e.g. "mastodon.social") to a base URL
+	// (e.g. "https://mastodon.social"). Defaults to "https://" + host.
+	// Override to point flows at a staging mirror, a corporate proxy, or an
+	// httptest server for end-to-end fakes. Production deployments should
+	// leave this nil unless they have a specific routing need.
+	InstanceBase func(host string) string
 }
 
 // flowBinding ties a codeChallenge to the instance host the user was redirected
@@ -167,6 +173,10 @@ func NewMastodon(config MastodonConfig) *Mastodon {
 	if cache == nil {
 		cache = NewMemoryMastodonAppCache()
 	}
+	instanceBase := config.InstanceBase
+	if instanceBase == nil {
+		instanceBase = func(host string) string { return "https://" + strings.ToLower(host) }
+	}
 	return &Mastodon{
 		appName:      config.AppName,
 		redirectURI:  config.RedirectURI,
@@ -176,7 +186,7 @@ func NewMastodon(config MastodonConfig) *Mastodon {
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		flowTTL:      mastodonFlowTTL,
 		tombstoneTTL: mastodonFlowTTL, // tombstone lives at least as long as a binding could
-		instanceBase: func(host string) string { return "https://" + strings.ToLower(host) },
+		instanceBase: instanceBase,
 		nowFn:        time.Now,
 	}
 }
