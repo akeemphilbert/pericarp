@@ -136,6 +136,10 @@ func setupBigtableStore(t *testing.T) domain.EventStore {
 			t.Logf("warning: failed to delete Bigtable test table %s: %v", tableName, err)
 		}
 		_ = admin.Close()
+		// BigtableEventStore.Close is intentionally a no-op — the client is
+		// caller-owned, so tests close it here to avoid leaking grpc
+		// connections/goroutines across the parallel suite.
+		_ = client.Close()
 	})
 
 	return infrastructure.NewBigtableEventStore(client, tableName)

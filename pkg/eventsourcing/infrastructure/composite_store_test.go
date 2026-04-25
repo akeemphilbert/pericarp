@@ -855,6 +855,17 @@ func TestComposite_NilPrimaryPanics(t *testing.T) {
 	_ = infrastructure.NewCompositeEventStore(nil, nil)
 }
 
+func TestComposite_NilSecondaryPanics(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on nil secondary")
+		}
+	}()
+	_ = infrastructure.NewCompositeEventStore(infrastructure.NewMemoryStore(), []domain.EventStore{nil})
+}
+
 func uniqueID(prefix string, i int) string {
 	return prefix + "-" + strconv.Itoa(i)
 }

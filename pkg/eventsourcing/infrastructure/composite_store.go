@@ -14,8 +14,11 @@ import (
 // defaultSecondaryBufferSize sizes each secondary's ingest channel.
 const defaultSecondaryBufferSize = 1024
 
-// ErrCompositeClosed is returned by Append after Close has been called, or
-// when Close fires while Append is blocked waiting for a full secondary buffer.
+// ErrCompositeClosed is returned by Append calls that arrive after Close has
+// been called. Append calls already in flight when Close is initiated either
+// drain normally or return ctx.Err() if the caller's context cancels first —
+// sendMu holds Close back until every in-flight Append releases its RLock,
+// so an Append cannot observe a half-closed store.
 var ErrCompositeClosed = errors.New("composite event store: closed")
 
 var _ domain.EventStore = (*CompositeEventStore)(nil)
@@ -85,10 +88,17 @@ type secondaryJob struct {
 // NewCompositeEventStore constructs a composite wrapping primary and the
 // given secondaries. Each secondary gets its own goroutine and buffered
 // channel so one slow secondary cannot starve the others. Panics if primary
-// is nil — that's a programmer error, not a runtime condition.
+// or any secondary is nil — that's a programmer error, not a runtime
+// condition, and a nil secondary would silently kill its drain goroutine
+// and eventually wedge Append once the channel buffer fills.
 func NewCompositeEventStore(primary domain.EventStore, secondaries []domain.EventStore, opts ...Option) *CompositeEventStore {
 	if primary == nil {
 		panic("composite: primary must not be nil")
+	}
+	for i, s := range secondaries {
+		if s == nil {
+			panic(fmt.Sprintf("composite: secondaries[%d] must not be nil", i))
+		}
 	}
 
 	cfg := compositeConfig{bufferSize: defaultSecondaryBufferSize}
