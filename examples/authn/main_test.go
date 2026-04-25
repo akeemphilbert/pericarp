@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -11,17 +12,16 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 )
 
-func TestProviderRegistry_RegistersExpectedProviders(t *testing.T) {
+func TestProviderCatalog_AllProvidersRegistered(t *testing.T) {
 	t.Parallel()
 
 	registry := BuildProviderRegistry()
-	expected := []string{"mock-idp", "netsuite"}
 
-	if len(registry) != len(expected) {
-		t.Errorf("registry size = %d, want %d (keys: %v)", len(registry), len(expected), keysOf(registry))
+	want := []string{"mock-idp", "apple", "github", "google", "microsoft", "facebook", "mastodon", "bluesky", "netsuite"}
+	if got := len(registry); got != len(want) {
+		t.Errorf("registry size = %d, want %d (keys: %v)", got, len(want), keysOf(registry))
 	}
-
-	for _, name := range expected {
+	for _, name := range want {
 		p, ok := registry[name]
 		if !ok {
 			t.Errorf("registry missing provider %q", name)
@@ -30,6 +30,15 @@ func TestProviderRegistry_RegistersExpectedProviders(t *testing.T) {
 		if got := p.Name(); got != name {
 			t.Errorf("provider %q Name() = %q, want %q", name, got, name)
 		}
+	}
+}
+
+func TestRunMastodonAgainstFake_EndToEnd(t *testing.T) {
+	t.Parallel()
+	// io.Discard keeps the demo's narrative output out of `go test`'s
+	// progress stream so parallel test runs don't interleave with it.
+	if err := RunMastodonAgainstFake(context.Background(), io.Discard); err != nil {
+		t.Fatalf("RunMastodonAgainstFake: %v", err)
 	}
 }
 

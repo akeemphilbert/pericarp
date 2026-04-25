@@ -87,6 +87,19 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-04-25: OAuth provider catalog expansion (Facebook, Mastodon, Bluesky)
+
+- Added three providers under `pkg/auth/infrastructure/providers/`:
+  - **Facebook** (`facebook.go`): Graph API v18.0. Refresh and ID tokens not supported by the standard flow — `RefreshToken` returns `application.ErrTokenRefreshFailed`; `ValidateIDToken` returns the new `ErrFacebookIDTokenUnsupported`. Identity resolved via `/me?fields=id,name,email,picture`.
+  - **Mastodon** (`mastodon.go`): federated. Per-flow instance host is a runtime input on the new `AuthCodeURLForInstance(ctx, host, …)` method, not on `MastodonConfig`. Apps are auto-registered per host via `POST /api/v1/apps` and cached behind the pluggable `MastodonAppCache` interface (default in-memory; consumers wire a shared store for multi-replica). The flow-to-instance binding is keyed by `codeChallenge` so `Exchange` (which gets `codeVerifier`) can recover the host without expanding the `OAuthProvider` interface. Single-flight registration prevents N concurrent first-flow logins from leaking N upstream apps. Distinguishable flow-state sentinels (`ErrMastodonInstanceRequired` / `ErrMastodonFlowExpired` / `ErrMastodonFlowAlreadyConsumed`) replace the original single sentinel — single-error overload invited infinite retry loops.
+  - **Bluesky** (`bluesky.go`): AT Protocol OAuth (proposal 0004). Use `AuthCodeURLForHandle(ctx, handle, …)` to start a flow; the provider resolves handle → DID (via `com.atproto.identity.resolveHandle`) → PDS (from the DID document's AtprotoPersonalDataServer service entry) → AS metadata (`/.well-known/oauth-authorization-server`), then performs PAR with a DPoP proof and returns the authorize URL. DPoP proofs are signed with an ECDSA P-256 key from the pluggable `BlueskyKeyStore`. RFC 9449 + RFC 7638 implementation hand-rolled around `golang-jwt/jwt/v5` (the only JWT lib already in `go.mod`). Refresh tokens are wrapped (`btr.v2.<base64url(pdsURL|tokenURL|issuer|opaque)>`) to thread PDS context across the host-agnostic `OAuthProvider.RefreshToken` signature. AS metadata `issuer` is verified against the PDS URL to defeat malicious did:web documents pointing at attacker-controlled auth servers.
+- Established a convention for non-OIDC providers in this package: `ValidateIDToken` returns a dedicated sentinel that callers must distinguish via `errors.Is`; standard `AuthCodeURL` for federated providers returns the empty string (any non-empty default would risk being stuffed into a `Location` header by an unaware caller).
+- `examples/authn/` updated: `BuildProviderRegistry()` registers all seven providers; `RunMastodonAgainstFake()` runs an end-to-end Mastodon flow against an httptest fake to satisfy story #18's "no real credentials required" demo path. `MastodonConfig.InstanceBase` is the public seam used.
+- `pkg/auth/README.md` documents the full provider catalogue with one-paragraph setup notes per provider, sensible default scopes, and the federated-provider entry-point conventions.
+- **Why:** Pericarp consumers can now register Facebook, Mastodon, or Bluesky OAuth in the same registry-based way they register Google today, without writing per-provider adapters. Federation (Mastodon) and DPoP-bound tokens (Bluesky) are absorbed inside provider implementations rather than expanding the shared interface (per the epic's anti-pattern callout).
+
+---
+
 ### 2026-04-25: NetSuite OAuth 2.0 provider
 
 - Added `providers.NewNetSuite(NetSuiteConfig{...})` in `pkg/auth/infrastructure/providers/netsuite.go` — fifth shipping OAuth provider alongside Apple/GitHub/Google/Microsoft
