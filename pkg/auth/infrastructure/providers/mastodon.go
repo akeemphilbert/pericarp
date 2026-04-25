@@ -626,29 +626,6 @@ func (m *Mastodon) fetchUserInfo(ctx context.Context, host, accessToken string) 
 	}, nil
 }
 
-// flowStatus categorises the result of takeFlow so Exchange can return a
-// distinguishable sentinel per case.
-type flowStatus int
-
-const (
-	flowStatusMissing  flowStatus = iota // never bound
-	flowStatusOK                         // bound, in-TTL, single-use claim succeeded
-	flowStatusExpired                    // bound, but TTL'd
-	flowStatusConsumed                   // bound previously, already taken
-)
-
-// flowTombstone records what happened to a previously-bound flow so a
-// duplicate Exchange returns the same sentinel until TTL elapses, instead of
-// degrading to flowStatusMissing once the bind entry has been removed.
-type flowTombstone struct {
-	status    flowStatus // flowStatusConsumed or flowStatusExpired
-	expiresAt time.Time
-}
-
-// gcSweepEvery sets how often (per bindFlow call) the provider opportunistically
-// scans for and removes expired flow bindings, bounding sync.Map retention for
-// abandoned flows. Probabilistic so amortised cost is O(1) per bind.
-const gcSweepEvery = 64
 
 // bindFlow stashes a codeChallenge -> host binding with TTL for later retrieval
 // by Exchange. Every gcSweepEvery calls it sweeps expired bindings to bound

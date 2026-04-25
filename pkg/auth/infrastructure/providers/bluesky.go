@@ -117,11 +117,16 @@ type BlueskyConfig struct {
 	// KeyStore stores the ECDSA P-256 signing key for DPoP proofs.
 	// If nil, an in-memory ephemeral keystore is used.
 	KeyStore BlueskyKeyStore
-	// AllowInsecurePDSURLs permits the DID document's serviceEndpoint to use
-	// http or to point at loopback/private/link-local hosts. Production must
-	// leave this false: an attacker-controlled did:web document could
-	// otherwise pivot the flow into an SSRF against internal services. Tests
-	// and local development against httptest fakes set it to true.
+	// AllowInsecurePDSURLs disables most endpoint URL safety checks the
+	// Bluesky OAuth flow uses end-to-end. With it set, the provider stops
+	// enforcing https-only, internal-IP rejection, DNS-resolved internal-IP
+	// rejection, and host-consistency checks across the DID document's
+	// serviceEndpoint, the AS metadata's authorize/token/PAR endpoints,
+	// and the URLs decoded from a wrapped refresh token. (The userinfo
+	// rejection in validatePDSURL is unconditional and continues to fire,
+	// since credential-in-URL has no legitimate use even in tests.)
+	// Production must leave this false; only tests and local development
+	// against trusted httptest fakes should set it to true.
 	AllowInsecurePDSURLs bool
 }
 
@@ -853,7 +858,12 @@ func (b *Bluesky) tokenRequestWithDPoP(ctx context.Context, tokenURL, issuer str
 		}
 		return &out, nil
 	}
-	return nil, fmt.Errorf("token endpoint exhausted DPoP-Nonce retry")
+	// Unreachable: every loop iteration either `continue`s (only possible on
+	// attempt 0) or returns. Go's flow analysis can't prove that a `for range
+	// 2` always returns inside, so this terminator is required to compile;
+	// a panic flags any future drift in the loop body more loudly than a
+	// misleading "exhausted retry" error would.
+	panic("unreachable: tokenRequestWithDPoP must return inside the loop")
 }
 
 // dpopNonceFor returns the most recently observed DPoP-Nonce from this server,
