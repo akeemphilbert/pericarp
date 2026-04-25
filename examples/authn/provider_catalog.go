@@ -122,10 +122,12 @@ func RunMastodonAgainstFake(ctx context.Context) error {
 	return nil
 }
 
-// newFakeMastodonInstance serves the four endpoints Mastodon's OAuth flow
-// touches: /api/v1/apps, /oauth/token, /api/v1/accounts/verify_credentials,
-// /oauth/revoke. The /oauth/authorize redirect is not exercised by the demo
-// — that's the user-facing browser step.
+// newFakeMastodonInstance serves the three endpoints the demo flow exercises:
+// /api/v1/apps (auto-registration), /oauth/token (code exchange),
+// /api/v1/accounts/verify_credentials (user info). /oauth/authorize is the
+// user-facing browser redirect (not run by the demo) and /oauth/revoke is
+// not exercised here — extending the demo to revocation would just add a
+// 200 stub.
 func newFakeMastodonInstance() *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/apps", func(w http.ResponseWriter, r *http.Request) {

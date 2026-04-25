@@ -10,7 +10,7 @@ All providers under `pkg/auth/infrastructure/providers/` implement `application.
 
 | Provider | Constructor | Notes |
 | -------- | ----------- | ----- |
-| Apple    | `NewApple(AppleConfig{ClientID, TeamID, KeyID, PrivateKey, Scopes})` | Uses ES256 client_secret JWT (signed at request time). `response_mode=form_post`. ID token decode-only — no userinfo endpoint. |
+| Apple    | `NewApple(AppleConfig{ClientID, TeamID, KeyID, PrivateKey, Scopes})` | Uses ES256 client_secret JWT (signed at request time). `response_mode=form_post`. **Does not support PKCE** — `codeVerifier` is ignored by `Exchange`; rely on `state` for CSRF defence. ID token validation checks `iss`/`aud`/`exp`/`nonce` but does **not** verify the JWT signature (production deployments should add JWKS verification against `https://appleid.apple.com/auth/keys`). |
 | GitHub   | `NewGitHub(GitHubConfig{ClientID, ClientSecret, Scopes})` | No refresh tokens, no ID tokens. Email resolved via two-step `/user` + `/user/emails` API call. |
 | Google   | `NewGoogle(GoogleConfig{ClientID, ClientSecret, Scopes})` | Standard OIDC. Default scopes: `openid email profile`. Refresh requires `access_type=offline` (set by default). |
 | Microsoft | `NewMicrosoft(MicrosoftConfig{ClientID, ClientSecret, TenantID, Scopes})` | Identity platform v2.0 (Entra ID / Azure AD). `TenantID` defaults to `common`. No revocation endpoint. |
@@ -24,7 +24,7 @@ All providers under `pkg/auth/infrastructure/providers/` implement `application.
 | -------- | ------- | ---------- |
 | Apple | `["name", "email"]` | Always sufficient for sign-in. |
 | GitHub | `["read:user", "user:email"]` | Add `repo` only if your service operates on repositories. |
-| Google | `["openid", "email", "profile"]` | Add `offline_access` if you do not already (note: Pericarp sends `access_type=offline` so refresh tokens work without an explicit scope). |
+| Google | `["openid", "email", "profile"]` | Pericarp sends `access_type=offline` so refresh tokens work with the default scopes; widen only if you need additional Google API surfaces. |
 | Microsoft | `["openid", "email", "profile", "offline_access"]` | Add Graph scopes only if your service calls Microsoft Graph for things beyond identity. |
 | Facebook | `["email", "public_profile"]` | Add `pages_show_list` etc. only if your app is approved for those scopes. |
 | Mastodon | `["read"]` | Add `write` or specific `read:*` scopes only if your service posts on the user's behalf (out of scope for sign-in). |
@@ -33,20 +33,27 @@ All providers under `pkg/auth/infrastructure/providers/` implement `application.
 ## Wiring up the registry
 
 ```go
+google := providers.NewGoogle(providers.GoogleConfig{...})
+github := providers.NewGitHub(providers.GitHubConfig{...})
+facebook := providers.NewFacebook(providers.FacebookConfig{...})
+mastodon := providers.NewMastodon(providers.MastodonConfig{
+    AppName:     "MyApp",
+    RedirectURI: "https://app.example.com/cb",
+    AppCache:    providers.NewMemoryMastodonAppCache(),
+})
+bluesky := providers.NewBluesky(providers.BlueskyConfig{
+    ClientMetadataURL: "https://app.example.com/client-metadata.json",
+    RedirectURI:       "https://app.example.com/cb",
+    KeyStore:          providers.NewMemoryBlueskyKeyStore(),
+})
+
+// Use provider.Name() as the registry key so renames flow through one place.
 registry := application.OAuthProviderRegistry{
-    "google":    providers.NewGoogle(providers.GoogleConfig{...}),
-    "github":    providers.NewGitHub(providers.GitHubConfig{...}),
-    "facebook":  providers.NewFacebook(providers.FacebookConfig{...}),
-    "mastodon":  providers.NewMastodon(providers.MastodonConfig{
-        AppName:     "MyApp",
-        RedirectURI: "https://app.example.com/cb",
-        AppCache:    providers.NewMemoryMastodonAppCache(),
-    }),
-    "bluesky":   providers.NewBluesky(providers.BlueskyConfig{
-        ClientMetadataURL: "https://app.example.com/client-metadata.json",
-        RedirectURI:       "https://app.example.com/cb",
-        KeyStore:          providers.NewMemoryBlueskyKeyStore(),
-    }),
+    google.Name():    google,
+    github.Name():    github,
+    facebook.Name():  facebook,
+    mastodon.Name():  mastodon,
+    bluesky.Name():   bluesky,
 }
 
 svc := application.NewDefaultAuthenticationService(
@@ -66,6 +73,16 @@ Federated providers cannot satisfy `OAuthProvider.AuthCodeURL` because that inte
 - Bluesky: `bluesky.AuthCodeURLForHandle(ctx, handle, state, codeChallenge, nonce, redirectURI)`
 
 Both bind the per-flow context (host / PDS) internally, keyed by the codeChallenge (which Exchange recomputes from the codeVerifier). Bindings are TTL'd (10 min default) and single-use.
+
+Distinguishable PERMANENT sentinels — callers MUST `errors.Is`-route on these and not retry:
+
+- `providers.ErrMastodonInstanceRequired` — caller forgot to bind via `AuthCodeURLForInstance`.
+- `providers.ErrMastodonFlowExpired` — binding TTL'd before `Exchange` ran. Start a fresh flow.
+- `providers.ErrMastodonFlowAlreadyConsumed` — `Exchange` already consumed this binding (e.g. duplicate callback). Start a fresh flow.
+- `providers.ErrMastodonIDTokenUnsupported` — Mastodon does not issue ID tokens; resolve identity via `Exchange`.
+- `providers.ErrBlueskyFlowMissing` / `ErrBlueskyFlowExpired` / `ErrBlueskyFlowConsumed` — same shape for Bluesky.
+- `providers.ErrBlueskyHandleResolutionFailed` / `ErrBlueskyDIDResolutionFailed` / `ErrBlueskyAuthServerDiscovery` / `ErrBlueskyPARFailed` / `ErrBlueskyIssuerMismatch` — discovery/PAR-stage failures during `AuthCodeURLForHandle`.
+- `providers.ErrBlueskyRevokeUnsupported` / `ErrBlueskyIDTokenUnsupported` — capability mismatches; route around them, do not treat as auth failure.
 
 ## Worked example
 
