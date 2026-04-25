@@ -574,9 +574,12 @@ func TestNetSuite_Exchange_TokenSuccessWithoutAccessToken(t *testing.T) {
 			}))
 			defer tokenSrv.Close()
 
-			userInfoCalled := false
+			userInfoCalls := make(chan struct{}, 1)
 			userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				userInfoCalled = true
+				select {
+				case userInfoCalls <- struct{}{}:
+				default:
+				}
 				writeUserInfoResponse(t, w, netSuiteUserInfoStub{Sub: "u1"})
 			}))
 			defer userSrv.Close()
@@ -596,8 +599,10 @@ func TestNetSuite_Exchange_TokenSuccessWithoutAccessToken(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.wantSub) {
 				t.Errorf("error = %v, want it to mention %q", err, tt.wantSub)
 			}
-			if userInfoCalled {
+			select {
+			case <-userInfoCalls:
 				t.Error("userinfo must not be called when token endpoint did not return a usable access_token")
+			default:
 			}
 		})
 	}
