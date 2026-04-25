@@ -2,9 +2,17 @@ package repositories
 
 import (
 	"context"
+	"errors"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 )
+
+// ErrDuplicateCredential is returned by CredentialRepository.Save when the
+// row violates the unique index on (provider, provider_user_id). This lets
+// callers translate a TOCTOU race between a FindByProvider pre-check and a
+// concurrent insert into the appropriate domain-level error (e.g.
+// ErrEmailAlreadyTaken) without depending on driver-specific error shapes.
+var ErrDuplicateCredential = errors.New("repositories: duplicate credential (provider, provider_user_id)")
 
 // PaginatedResponse represents a paginated response with cursor-based pagination.
 type PaginatedResponse[T any] struct {
