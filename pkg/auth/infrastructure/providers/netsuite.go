@@ -134,6 +134,9 @@ func (n *NetSuite) userInfoURL() string {
 }
 
 // AuthCodeURL generates the NetSuite authorization URL with PKCE parameters.
+// The base auth URL may carry its own query string when AuthEndpoint is
+// overridden, so we parse it and merge — direct concatenation with "?" would
+// produce a malformed URL ("?a=1?client_id=...") in that case.
 func (n *NetSuite) AuthCodeURL(state string, codeChallenge string, nonce string, redirectURI string) string {
 	params := url.Values{
 		"client_id":             {n.clientID},
@@ -145,7 +148,22 @@ func (n *NetSuite) AuthCodeURL(state string, codeChallenge string, nonce string,
 		"code_challenge_method": {"S256"},
 		"nonce":                 {nonce},
 	}
-	return n.authURL() + "?" + params.Encode()
+
+	base := n.authURL()
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return base + "?" + params.Encode()
+	}
+
+	query := parsed.Query()
+	for key, values := range params {
+		query.Del(key)
+		for _, value := range values {
+			query.Add(key, value)
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 type netSuiteTokenResponse struct {
@@ -252,6 +270,8 @@ func (n *NetSuite) RevokeToken(ctx context.Context, token string) error {
 		return fmt.Errorf("netsuite: revoke failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Drain the body so the underlying connection can be reused by Transport.
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
 

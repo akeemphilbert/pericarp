@@ -108,9 +108,9 @@ func TestNetSuite_AuthCodeURL_OverrideWinsOverDerived(t *testing.T) {
 func TestNetSuite_TokenURL_OverrideWinsOverDerived(t *testing.T) {
 	t.Parallel()
 
-	var hit string
+	hits := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit = r.URL.Path
+		hits <- r.URL.Path
 		writeTokenResponse(t, w, netSuiteTokenStub{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
 	}))
 	defer srv.Close()
@@ -132,7 +132,7 @@ func TestNetSuite_TokenURL_OverrideWinsOverDerived(t *testing.T) {
 	if _, err := n.Exchange(context.Background(), "code", "verifier", "https://app.example.com/cb"); err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
-	if hit != "/token" {
+	if hit := <-hits; hit != "/token" {
 		t.Errorf("token endpoint hit = %q, want %q (override should win over derived URL)", hit, "/token")
 	}
 }
@@ -418,9 +418,9 @@ func TestNetSuite_ValidateIDToken_ReturnsSentinel(t *testing.T) {
 func TestNetSuite_RevokeURL_OverrideWinsOverDerived(t *testing.T) {
 	t.Parallel()
 
-	var hit string
+	hits := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit = r.URL.Path
+		hits <- r.URL.Path
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -435,7 +435,7 @@ func TestNetSuite_RevokeURL_OverrideWinsOverDerived(t *testing.T) {
 	if err := n.RevokeToken(context.Background(), "tok"); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
-	if hit != "/revoke" {
+	if hit := <-hits; hit != "/revoke" {
 		t.Errorf("revoke endpoint hit = %q, want %q (override should win over derived URL)", hit, "/revoke")
 	}
 }
@@ -450,9 +450,9 @@ func TestNetSuite_UserInfoURL_OverrideWinsOverDerived(t *testing.T) {
 	}))
 	defer tokenSrv.Close()
 
-	var hit string
+	hits := make(chan string, 1)
 	userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit = r.URL.Path
+		hits <- r.URL.Path
 		writeUserInfoResponse(t, w, netSuiteUserInfoStub{Sub: "u1", Email: "u@example.com"})
 	}))
 	defer userSrv.Close()
@@ -468,7 +468,7 @@ func TestNetSuite_UserInfoURL_OverrideWinsOverDerived(t *testing.T) {
 	if _, err := n.Exchange(context.Background(), "code", "verifier", "https://app.example.com/cb"); err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
-	if hit != "/userinfo" {
+	if hit := <-hits; hit != "/userinfo" {
 		t.Errorf("userinfo endpoint hit = %q, want %q (override should win over derived URL)", hit, "/userinfo")
 	}
 }
