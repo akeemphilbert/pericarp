@@ -50,10 +50,7 @@ func RunAuthenticationFlow(ctx context.Context) (*FlowResult, error) {
 	fmt.Println("[2] RSAJWTService created")
 
 	// --- 3. Wire DefaultAuthenticationService ---
-	provider := NewMockOAuthProvider("mock-idp")
-	providers := application.OAuthProviderRegistry{
-		"mock-idp": provider,
-	}
+	providers := BuildProviderRegistry()
 	agents := NewMemoryAgentRepository()
 	credentials := NewMemoryCredentialRepository()
 	sessions := NewMemorySessionRepository()

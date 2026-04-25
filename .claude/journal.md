@@ -84,3 +84,16 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 - Bcrypt via `golang.org/x/crypto/bcrypt`, default cost configurable via `WithBcryptCost`. Algorithm stored on the row to allow future migration (e.g. argon2id)
 - Password support is opt-in via `WithPasswordCredentialRepository`; password methods return `ErrPasswordSupportNotConfigured` until wired
 - **Why:** Apollo and other downstream services need email/password sign-in without bolting their own auth lane on top. OAuth lane untouched; bcrypt blobs from legacy systems can be imported as-is via `ImportPasswordCredential`
+
+---
+
+### 2026-04-25: NetSuite OAuth 2.0 provider
+
+- Added `providers.NewNetSuite(NetSuiteConfig{...})` in `pkg/auth/infrastructure/providers/netsuite.go` — fifth shipping OAuth provider alongside Apple/GitHub/Google/Microsoft
+- Per-account hosts (auth → `<account>.app.netsuite.com`, token/revoke/userinfo → `<account>.suitetalk.api.netsuite.com`) are derived from `AccountID` with NetSuite's documented normalization (lowercase + `_` → `-`), mirroring how Microsoft templates `tenantID`. Sandbox `1234567_SB1` resolves to `1234567-sb1.app.netsuite.com` automatically
+- Each endpoint accepts an explicit override that **wins over the derived URL even when `AccountID` is set** — safety valve for sandboxes with non-standard hosts and any future NetSuite endpoint change. Override-only-when-AccountID-is-empty was explicitly called out as the trap to avoid
+- `ValidateIDToken` returns sentinel `ErrNetSuiteIDTokenNotSupported` because NetSuite's OAuth 2.0 doesn't reliably issue OIDC-conformant ID tokens; user info is fetched via `Exchange` (NetSuite's `userinfo` endpoint)
+- Default scope is `["rest_webservices"]` — required for the SuiteTalk REST userinfo endpoint, so `Exchange` works against a real tenant out of the box
+- Token endpoint surfaces OAuth 2.0 error bodies returned with HTTP 200 and rejects empty `access_token`; userinfo rejects empty `sub` — guards against silent partial-response failure modes that otherwise produce blank-identity sessions
+- Added `pkg/auth/PROVIDERS.md` provider catalog (first time the auth package has shipped a catalog doc) and `examples/authn/provider_catalog.go` with `BuildProviderRegistry()` as the copy-pasteable wiring template for downstream services
+- **Why:** Closes epic #26 — downstream services can register NetSuite the same way they register Google/Microsoft, picking up sandbox support and endpoint overrides without writing their own NetSuite adapter
