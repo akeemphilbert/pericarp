@@ -14,6 +14,7 @@ require (
 	github.com/gorilla/sessions v1.4.0
 	github.com/segmentio/ksuid v1.0.4
 	github.com/testcontainers/testcontainers-go v0.40.0
+	golang.org/x/crypto v0.49.0
 	golang.org/x/sync v0.20.0
 	google.golang.org/api v0.272.0
 	gorm.io/gorm v1.31.1
@@ -102,7 +103,6 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
-	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.52.0 // indirect

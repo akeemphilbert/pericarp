@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,18 +142,16 @@ func TestMastodonDefaultScopes(t *testing.T) {
 	}
 }
 
-func TestMastodonAuthCodeURL_RequiresInstance(t *testing.T) {
+func TestMastodonAuthCodeURL_ReturnsEmpty(t *testing.T) {
 	t.Parallel()
 	m := NewMastodon(MastodonConfig{AppCache: NewMemoryMastodonAppCache()})
 	got := m.AuthCodeURL("state", "challenge", "nonce", "https://app/cb")
-	// AuthCodeURL must not silently return a usable URL — diagnostics should
-	// land in the URL itself when the host-aware path is skipped.
-	if !strings.HasPrefix(got, "about:blank#") {
-		t.Errorf("AuthCodeURL = %q, want it to start with about:blank# when no instance is bound", got)
-	}
-	// url.QueryEscape encodes spaces as '+', not %20, so check for that form.
-	if !strings.Contains(got, "instance+host+required") {
-		t.Errorf("AuthCodeURL = %q, want it to surface the instance-required sentinel", got)
+	// Returning empty is intentional: any non-empty URL would risk being
+	// stuffed into a Location header by an unaware caller. Empty fails loud
+	// at the first redirect attempt and forces callers onto the host-aware
+	// AuthCodeURLForInstance path.
+	if got != "" {
+		t.Errorf("AuthCodeURL = %q, want empty string when no instance is bound", got)
 	}
 }
 
@@ -278,8 +277,8 @@ func TestMastodonFlowBinding_ExpiredIsIgnored(t *testing.T) {
 	m.nowFn = func() time.Time { return now.Add(10 * time.Minute) }
 
 	_, err := m.Exchange(context.Background(), "code", verifier, "https://app/cb")
-	if !errors.Is(err, ErrMastodonInstanceRequired) {
-		t.Errorf("expired flow err = %v, want ErrMastodonInstanceRequired", err)
+	if !errors.Is(err, ErrMastodonFlowExpired) {
+		t.Errorf("expired flow err = %v, want ErrMastodonFlowExpired (callers must distinguish expiry from never-bound)", err)
 	}
 }
 
@@ -291,11 +290,11 @@ func TestMastodonFlowBinding_SingleUse(t *testing.T) {
 	challenge := pkceChallenge(verifier)
 	m.bindFlow(challenge, "mastodon.social")
 
-	if host, ok := m.takeFlow(challenge); !ok || host != "mastodon.social" {
-		t.Fatalf("first take = (%q, %v), want (mastodon.social, true)", host, ok)
+	if host, status := m.takeFlow(challenge); status != flowStatusOK || host != "mastodon.social" {
+		t.Fatalf("first take = (%q, %v), want (mastodon.social, flowStatusOK)", host, status)
 	}
-	if _, ok := m.takeFlow(challenge); ok {
-		t.Error("second take returned true; flow bindings must be single-use to prevent code replay across instances")
+	if _, status := m.takeFlow(challenge); status != flowStatusConsumed {
+		t.Errorf("second take status = %v, want flowStatusConsumed (single-use must distinguish from missing)", status)
 	}
 }
 
@@ -432,6 +431,284 @@ func TestMastodonRegisterApp_ServerError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ensure app") {
 		t.Errorf("err = %q, want it to wrap with 'ensure app'", err.Error())
+	}
+}
+
+// TestMastodonPKCEChallenge_MatchesApplication is the load-bearing parity
+// invariant: Mastodon's flow binding key (sha256 of verifier) must match the
+// challenge produced by application.GenerateCodeChallenge for the same
+// verifier. If these ever diverge, every Mastodon Exchange would silently
+// return ErrMastodonInstanceRequired despite a valid binding.
+func TestMastodonPKCEChallenge_MatchesApplication(t *testing.T) {
+	t.Parallel()
+
+	verifiers := []string{
+		"short",
+		"43-character-base64url-style-pkce-verifier-1234",
+		"another-verifier-with-padding-style-bytes",
+	}
+	for _, v := range verifiers {
+		if got, want := pkceChallenge(v), application.GenerateCodeChallenge(v); got != want {
+			t.Errorf("pkceChallenge(%q) = %q, want %q (matches application.GenerateCodeChallenge)", v, got, want)
+		}
+	}
+}
+
+func TestMastodonHostNormalization(t *testing.T) {
+	t.Parallel()
+
+	social := newFakeInstance(t, "mastodon.social")
+	cache := NewMemoryMastodonAppCache()
+	m := newMastodonForTest(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    cache,
+	}, map[string]*fakeInstance{"mastodon.social": social})
+
+	ctx := context.Background()
+	verifier := "v"
+	challenge := pkceChallenge(verifier)
+
+	// Different casing + whitespace must collapse to the same cache + binding.
+	if _, err := m.AuthCodeURLForInstance(ctx, "  Mastodon.SOCIAL  ", "s", challenge, "", "https://app.example.com/cb"); err != nil {
+		t.Fatalf("AuthCodeURLForInstance: %v", err)
+	}
+	if got := social.registerCalls.Load(); got != 1 {
+		t.Errorf("first call register count = %d, want 1", got)
+	}
+	// Second call with canonical lowercase must hit the cache, not register again.
+	if _, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "s2", pkceChallenge("v2"), "", "https://app.example.com/cb"); err != nil {
+		t.Fatalf("AuthCodeURLForInstance second: %v", err)
+	}
+	if got := social.registerCalls.Load(); got != 1 {
+		t.Errorf("after canonical-case call, register count = %d, want 1 (host normalization must collapse cache keys)", got)
+	}
+
+	// Exchange with the original challenge resolves user info, including the
+	// normalized host in ProviderUserID.
+	result, err := m.Exchange(ctx, social.authCode, verifier, "https://app.example.com/cb")
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	want := social.accountID + "@mastodon.social"
+	if result.UserInfo.ProviderUserID != want {
+		t.Errorf("ProviderUserID = %q, want %q (normalized lowercase host)", result.UserInfo.ProviderUserID, want)
+	}
+}
+
+func TestMastodonConcurrentRegistration_Singleflight(t *testing.T) {
+	t.Parallel()
+
+	social := newFakeInstance(t, "mastodon.social")
+	// Slow the registration handler so concurrent goroutines all collide
+	// inside the singleflight critical section.
+	slowMux := http.NewServeMux()
+	slowMux.HandleFunc("/api/v1/apps", func(w http.ResponseWriter, r *http.Request) {
+		social.registerCalls.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"client_id":"` + social.clientID + `","client_secret":"` + social.clientSecret + `"}`))
+	})
+	slowSrv := httptest.NewServer(slowMux)
+	defer slowSrv.Close()
+
+	cache := NewMemoryMastodonAppCache()
+	m := NewMastodon(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    cache,
+	})
+	m.instanceBase = func(_ string) string { return slowSrv.URL }
+
+	const N = 16
+	var wg sync.WaitGroup
+	wg.Add(N)
+	errs := make(chan error, N)
+	for i := range N {
+		go func(i int) {
+			defer wg.Done()
+			verifier := "v" + string(rune('a'+i))
+			_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge(verifier), "", "https://app.example.com/cb")
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AuthCodeURLForInstance: %v", err)
+		}
+	}
+	if got := social.registerCalls.Load(); got != 1 {
+		t.Errorf("register calls = %d, want 1 (singleflight must dedupe concurrent first-flow registrations)", got)
+	}
+}
+
+func TestMastodonExchange_TokenEndpointError(t *testing.T) {
+	t.Parallel()
+
+	social := newFakeInstance(t, "mastodon.social")
+	social.tokenStatus = http.StatusBadRequest
+	m := newMastodonForTest(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    NewMemoryMastodonAppCache(),
+	}, map[string]*fakeInstance{"mastodon.social": social})
+
+	ctx := context.Background()
+	verifier := "v"
+	challenge := pkceChallenge(verifier)
+	if _, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "s", challenge, "", "https://app.example.com/cb"); err != nil {
+		t.Fatalf("AuthCodeURLForInstance: %v", err)
+	}
+
+	_, err := m.Exchange(ctx, social.authCode, verifier, "https://app.example.com/cb")
+	if err == nil {
+		t.Fatal("Exchange returned nil error when token endpoint returned 400")
+	}
+	if !strings.Contains(err.Error(), "token exchange") {
+		t.Errorf("err = %q, want it to wrap with 'token exchange'", err.Error())
+	}
+}
+
+func TestMastodonExchange_VerifyEndpointError(t *testing.T) {
+	t.Parallel()
+
+	social := newFakeInstance(t, "mastodon.social")
+	social.verifyStatus = http.StatusUnauthorized
+	m := newMastodonForTest(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    NewMemoryMastodonAppCache(),
+	}, map[string]*fakeInstance{"mastodon.social": social})
+
+	ctx := context.Background()
+	verifier := "v"
+	challenge := pkceChallenge(verifier)
+	if _, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "s", challenge, "", "https://app.example.com/cb"); err != nil {
+		t.Fatalf("AuthCodeURLForInstance: %v", err)
+	}
+
+	_, err := m.Exchange(ctx, social.authCode, verifier, "https://app.example.com/cb")
+	if err == nil {
+		t.Fatal("Exchange returned nil error when verify endpoint returned 401")
+	}
+	if !strings.Contains(err.Error(), "fetch user info") {
+		t.Errorf("err = %q, want it to wrap with 'fetch user info'", err.Error())
+	}
+}
+
+func TestMastodonRegistrationMissingClientCredentials(t *testing.T) {
+	t.Parallel()
+
+	social := newFakeInstance(t, "mastodon.social")
+	social.registerBody = `{"client_id":"only-id-no-secret"}`
+	m := newMastodonForTest(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    NewMemoryMastodonAppCache(),
+	}, map[string]*fakeInstance{"mastodon.social": social})
+
+	_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge("v"), "", "https://app.example.com/cb")
+	if err == nil {
+		t.Fatal("expected error when registration response was missing client_secret")
+	}
+	if !strings.Contains(err.Error(), "missing client credentials") {
+		t.Errorf("err = %q, want it to mention missing client credentials", err.Error())
+	}
+}
+
+func TestMastodonNilAppCache_FallsBackToMemory(t *testing.T) {
+	t.Parallel()
+
+	social := newFakeInstance(t, "mastodon.social")
+	m := NewMastodon(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		// AppCache intentionally nil
+	})
+	m.instanceBase = func(_ string) string { return social.server.URL }
+
+	if m.appCache == nil {
+		t.Fatal("appCache is nil after construction with no AppCache; expected memory fallback")
+	}
+	if _, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge("v"), "", "https://app.example.com/cb"); err != nil {
+		t.Errorf("first flow with default cache: %v", err)
+	}
+}
+
+func TestMastodonRegisterApp_SendsWebsite(t *testing.T) {
+	t.Parallel()
+
+	var capturedWebsite string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/apps", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(body))
+		capturedWebsite = form.Get("website")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"client_id":"cid","client_secret":"sec"}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m := NewMastodon(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    NewMemoryMastodonAppCache(),
+		Website:     "https://app.example.com",
+	})
+	m.instanceBase = func(_ string) string { return srv.URL }
+
+	if _, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge("v"), "", "https://app.example.com/cb"); err != nil {
+		t.Fatalf("AuthCodeURLForInstance: %v", err)
+	}
+	if capturedWebsite != "https://app.example.com" {
+		t.Errorf("captured website = %q, want https://app.example.com", capturedWebsite)
+	}
+}
+
+func TestMastodonRevokeTokenAtInstance_NoCachedApp(t *testing.T) {
+	t.Parallel()
+
+	m := NewMastodon(MastodonConfig{
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    NewMemoryMastodonAppCache(),
+	})
+	err := m.RevokeTokenAtInstance(context.Background(), "mastodon.social", "tok")
+	if err == nil {
+		t.Fatal("expected error when no app is cached for the host")
+	}
+	if !strings.Contains(err.Error(), "no cached app") {
+		t.Errorf("err = %q, want it to mention missing cached app", err.Error())
+	}
+}
+
+func TestMastodonRevokeTokenAtInstance_Non200(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/revoke", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"invalid_token"}`, http.StatusForbidden)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cache := NewMemoryMastodonAppCache()
+	_ = cache.SetApp(context.Background(), "mastodon.social", &MastodonApp{ClientID: "cid", ClientSecret: "sec"})
+	m := NewMastodon(MastodonConfig{
+		AppName:     "PericarpTest",
+		RedirectURI: "https://app.example.com/cb",
+		AppCache:    cache,
+	})
+	m.instanceBase = func(_ string) string { return srv.URL }
+
+	err := m.RevokeTokenAtInstance(context.Background(), "mastodon.social", "tok")
+	if err == nil {
+		t.Fatal("expected error for HTTP 403")
+	}
+	if !strings.Contains(err.Error(), "status 403") {
+		t.Errorf("err = %q, want status 403", err.Error())
 	}
 }
 

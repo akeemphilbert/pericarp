@@ -12,9 +12,11 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
+	"golang.org/x/sync/singleflight"
 )
 
 // Mastodon endpoint paths (the host is provided per-flow by the caller).
@@ -34,11 +36,25 @@ const (
 // Mastodon-specific sentinel errors. Callers MUST distinguish these via
 // errors.Is — generic "any non-nil error from ValidateIDToken means failed
 // login" handlers would incorrectly reject every Mastodon login.
+//
+// All four flow-state sentinels below are PERMANENT for the failing flow:
+// callers must NOT retry the same Exchange call. Start a fresh flow via
+// AuthCodeURLForInstance instead.
 var (
 	// ErrMastodonInstanceRequired is returned by AuthCodeURL/Exchange when
-	// no instance host has been bound to the flow. Callers must use
-	// AuthCodeURLForInstance to start a Mastodon flow.
+	// no instance host has ever been bound to the flow. Caller misuse
+	// (forgot to call AuthCodeURLForInstance) — permanent.
 	ErrMastodonInstanceRequired = errors.New("mastodon: instance host required; use AuthCodeURLForInstance to start a flow")
+
+	// ErrMastodonFlowExpired is returned by Exchange when the flow binding
+	// existed but TTL'd before the user completed the auth dialog. Permanent.
+	ErrMastodonFlowExpired = errors.New("mastodon: flow binding expired before code was exchanged; start a fresh flow")
+
+	// ErrMastodonFlowAlreadyConsumed is returned by Exchange when the flow
+	// binding has already been consumed by an earlier Exchange call (e.g. a
+	// duplicate callback). Permanent — single-use is intentional to prevent
+	// authorization-code replay across instances.
+	ErrMastodonFlowAlreadyConsumed = errors.New("mastodon: flow binding already consumed; start a fresh flow")
 
 	// ErrMastodonIDTokenUnsupported is returned by ValidateIDToken because
 	// Mastodon does not issue OIDC ID tokens. Resolve identity via Exchange.
@@ -124,6 +140,14 @@ type Mastodon struct {
 	flowBindings sync.Map // codeChallenge -> *flowBinding
 	flowTTL      time.Duration
 
+	// flowConsumed records challenges that have already been taken so a
+	// duplicate Exchange call can return ErrMastodonFlowAlreadyConsumed
+	// instead of conflating with "never bound." TTL'd via tombstoneTTL.
+	flowConsumed   sync.Map // codeChallenge -> consumedAt
+	tombstoneTTL   time.Duration
+	registerSF     singleflight.Group // dedupes concurrent /api/v1/apps registrations per host
+	bindCounter    atomic.Uint64      // drives probabilistic GC sweeps in bindFlow
+
 	// instanceBase resolves a host (e.g. "mastodon.social") to a base URL
 	// (e.g. "https://mastodon.social"). Tests override it to point at an
 	// httptest server.
@@ -151,9 +175,21 @@ func NewMastodon(config MastodonConfig) *Mastodon {
 		appCache:     cache,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		flowTTL:      mastodonFlowTTL,
-		instanceBase: func(host string) string { return "https://" + host },
+		tombstoneTTL: mastodonFlowTTL, // tombstone lives at least as long as a binding could
+		instanceBase: func(host string) string { return "https://" + strings.ToLower(host) },
 		nowFn:        time.Now,
 	}
+}
+
+// normalizeHost lowercases and trims the instance host so `Mastodon.Social`
+// and `mastodon.social ` collapse to the same key. DNS hostnames are
+// case-insensitive — without this, the same user signing in via two
+// differently-cased URLs would be issued two distinct credentials, and the
+// MastodonAppCache would register two upstream apps. This is enforced at
+// every entry point that accepts a host: AuthCodeURLForInstance, Exchange,
+// RevokeTokenAtInstance.
+func normalizeHost(host string) string {
+	return strings.ToLower(strings.TrimSpace(host))
 }
 
 // Name returns the provider identifier.
@@ -161,14 +197,15 @@ func (m *Mastodon) Name() string {
 	return "mastodon"
 }
 
-// AuthCodeURL satisfies application.OAuthProvider but cannot start a real
-// Mastodon flow because the instance host is not known here. It returns a
-// sentinel-bearing pseudo-URL that can be safely surfaced to callers; the
-// production code path is AuthCodeURLForInstance. Returning empty would risk
-// silent redirects to a bogus relative URL, so the URL form makes failure
-// diagnosable in browser logs.
+// AuthCodeURL satisfies application.OAuthProvider, but cannot start a real
+// Mastodon flow because the instance host is not known at this signature. It
+// returns the empty string. Callers MUST detect empty-string and route to
+// AuthCodeURLForInstance (a non-empty URL going through this method would be
+// a Mastodon misuse and dangerous if any handler put it in a Location
+// header — see Exchange, which returns ErrMastodonInstanceRequired so the
+// downstream error path can be programmatically detected).
 func (m *Mastodon) AuthCodeURL(_, _, _, _ string) string {
-	return "about:blank#" + url.QueryEscape(ErrMastodonInstanceRequired.Error())
+	return ""
 }
 
 // AuthCodeURLForInstance registers (or fetches a cached) app at the given
@@ -182,6 +219,7 @@ func (m *Mastodon) AuthCodeURL(_, _, _, _ string) string {
 // The redirectURI must match MastodonConfig.RedirectURI; mismatched URIs would
 // cause Mastodon to reject the callback and would also bind the wrong app.
 func (m *Mastodon) AuthCodeURLForInstance(ctx context.Context, host, state, codeChallenge, _, redirectURI string) (string, error) {
+	host = normalizeHost(host)
 	if host == "" {
 		return "", fmt.Errorf("mastodon: host must not be empty")
 	}
@@ -217,10 +255,23 @@ func (m *Mastodon) AuthCodeURLForInstance(ctx context.Context, host, state, code
 // instance the auth URL pointed at, then resolves user info via
 // /api/v1/accounts/verify_credentials. The instance is recovered from the
 // flow binding keyed by sha256(codeVerifier) (which equals codeChallenge).
+//
+// Returns one of three distinguishable PERMANENT sentinels on flow-state
+// failures: ErrMastodonInstanceRequired (no binding ever existed),
+// ErrMastodonFlowExpired (binding TTL'd), or ErrMastodonFlowAlreadyConsumed
+// (duplicate Exchange). None of these should be retried — callers must start
+// a fresh flow via AuthCodeURLForInstance.
 func (m *Mastodon) Exchange(ctx context.Context, code, codeVerifier, redirectURI string) (*application.AuthResult, error) {
 	challenge := pkceChallenge(codeVerifier)
-	host, ok := m.takeFlow(challenge)
-	if !ok {
+	host, status := m.takeFlow(challenge)
+	switch status {
+	case flowStatusOK:
+		// proceed
+	case flowStatusExpired:
+		return nil, ErrMastodonFlowExpired
+	case flowStatusConsumed:
+		return nil, ErrMastodonFlowAlreadyConsumed
+	default:
 		return nil, ErrMastodonInstanceRequired
 	}
 	if redirectURI == "" {
@@ -277,6 +328,7 @@ func (m *Mastodon) RevokeToken(_ context.Context, _ string) error {
 
 // RevokeTokenAtInstance revokes a token at the given Mastodon instance.
 func (m *Mastodon) RevokeTokenAtInstance(ctx context.Context, host, token string) error {
+	host = normalizeHost(host)
 	app, err := m.appCache.GetApp(ctx, host)
 	if err != nil {
 		return fmt.Errorf("mastodon: load app for %q: %w", host, err)
@@ -302,7 +354,10 @@ func (m *Mastodon) RevokeTokenAtInstance(ctx context.Context, host, token string
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("mastodon: read revoke response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("mastodon: revoke at %q failed with status %d: %s", host, resp.StatusCode, string(body))
 	}
@@ -317,25 +372,45 @@ func (m *Mastodon) ValidateIDToken(_ context.Context, _, _ string) (*application
 
 // ensureApp returns the cached MastodonApp for host, registering one via
 // /api/v1/apps if no entry exists.
+//
+// Concurrent first-flow registrations for the same host are deduplicated via
+// singleflight: without this, N simultaneous logins to a fresh instance would
+// each hit POST /api/v1/apps and leave N-1 abandoned upstream apps forever
+// (Mastodon does not deduplicate registrations server-side).
+//
+// A successful registration whose cache write fails is treated as
+// best-effort: the registered credential is returned and the flow continues.
+// Returning an error here would make the caller discard the just-issued
+// credential, then on retry register yet another app — exactly the pollution
+// pattern the singleflight prevents.
 func (m *Mastodon) ensureApp(ctx context.Context, host string) (*MastodonApp, error) {
-	app, err := m.appCache.GetApp(ctx, host)
-	if err != nil {
+	if app, err := m.appCache.GetApp(ctx, host); err != nil {
 		return nil, fmt.Errorf("get cached app: %w", err)
-	}
-	if app != nil {
+	} else if app != nil {
 		return app, nil
 	}
 
-	registered, err := m.registerApp(ctx, host)
+	v, err, _ := m.registerSF.Do(host, func() (any, error) {
+		// Re-check the cache inside the singleflight critical section: the
+		// first goroutine to win the flight may have populated it; subsequent
+		// goroutines that joined the flight should see the cached value.
+		if app, getErr := m.appCache.GetApp(ctx, host); getErr == nil && app != nil {
+			return app, nil
+		}
+		registered, regErr := m.registerApp(ctx, host)
+		if regErr != nil {
+			return nil, fmt.Errorf("register app: %w", regErr)
+		}
+		// Best-effort cache write: a failure here is logged via a no-op
+		// (callers wire their own logger at the application layer) but does
+		// not poison the in-flight registration.
+		_ = m.appCache.SetApp(ctx, host, registered)
+		return registered, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("register app: %w", err)
+		return nil, err
 	}
-	if err := m.appCache.SetApp(ctx, host, registered); err != nil {
-		// Cache write failure is not fatal — the app is registered upstream
-		// already; we just won't reuse credentials. Log via the wrapped error.
-		return registered, fmt.Errorf("cache app: %w", err)
-	}
-	return registered, nil
+	return v.(*MastodonApp), nil
 }
 
 // registerApp posts to /api/v1/apps at the given instance to obtain client
@@ -481,28 +556,79 @@ func (m *Mastodon) fetchUserInfo(ctx context.Context, host, accessToken string) 
 	}, nil
 }
 
+// flowStatus categorises the result of takeFlow so Exchange can return a
+// distinguishable sentinel per case.
+type flowStatus int
+
+const (
+	flowStatusMissing  flowStatus = iota // never bound
+	flowStatusOK                         // bound, in-TTL, single-use claim succeeded
+	flowStatusExpired                    // bound, but TTL'd
+	flowStatusConsumed                   // bound previously, already taken
+)
+
+// gcSweepEvery sets how often (per bindFlow call) the provider opportunistically
+// scans for and removes expired flow bindings, bounding sync.Map retention for
+// abandoned flows. Probabilistic so amortised cost is O(1) per bind.
+const gcSweepEvery = 64
+
 // bindFlow stashes a codeChallenge -> host binding with TTL for later retrieval
-// by Exchange.
+// by Exchange. Every gcSweepEvery calls it sweeps expired bindings to bound
+// memory growth from abandoned flows.
 func (m *Mastodon) bindFlow(codeChallenge, host string) {
+	now := m.nowFn()
 	m.flowBindings.Store(codeChallenge, &flowBinding{
 		host:      host,
-		expiresAt: m.nowFn().Add(m.flowTTL),
+		expiresAt: now.Add(m.flowTTL),
 	})
+	if m.bindCounter.Add(1)%gcSweepEvery == 0 {
+		m.sweepExpired(now)
+	}
 }
 
-// takeFlow returns the host bound to the given codeChallenge and removes it,
-// or ("", false) if absent or expired. Single-use to prevent the same code
-// being replayed against multiple instances.
-func (m *Mastodon) takeFlow(codeChallenge string) (string, bool) {
+// takeFlow returns (host, flowStatusOK) if a fresh binding is consumed, or one
+// of the other flowStatus values to let the caller distinguish missing /
+// expired / already-consumed. Single-use to prevent code replay across
+// instances.
+func (m *Mastodon) takeFlow(codeChallenge string) (string, flowStatus) {
 	v, ok := m.flowBindings.LoadAndDelete(codeChallenge)
 	if !ok {
-		return "", false
+		// Distinguish "never bound" from "already consumed" via tombstone map.
+		if t, ok := m.flowConsumed.Load(codeChallenge); ok {
+			if m.nowFn().Before(t.(time.Time)) {
+				return "", flowStatusConsumed
+			}
+			m.flowConsumed.Delete(codeChallenge)
+		}
+		return "", flowStatusMissing
 	}
 	binding := v.(*flowBinding)
-	if m.nowFn().After(binding.expiresAt) {
-		return "", false
+	now := m.nowFn()
+	if now.After(binding.expiresAt) {
+		return "", flowStatusExpired
 	}
-	return binding.host, true
+	// Mark as consumed so a duplicate Exchange returns ErrMastodonFlowAlreadyConsumed
+	// instead of looking like "never bound."
+	m.flowConsumed.Store(codeChallenge, now.Add(m.tombstoneTTL))
+	return binding.host, flowStatusOK
+}
+
+// sweepExpired removes bindings whose expiresAt is in the past and tombstones
+// whose retention window has passed. Called probabilistically from bindFlow
+// to keep amortised cost low.
+func (m *Mastodon) sweepExpired(now time.Time) {
+	m.flowBindings.Range(func(k, v any) bool {
+		if now.After(v.(*flowBinding).expiresAt) {
+			m.flowBindings.Delete(k)
+		}
+		return true
+	})
+	m.flowConsumed.Range(func(k, v any) bool {
+		if now.After(v.(time.Time)) {
+			m.flowConsumed.Delete(k)
+		}
+		return true
+	})
 }
 
 // pkceChallenge computes the S256 PKCE challenge for a verifier (matches
