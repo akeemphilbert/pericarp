@@ -473,6 +473,191 @@ func TestStripe_WithHTTPClient_UsesProvidedClient(t *testing.T) {
 	}
 }
 
+func TestStripe_CanceledButStillInPaidWindow_StaysActive(t *testing.T) {
+	// Stripe flips status to "canceled" the moment the merchant cancels
+	// even though current_period_end is still in the future and the
+	// customer is entitled to access through that date. Adapter must
+	// keep IsActive() = true and surface the cancellation in metadata.
+	t.Parallel()
+
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	periodEnd := now.Add(7 * 24 * time.Hour).Unix()
+	body := stripeFixture(stripeSub("sub_1", "canceled", periodEnd, "pro", false))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	s := subscription.NewStripe("sk_test",
+		subscription.WithStripeBaseURL(srv.URL),
+		subscription.WithStripeNow(func() time.Time { return now }),
+	)
+	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim.Status != auth.SubscriptionStatusActive {
+		t.Errorf("Status = %q, want Active while still in paid window", claim.Status)
+	}
+	if !claim.IsActive() {
+		t.Error("IsActive() = false, want true")
+	}
+	if got := claim.Metadata["cancel_at_period_end"]; got != true {
+		t.Errorf("cancel_at_period_end metadata = %v, want true", got)
+	}
+}
+
+func TestStripe_CanceledExpired_StaysCancelled(t *testing.T) {
+	// Same status string, but the paid window has lapsed — adapter must
+	// fall through to Cancelled.
+	t.Parallel()
+
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	expired := now.Add(-7 * 24 * time.Hour).Unix()
+	body := stripeFixture(stripeSub("sub_1", "canceled", expired, "pro", false))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	s := subscription.NewStripe("sk_test",
+		subscription.WithStripeBaseURL(srv.URL),
+		subscription.WithStripeNow(func() time.Time { return now }),
+	)
+	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim.Status != auth.SubscriptionStatusCancelled {
+		t.Errorf("Status = %q, want Cancelled after period lapsed", claim.Status)
+	}
+}
+
+func TestStripe_CanceledZeroPeriodEnd_StaysCancelled(t *testing.T) {
+	// current_period_end == 0 (no expiry stamped) collapses to Cancelled
+	// — there's no future window to honor. ExpiresAt should also stay
+	// zero so IsActive doesn't accidentally flip on a missing expiry.
+	t.Parallel()
+
+	body := stripeFixture(stripeSub("sub_1", "canceled", 0, "pro", false))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim.Status != auth.SubscriptionStatusCancelled {
+		t.Errorf("Status = %q, want Cancelled", claim.Status)
+	}
+	if !claim.ExpiresAt.IsZero() {
+		t.Errorf("ExpiresAt = %v, want zero when current_period_end == 0", claim.ExpiresAt)
+	}
+}
+
+func TestStripe_TrialingBeatsPastDue(t *testing.T) {
+	t.Parallel()
+
+	periodEnd := time.Now().Add(7 * 24 * time.Hour).Unix()
+	body := stripeFixture(
+		stripeSub("sub_pd", "past_due", periodEnd, "pd_plan", false),
+		stripeSub("sub_tr", "trialing", periodEnd, "tr_plan", false),
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim.Plan != "tr_plan" {
+		t.Errorf("Plan = %q, want tr_plan (trialing beats past_due)", claim.Plan)
+	}
+}
+
+func TestStripe_TieBreakBySubscriptionID(t *testing.T) {
+	t.Parallel()
+
+	periodEnd := time.Now().Add(30 * 24 * time.Hour).Unix()
+	body := stripeFixture(
+		stripeSub("sub_b", "active", periodEnd, "b_plan", false),
+		stripeSub("sub_a", "active", periodEnd, "a_plan", false),
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	for i := 0; i < 5; i++ {
+		claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+		if err != nil {
+			t.Fatalf("GetSubscription error: %v", err)
+		}
+		if claim.Plan != "a_plan" {
+			t.Fatalf("Plan = %q, want a_plan (lex-first ID), iteration %d", claim.Plan, i)
+		}
+	}
+}
+
+func TestStripe_MultipleCustomers_PicksBestAcrossAll(t *testing.T) {
+	// Outer loop over search.Data must be exercised. The active
+	// subscription is on cus_2; cus_1 only has a canceled one. The
+	// adapter walks both and picks the active.
+	t.Parallel()
+
+	periodEnd := time.Now().Add(30 * 24 * time.Hour).Unix()
+	body := `{"data":[
+		{"id":"cus_1","subscriptions":{"data":[` + stripeSub("sub_old", "canceled", 0, "old_plan", false) + `]}},
+		{"id":"cus_2","subscriptions":{"data":[` + stripeSub("sub_new", "active", periodEnd, "new_plan", false) + `]}}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim.Plan != "new_plan" {
+		t.Errorf("Plan = %q, want new_plan (active wins across customers)", claim.Plan)
+	}
+	if got := claim.Metadata["customer_id"]; got != "cus_2" {
+		t.Errorf("Metadata[customer_id] = %v, want cus_2", got)
+	}
+	if got := claim.Metadata["customer_match_count"]; got != 2 {
+		t.Errorf("Metadata[customer_match_count] = %v, want 2 (split-brain marker)", got)
+	}
+}
+
+func TestStripe_EmptyItems_PlanIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	body := `{"data":[{"id":"cus_1","subscriptions":{"data":[{"id":"sub_1","status":"active","current_period_end":0,"items":{"data":[]}}]}}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim.Plan != "" {
+		t.Errorf("Plan = %q, want empty for subscription with no items", claim.Plan)
+	}
+	if claim.Status != auth.SubscriptionStatusActive {
+		t.Errorf("Status = %q, want Active", claim.Status)
+	}
+}
+
 func TestStripe_WithHTTPClient_NilNoOp(t *testing.T) {
 	t.Parallel()
 

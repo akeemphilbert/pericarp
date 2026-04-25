@@ -54,6 +54,17 @@ func WithStripeAgentMetadataKey(k string) StripeOption {
 	}
 }
 
+// WithStripeNow overrides the time source used to decide whether a
+// canceled subscription's paid period has actually lapsed. Tests inject
+// a fixed clock; production uses time.Now.
+func WithStripeNow(now func() time.Time) StripeOption {
+	return func(s *Stripe) {
+		if now != nil {
+			s.now = now
+		}
+	}
+}
+
 // Stripe resolves SubscriptionClaim values from the Stripe API by searching
 // customers on a configurable metadata field. It implements
 // application.SubscriptionService.
@@ -62,6 +73,7 @@ type Stripe struct {
 	baseURL          string
 	client           *http.Client
 	agentMetadataKey string
+	now              func() time.Time
 }
 
 // NewStripe returns a Stripe adapter authenticated with apiKey (a Stripe
@@ -73,6 +85,7 @@ func NewStripe(apiKey string, opts ...StripeOption) *Stripe {
 		baseURL:          stripeDefaultBaseURL,
 		client:           &http.Client{Timeout: 5 * time.Second},
 		agentMetadataKey: stripeDefaultMetadataKey,
+		now:              time.Now,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -150,9 +163,9 @@ func (s *Stripe) GetSubscription(ctx context.Context, agentID, accountID string)
 		return nil, errors.New("stripe: agentID must not be empty")
 	}
 
-	// Stripe search syntax: metadata['key']:'value'. Single quotes inside
-	// agentID are escaped per Stripe's docs by doubling — same convention
-	// SQL uses. Limits the blast radius of a malformed agent ID.
+	// Stripe search syntax: metadata['key']:'value'. Apostrophes inside
+	// agentID are backslash-escaped per Stripe's Search API grammar so a
+	// malformed or hostile agent ID can't break out of the quoted clause.
 	query := fmt.Sprintf("metadata['%s']:'%s'", s.agentMetadataKey, strings.ReplaceAll(agentID, "'", `\'`))
 	endpoint := fmt.Sprintf("%s/customers/search?query=%s&expand[]=data.subscriptions", s.baseURL, url.QueryEscape(query))
 
@@ -190,30 +203,52 @@ func (s *Stripe) GetSubscription(ctx context.Context, agentID, accountID string)
 // over other statuses; among ties, latest current_period_end wins;
 // further ties broken by subscription ID for stable output.
 func (s *Stripe) toClaim(search stripeCustomerSearch) *auth.SubscriptionClaim {
-	var best *stripeSubscription
+	var (
+		best        *stripeSubscription
+		bestCust    string
+		matchCount  int
+	)
 	for i := range search.Data {
 		for j := range search.Data[i].Subscriptions.Data {
 			cand := &search.Data[i].Subscriptions.Data[j]
 			if betterSubscription(best, cand) {
 				best = cand
+				bestCust = search.Data[i].ID
 			}
 		}
+		matchCount++
 	}
 	if best == nil {
 		return nil
 	}
 
+	status := stripeStatusToClaim(best.Status)
+	expiresAt := time.Time{}
+	if best.CurrentPeriodEnd > 0 {
+		expiresAt = time.Unix(best.CurrentPeriodEnd, 0).UTC()
+	}
+	// Stripe transitions to "canceled" the moment the merchant or user
+	// cancels, even when the customer has paid through current_period_end
+	// and is still entitled. Treat those as Active (with a cancelled
+	// metadata flag) so consumers don't revoke access early — same shape
+	// as cancel_at_period_end on a still-active subscription.
+	cancelledStillEntitled := status == auth.SubscriptionStatusCancelled &&
+		!expiresAt.IsZero() && expiresAt.After(s.now())
+	if cancelledStillEntitled {
+		status = auth.SubscriptionStatusActive
+	}
+
 	claim := &auth.SubscriptionClaim{
-		Status:   stripeStatusToClaim(best.Status),
+		Status:   status,
 		Provider: stripeProvider,
 		Plan:     subscriptionPlan(best),
 	}
-	if best.CurrentPeriodEnd > 0 {
-		claim.ExpiresAt = time.Unix(best.CurrentPeriodEnd, 0).UTC()
+	if !expiresAt.IsZero() {
+		claim.ExpiresAt = expiresAt
 	}
-	if best.CancelAtPeriodEnd {
-		// Surface the cancel-at-period-end flag for consumers that want
-		// to render renewal-status UI; the headline Status remains
+	if best.CancelAtPeriodEnd || cancelledStillEntitled {
+		// Surface the cancellation intent for consumers that want to
+		// render renewal-status UI; the headline Status remains
 		// active/trialing until the period actually lapses.
 		if claim.Metadata == nil {
 			claim.Metadata = map[string]any{}
@@ -225,6 +260,21 @@ func (s *Stripe) toClaim(search stripeCustomerSearch) *auth.SubscriptionClaim {
 			claim.Metadata = map[string]any{}
 		}
 		claim.Metadata["subscription_id"] = best.ID
+	}
+	if bestCust != "" {
+		if claim.Metadata == nil {
+			claim.Metadata = map[string]any{}
+		}
+		claim.Metadata["customer_id"] = bestCust
+	}
+	if matchCount > 1 {
+		// Multiple customers with the same metadata key indicate a
+		// data-quality issue (split-brain billing setup, migration
+		// artifact). Surface it so consumers can detect and fix.
+		if claim.Metadata == nil {
+			claim.Metadata = map[string]any{}
+		}
+		claim.Metadata["customer_match_count"] = matchCount
 	}
 	return claim
 }
