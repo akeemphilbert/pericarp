@@ -41,6 +41,17 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-04-25: SubscriptionService adapters — RevenueCat / Stripe / GORM (Stories 2-4 of #24)
+
+- `pkg/auth/infrastructure/subscription/` ships three adapters implementing `application.SubscriptionService`. Each returns `(nil, nil)` for the canonical "no record" answer and an error only for transport / decode / config failures
+- **RevenueCat** (`revenuecat.go`): `GET /v1/subscribers/{agent_id}`, latest-expiring entitlement wins, lifetime entitlements (null `expires_date`) supersede time-bounded. Status switch consults the matched subscription row first then falls back to scanning all rows so multi-SKU offerings / upgrades / promo grants don't silently default to Active. Honors `unsubscribe_detected_at` so refunded lifetimes flip to Inactive
+- **Stripe** (`stripe.go`): `customers/search?query=metadata['agent_id']:'...'&expand[]=data.subscriptions`. Selection ranks active/trialing > past_due > canceled. The non-obvious case: Stripe transitions to `canceled` immediately when the merchant cancels even with `current_period_end` in the future and the customer still entitled — adapter keeps that as Active with `cancel_at_period_end=true` in Metadata until the period actually lapses, mirroring the existing treatment of cancel_at_period_end on still-active subscriptions. Stamps `customer_id` and `customer_match_count` to make split-brain billing setups (multiple customers per agent) detectable
+- **GORM** (`gorm.go`): default schema `SubscriptionRecord`. **Strict account scoping** is the load-bearing decision: when a non-empty accountID is requested, no agent-only fallback runs — the original implementation had a fallback that would silently return a paid personal-account subscription to a B2B/team token (caught by /pr-review's silent-failure-hunter). Returned claim's Status is validated via `SubscriptionStatus.Valid()` so a typo'd row or buggy resolver lands as an error, not a JWT claim
+- All three adapters take a configurable HTTP/DB seam plus relevant nil-safe option wrappers; tests use `httptest.Server` (REST) or in-memory SQLite via `glebarez/sqlite` (GORM)
+- **Why:** Closes the implementation half of issue #24 — the SubscriptionService interface from Story 1 needs concrete backends to be useful. Apollo's existing `infrastructure.Subscription` projection is a drop-in target for the GORM adapter; finexity and future MCP tiers can pick whichever fits their billing stack
+
+---
+
 ### 2026-04-25: SubscriptionClaim.IsActive honors ExpiresAt (PR #25 review)
 
 - `IsActive()` now returns false when `ExpiresAt` is non-zero and in the past, regardless of `Status`. Previously the field was carried through the JWT and into `ReissueToken` snapshots but never consulted, so a stale claim held across an account-switch could grant paid access past the provider-attested expiry. Zero `ExpiresAt` is still treated as "no expiry expressed" so providers without a fixed expiry (lifetime entitlements) keep working
