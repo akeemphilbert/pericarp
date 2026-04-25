@@ -108,6 +108,19 @@ const (
 	RoleAdmin  = "admin"
 )
 
+// Built-in credential providers.
+const (
+	// ProviderPassword identifies username/password credentials. The
+	// credential's provider_user_id is the lowercased email; the bcrypt
+	// hash lives in the linked PasswordCredential row.
+	ProviderPassword = "password"
+)
+
+// Password hashing algorithms stored on a PasswordCredential row.
+const (
+	PasswordAlgorithmBcrypt = "bcrypt"
+)
+
 // Agent status constants.
 const (
 	AgentStatusActive      = "active"
@@ -124,13 +137,14 @@ const (
 
 // Event type patterns for LIKE queries.
 const (
-	PatternAgent      = "Agent.%"
-	PatternPolicy     = "Policy.%"
-	PatternRole       = "Role.%"
-	PatternAccount    = "Account.%"
-	PatternCredential = "Credential.%"
-	PatternSession    = "Session.%"
-	PatternInvite     = "Invite.%"
+	PatternAgent              = "Agent.%"
+	PatternPolicy             = "Policy.%"
+	PatternRole               = "Role.%"
+	PatternAccount            = "Account.%"
+	PatternCredential         = "Credential.%"
+	PatternPasswordCredential = "PasswordCredential.%"
+	PatternSession            = "Session.%"
+	PatternInvite             = "Invite.%"
 )
 
 // Event type constants for auth domain events.
@@ -171,6 +185,9 @@ const (
 	EventTypeCredentialUsed        = "Credential.Used"
 	EventTypeCredentialDeactivated = "Credential.Deactivated"
 	EventTypeCredentialReactivated = "Credential.Reactivated"
+
+	EventTypePasswordCredentialCreated = "PasswordCredential.Created"
+	EventTypePasswordUpdated           = "PasswordCredential.Updated"
 
 	EventTypeSessionCreated       = "Session.Created"
 	EventTypeSessionTouched       = "Session.Touched"

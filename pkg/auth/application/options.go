@@ -1,6 +1,7 @@
 package application
 
 import (
+	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
 	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 )
 
@@ -53,5 +54,26 @@ func WithJWTService(js JWTService) AuthServiceOption {
 		if js != nil {
 			s.jwtService = js
 		}
+	}
+}
+
+// WithPasswordCredentialRepository wires a PasswordCredentialRepository for
+// password authentication support. The password methods on
+// AuthenticationService return ErrPasswordSupportNotConfigured until this
+// is set.
+func WithPasswordCredentialRepository(repo repositories.PasswordCredentialRepository) AuthServiceOption {
+	return func(s *DefaultAuthenticationService) {
+		if repo != nil {
+			s.passwordCredentials = repo
+		}
+	}
+}
+
+// WithBcryptCost overrides the bcrypt cost used when hashing newly
+// registered or updated passwords. A non-positive value falls back to
+// bcrypt.DefaultCost.
+func WithBcryptCost(cost int) AuthServiceOption {
+	return func(s *DefaultAuthenticationService) {
+		s.bcryptCost = cost
 	}
 }

@@ -107,6 +107,26 @@ type CredentialRepository interface {
 	FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.Credential], error)
 }
 
+// PasswordCredentialRepository defines the interface for PasswordCredential
+// aggregate persistence. PasswordCredentials are linked 1:1 to a Credential
+// of provider="password" by CredentialID.
+type PasswordCredentialRepository interface {
+	// Save persists the PasswordCredential aggregate state.
+	Save(ctx context.Context, credential *entities.PasswordCredential) error
+
+	// FindByID retrieves a PasswordCredential by its ID.
+	// Returns (nil, nil) if not found.
+	FindByID(ctx context.Context, id string) (*entities.PasswordCredential, error)
+
+	// FindByCredentialID retrieves the PasswordCredential linked to the
+	// given Credential. Returns (nil, nil) if not found.
+	FindByCredentialID(ctx context.Context, credentialID string) (*entities.PasswordCredential, error)
+
+	// Delete removes the PasswordCredential row linked to the given
+	// Credential. A no-op (returns nil) when no row exists.
+	Delete(ctx context.Context, credentialID string) error
+}
+
 // InviteRepository defines the interface for Invite aggregate persistence.
 type InviteRepository interface {
 	// Save persists the Invite aggregate state.

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
@@ -16,14 +17,17 @@ import (
 
 // Sentinel errors for the authentication domain.
 var (
-	ErrInvalidProvider    = errors.New("authentication: invalid provider")
-	ErrInvalidState       = errors.New("authentication: invalid state parameter")
-	ErrCodeExchangeFailed = errors.New("authentication: code exchange failed")
-	ErrSessionNotFound    = errors.New("authentication: session not found")
-	ErrSessionExpired     = errors.New("authentication: session expired")
-	ErrSessionRevoked     = errors.New("authentication: session revoked")
-	ErrTokenRefreshFailed = errors.New("authentication: token refresh failed")
-	ErrCredentialNotFound = errors.New("authentication: credential not found")
+	ErrInvalidProvider               = errors.New("authentication: invalid provider")
+	ErrInvalidState                  = errors.New("authentication: invalid state parameter")
+	ErrCodeExchangeFailed            = errors.New("authentication: code exchange failed")
+	ErrSessionNotFound               = errors.New("authentication: session not found")
+	ErrSessionExpired                = errors.New("authentication: session expired")
+	ErrSessionRevoked                = errors.New("authentication: session revoked")
+	ErrTokenRefreshFailed            = errors.New("authentication: token refresh failed")
+	ErrCredentialNotFound            = errors.New("authentication: credential not found")
+	ErrEmailAlreadyTaken             = errors.New("authentication: email already registered with a password")
+	ErrPasswordSupportNotConfigured  = errors.New("authentication: password support not configured")
+	ErrPasswordCredentialMissing     = errors.New("authentication: password credential not found for agent")
 )
 
 // AuthRequest represents the result of initiating an OAuth authorization flow.
@@ -114,6 +118,27 @@ type AuthenticationService interface {
 	// For new users, a personal Account is also created with the agent as owner.
 	FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
 
+	// RegisterPassword creates a new Agent + personal Account + Credential
+	// (provider="password") + PasswordCredential. Returns ErrEmailAlreadyTaken
+	// when a password credential for the email already exists.
+	RegisterPassword(ctx context.Context, email, displayName, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error)
+
+	// VerifyPassword authenticates an email + plaintext pair against a stored
+	// PasswordCredential and returns the associated Agent, Credential and
+	// (optional) personal Account on success. To prevent account enumeration,
+	// both wrong-password and unknown-email cases return ErrInvalidPassword.
+	VerifyPassword(ctx context.Context, email, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error)
+
+	// ImportPasswordCredential imports an already-hashed legacy bcrypt blob
+	// against a caller-supplied agentID/accountID. Idempotent on
+	// (provider="password", lower(email)). Used for bulk migration where
+	// existing foreign keys must remain valid.
+	ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string) error
+
+	// UpdatePassword rotates the stored password for the given agent.
+	// Verifies oldPlaintext before applying the change.
+	UpdatePassword(ctx context.Context, agentID, oldPlaintext, newPlaintext string) error
+
 	// IssueIdentityToken issues a signed JWT for the given agent.
 	// Returns ("", nil) if no JWTService is configured.
 	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
@@ -140,16 +165,18 @@ type OAuthProviderRegistry map[string]OAuthProvider
 // DefaultAuthenticationService implements AuthenticationService using OAuth providers
 // and domain aggregates.
 type DefaultAuthenticationService struct {
-	providers     OAuthProviderRegistry
-	agents        repositories.AgentRepository
-	credentials   repositories.CredentialRepository
-	sessions      repositories.AuthSessionRepository
-	accounts      repositories.AccountRepository
-	eventStore    esDomain.EventStore
-	tokens        TokenStore
-	authorization AuthorizationChecker
-	logger        Logger
-	jwtService    JWTService
+	providers           OAuthProviderRegistry
+	agents              repositories.AgentRepository
+	credentials         repositories.CredentialRepository
+	sessions            repositories.AuthSessionRepository
+	accounts            repositories.AccountRepository
+	passwordCredentials repositories.PasswordCredentialRepository
+	eventStore          esDomain.EventStore
+	tokens              TokenStore
+	authorization       AuthorizationChecker
+	logger              Logger
+	jwtService          JWTService
+	bcryptCost          int
 }
 
 // NewDefaultAuthenticationService creates a new DefaultAuthenticationService.
@@ -488,3 +515,307 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 	}
 	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID)
 }
+
+// normalizeEmail returns the canonical form of an email used as the
+// password credential's provider_user_id.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// RegisterPassword creates a new Agent + personal Account + Credential
+// (provider="password") + PasswordCredential.
+func (s *DefaultAuthenticationService) RegisterPassword(ctx context.Context, email, displayName, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	if s.passwordCredentials == nil {
+		return nil, nil, nil, ErrPasswordSupportNotConfigured
+	}
+	normalizedEmail := normalizeEmail(email)
+	if normalizedEmail == "" {
+		return nil, nil, nil, fmt.Errorf("authentication: email must not be empty")
+	}
+	if plaintext == "" {
+		return nil, nil, nil, fmt.Errorf("authentication: password must not be empty")
+	}
+
+	existing, err := s.credentials.FindByProvider(ctx, entities.ProviderPassword, normalizedEmail)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: lookup existing credential: %w", err)
+	}
+	if existing != nil {
+		return nil, nil, nil, ErrEmailAlreadyTaken
+	}
+
+	algorithm, hash, err := hashPassword(plaintext, s.bcryptCost)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: hash password: %w", err)
+	}
+
+	agentID := ksuid.New().String()
+	agent, err := new(entities.Agent).With(agentID, displayName, entities.AgentTypePerson)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create agent: %w", err)
+	}
+
+	accountID := ksuid.New().String()
+	account, err := new(entities.Account).With(accountID, displayName+"'s Account", entities.AccountTypePersonal)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create account: %w", err)
+	}
+	if err := account.AddMember(agentID, entities.RoleOwner); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: add account member: %w", err)
+	}
+
+	credentialID := ksuid.New().String()
+	credential, err := new(entities.Credential).With(credentialID, agentID, entities.ProviderPassword, normalizedEmail, normalizedEmail, displayName)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create credential: %w", err)
+	}
+
+	passwordCredentialID := ksuid.New().String()
+	passwordCredential, err := new(entities.PasswordCredential).With(passwordCredentialID, credentialID, algorithm, hash)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create password credential: %w", err)
+	}
+
+	if s.eventStore != nil {
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		if err := uow.Track(agent, account, credential, passwordCredential); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: track entities: %w", err)
+		}
+		if err := uow.Commit(ctx); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: commit unit of work: %w", err)
+		}
+	}
+
+	if err := s.agents.Save(ctx, agent); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: save agent: %w", err)
+	}
+	if s.accounts != nil {
+		if err := s.accounts.Save(ctx, account); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: save account: %w", err)
+		}
+		if err := s.accounts.SaveMember(ctx, accountID, agentID, entities.RoleOwner); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: save account member: %w", err)
+		}
+	}
+	if err := s.credentials.Save(ctx, credential); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: save credential: %w", err)
+	}
+	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: save password credential: %w", err)
+	}
+
+	return agent, credential, account, nil
+}
+
+// VerifyPassword authenticates an email + plaintext pair. Returns
+// ErrInvalidPassword for both wrong-password and unknown-email so callers
+// cannot enumerate registered emails.
+func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	if s.passwordCredentials == nil {
+		return nil, nil, nil, ErrPasswordSupportNotConfigured
+	}
+	normalizedEmail := normalizeEmail(email)
+
+	credential, err := s.credentials.FindByProvider(ctx, entities.ProviderPassword, normalizedEmail)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: lookup credential: %w", err)
+	}
+	if credential == nil || !credential.Active() {
+		// Constant-time-ish: still hash the plaintext against a junk hash so
+		// failed lookups don't return measurably faster than failed compares.
+		// Errors from the dummy compare are discarded.
+		_ = verifyPassword(entities.PasswordAlgorithmBcrypt, dummyBcryptHash, plaintext)
+		s.logger.Info(ctx, "password verify: no active credential", "email", normalizedEmail)
+		return nil, nil, nil, ErrInvalidPassword
+	}
+
+	passwordCredential, err := s.passwordCredentials.FindByCredentialID(ctx, credential.GetID())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: lookup password credential: %w", err)
+	}
+	if passwordCredential == nil {
+		_ = verifyPassword(entities.PasswordAlgorithmBcrypt, dummyBcryptHash, plaintext)
+		s.logger.Info(ctx, "password verify: missing password row", "credential_id", credential.GetID())
+		return nil, nil, nil, ErrInvalidPassword
+	}
+
+	if err := verifyPassword(passwordCredential.Algorithm(), passwordCredential.Hash(), plaintext); err != nil {
+		if errors.Is(err, ErrInvalidPassword) {
+			return nil, nil, nil, ErrInvalidPassword
+		}
+		return nil, nil, nil, fmt.Errorf("authentication: verify password: %w", err)
+	}
+
+	agent, err := s.agents.FindByID(ctx, credential.AgentID())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: load agent: %w", err)
+	}
+	if agent == nil {
+		return nil, nil, nil, fmt.Errorf("authentication: agent %s not found", credential.AgentID())
+	}
+
+	var account *entities.Account
+	if s.accounts != nil {
+		account, err = s.accounts.FindPersonalByMember(ctx, agent.GetID())
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: load personal account: %w", err)
+		}
+	}
+
+	if err := credential.MarkUsed(); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: mark credential used: %w", err)
+	}
+	if err := s.credentials.Save(ctx, credential); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: save credential: %w", err)
+	}
+	passwordCredential.MarkVerified()
+	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: save password credential: %w", err)
+	}
+
+	return agent, credential, account, nil
+}
+
+// ImportPasswordCredential imports a pre-hashed bcrypt blob against existing
+// agent/account IDs. Idempotent on (provider="password", lower(email)).
+func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string) error {
+	if s.passwordCredentials == nil {
+		return ErrPasswordSupportNotConfigured
+	}
+	normalizedEmail := normalizeEmail(email)
+	if normalizedEmail == "" {
+		return fmt.Errorf("authentication: email must not be empty")
+	}
+	if bcryptHash == "" {
+		return fmt.Errorf("authentication: bcrypt hash must not be empty")
+	}
+	if agentID == "" {
+		return fmt.Errorf("authentication: agent ID must not be empty")
+	}
+
+	existing, err := s.credentials.FindByProvider(ctx, entities.ProviderPassword, normalizedEmail)
+	if err != nil {
+		return fmt.Errorf("authentication: lookup credential: %w", err)
+	}
+	if existing != nil {
+		return nil
+	}
+
+	agent, err := s.agents.FindByID(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("authentication: load agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("authentication: agent %s not found", agentID)
+	}
+	if accountID != "" && s.accounts != nil {
+		account, err := s.accounts.FindByID(ctx, accountID)
+		if err != nil {
+			return fmt.Errorf("authentication: load account: %w", err)
+		}
+		if account == nil {
+			return fmt.Errorf("authentication: account %s not found", accountID)
+		}
+	}
+
+	credentialID := ksuid.New().String()
+	credential, err := new(entities.Credential).With(credentialID, agentID, entities.ProviderPassword, normalizedEmail, normalizedEmail, displayName)
+	if err != nil {
+		return fmt.Errorf("authentication: create credential: %w", err)
+	}
+
+	passwordCredentialID := ksuid.New().String()
+	passwordCredential, err := new(entities.PasswordCredential).With(passwordCredentialID, credentialID, entities.PasswordAlgorithmBcrypt, bcryptHash)
+	if err != nil {
+		return fmt.Errorf("authentication: create password credential: %w", err)
+	}
+
+	if s.eventStore != nil {
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		if err := uow.Track(credential, passwordCredential); err != nil {
+			return fmt.Errorf("authentication: track entities: %w", err)
+		}
+		if err := uow.Commit(ctx); err != nil {
+			return fmt.Errorf("authentication: commit unit of work: %w", err)
+		}
+	}
+
+	if err := s.credentials.Save(ctx, credential); err != nil {
+		return fmt.Errorf("authentication: save credential: %w", err)
+	}
+	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
+		return fmt.Errorf("authentication: save password credential: %w", err)
+	}
+	return nil
+}
+
+// UpdatePassword rotates the stored password for the given agent.
+func (s *DefaultAuthenticationService) UpdatePassword(ctx context.Context, agentID, oldPlaintext, newPlaintext string) error {
+	if s.passwordCredentials == nil {
+		return ErrPasswordSupportNotConfigured
+	}
+	if agentID == "" {
+		return fmt.Errorf("authentication: agent ID must not be empty")
+	}
+	if newPlaintext == "" {
+		return fmt.Errorf("authentication: new password must not be empty")
+	}
+
+	creds, err := s.credentials.FindByAgent(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("authentication: lookup credentials: %w", err)
+	}
+	var passwordCredentialEntity *entities.Credential
+	for _, c := range creds {
+		if c.Provider() == entities.ProviderPassword && c.Active() {
+			passwordCredentialEntity = c
+			break
+		}
+	}
+	if passwordCredentialEntity == nil {
+		return ErrPasswordCredentialMissing
+	}
+
+	pc, err := s.passwordCredentials.FindByCredentialID(ctx, passwordCredentialEntity.GetID())
+	if err != nil {
+		return fmt.Errorf("authentication: lookup password credential: %w", err)
+	}
+	if pc == nil {
+		return ErrPasswordCredentialMissing
+	}
+
+	if err := verifyPassword(pc.Algorithm(), pc.Hash(), oldPlaintext); err != nil {
+		if errors.Is(err, ErrInvalidPassword) {
+			return ErrInvalidPassword
+		}
+		return fmt.Errorf("authentication: verify old password: %w", err)
+	}
+
+	algorithm, hash, err := hashPassword(newPlaintext, s.bcryptCost)
+	if err != nil {
+		return fmt.Errorf("authentication: hash new password: %w", err)
+	}
+	if err := pc.Update(algorithm, hash); err != nil {
+		return fmt.Errorf("authentication: update password credential: %w", err)
+	}
+
+	// Note: we deliberately do not commit a UnitOfWork here. The aggregate
+	// was rehydrated from the read-model via Restore(), which sets
+	// sequenceNo=0; appending to the event store with expectedVersion=0
+	// would conflict with the live history. This matches the existing
+	// pattern in FindOrCreateAgent's MarkUsed path (read-model-only
+	// mutations on rehydrated aggregates skip the event store).
+	if err := s.passwordCredentials.Save(ctx, pc); err != nil {
+		return fmt.Errorf("authentication: save password credential: %w", err)
+	}
+	return nil
+}
+
+// dummyBcryptHash is a real bcrypt(DefaultCost) hash used to keep
+// VerifyPassword's timing roughly constant when no credential row exists
+// for the given email. Generated once via bcrypt.GenerateFromPassword over
+// an unguessable plaintext so it parses correctly and forces a real
+// CompareHashAndPassword cycle. A unit test asserts that comparing it
+// returns ErrMismatchedHashAndPassword (not a parse error) so the timing
+// shield does not regress to a no-op.
+const dummyBcryptHash = "$2a$10$EEI56WhQ.0l6UnEoiuE3bOZM7ADLEEdvDaI6KNGpodfiLnQnL7kbO"

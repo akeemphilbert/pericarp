@@ -1,0 +1,50 @@
+package application
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// ErrInvalidPassword is returned when a plaintext password fails to match
+// the stored hash. To avoid revealing which emails are registered,
+// VerifyPassword also returns this sentinel when no matching credential is
+// found at all.
+var ErrInvalidPassword = errors.New("authentication: invalid password")
+
+// hashPassword produces an algorithm identifier and hash for the given
+// plaintext using bcrypt at the requested cost. cost <= 0 selects
+// bcrypt.DefaultCost.
+func hashPassword(plaintext string, cost int) (algorithm, hash string, err error) {
+	if cost <= 0 {
+		cost = bcrypt.DefaultCost
+	}
+	out, err := bcrypt.GenerateFromPassword([]byte(plaintext), cost)
+	if err != nil {
+		return "", "", fmt.Errorf("bcrypt hash: %w", err)
+	}
+	return entities.PasswordAlgorithmBcrypt, string(out), nil
+}
+
+// verifyPassword compares plaintext against the stored hash for the named
+// algorithm. Returns entities.ErrInvalidPassword on mismatch and a wrapped
+// error if the algorithm is unsupported. Comparison errors other than
+// mismatch (e.g. corrupt hash) are surfaced as-is so the caller can
+// distinguish them in logs without leaking detail to end users.
+func verifyPassword(algorithm, hash, plaintext string) error {
+	switch algorithm {
+	case entities.PasswordAlgorithmBcrypt:
+		err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext))
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+			return ErrInvalidPassword
+		}
+		return fmt.Errorf("bcrypt compare: %w", err)
+	default:
+		return fmt.Errorf("unsupported password algorithm: %q", algorithm)
+	}
+}

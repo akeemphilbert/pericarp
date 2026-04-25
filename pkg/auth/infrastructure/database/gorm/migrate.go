@@ -10,6 +10,7 @@ func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&models.AgentModel{},
 		&models.CredentialModel{},
+		&models.PasswordCredentialModel{},
 		&models.AuthSessionModel{},
 		&models.AccountModel{},
 		&models.AccountMemberModel{},
