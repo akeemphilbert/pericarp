@@ -157,11 +157,15 @@ func TestNetSuite_Exchange_HappyPath(t *testing.T) {
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			t.Fatalf("read token body: %v", err)
+			t.Errorf("read token body: %v", err)
+			http.Error(w, "read body", http.StatusInternalServerError)
+			return
 		}
 		form, err := url.ParseQuery(string(body))
 		if err != nil {
-			t.Fatalf("parse token form: %v", err)
+			t.Errorf("parse token form: %v", err)
+			http.Error(w, "parse form", http.StatusInternalServerError)
+			return
 		}
 		if got := form.Get("grant_type"); got != "authorization_code" {
 			t.Errorf("grant_type = %q, want authorization_code", got)
@@ -702,7 +706,7 @@ func writeTokenResponse(t *testing.T, w http.ResponseWriter, body netSuiteTokenS
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		t.Fatalf("encode token response: %v", err)
+		t.Errorf("encode token response: %v", err)
 	}
 }
 
@@ -711,6 +715,6 @@ func writeUserInfoResponse(t *testing.T, w http.ResponseWriter, body netSuiteUse
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(body); err != nil {
-		t.Fatalf("encode userinfo response: %v", err)
+		t.Errorf("encode userinfo response: %v", err)
 	}
 }
