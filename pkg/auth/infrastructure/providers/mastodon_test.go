@@ -434,26 +434,6 @@ func TestMastodonRegisterApp_ServerError(t *testing.T) {
 	}
 }
 
-// TestMastodonPKCEChallenge_MatchesApplication is the load-bearing parity
-// invariant: Mastodon's flow binding key (sha256 of verifier) must match the
-// challenge produced by application.GenerateCodeChallenge for the same
-// verifier. If these ever diverge, every Mastodon Exchange would silently
-// return ErrMastodonInstanceRequired despite a valid binding.
-func TestMastodonPKCEChallenge_MatchesApplication(t *testing.T) {
-	t.Parallel()
-
-	verifiers := []string{
-		"short",
-		"43-character-base64url-style-pkce-verifier-1234",
-		"another-verifier-with-padding-style-bytes",
-	}
-	for _, v := range verifiers {
-		if got, want := application.GenerateCodeChallenge(v), application.GenerateCodeChallenge(v); got != want {
-			t.Errorf("application.GenerateCodeChallenge(%q) = %q, want %q (matches application.GenerateCodeChallenge)", v, got, want)
-		}
-	}
-}
-
 func TestMastodonHostNormalization(t *testing.T) {
 	t.Parallel()
 

@@ -155,7 +155,7 @@ type Mastodon struct {
 	// flowConsumed records challenges that have already been taken so a
 	// duplicate Exchange call can return ErrMastodonFlowAlreadyConsumed
 	// instead of conflating with "never bound." TTL'd via tombstoneTTL.
-	flowConsumed sync.Map // codeChallenge -> consumedAt
+	flowConsumed sync.Map // codeChallenge -> *flowTombstone
 	tombstoneTTL time.Duration
 	registerSF   singleflight.Group // dedupes concurrent /api/v1/apps registrations per host
 	bindCounter  atomic.Uint64      // drives probabilistic GC sweeps in bindFlow

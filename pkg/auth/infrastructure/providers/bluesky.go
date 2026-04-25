@@ -356,12 +356,12 @@ func (b *Bluesky) RefreshToken(ctx context.Context, refreshToken string) (*appli
 	if refreshToken == "" {
 		return nil, application.ErrTokenRefreshFailed
 	}
-	// Refresh requires the original PDS's token endpoint. The token endpoint
-	// is encoded in the refresh token by AT Protocol's spec? No — the spec
-	// requires the caller to know which auth server issued the token. We
-	// require the caller to pass refreshToken in the format pdsURL|tokenURL|opaqueRefresh
-	// since the OAuthProvider.RefreshToken signature does not give us anywhere
-	// else to thread it. This is documented on the godoc.
+	// Refresh requires the original PDS's token endpoint and AS issuer.
+	// OAuthProvider.RefreshToken has only a single refreshToken parameter, so
+	// we require callers to pass the wrapped Bluesky refresh token format
+	// emitted by Exchange via encodeBlueskyRefreshToken: a `btr.v2.`-prefixed
+	// value that base64url-encodes pdsURL|tokenURL|issuer|opaqueRefresh.
+	// decodeBlueskyRefreshToken below unwraps it; any other shape is rejected.
 	pdsURL, tokenURL, issuer, opaque, err := decodeBlueskyRefreshToken(refreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("bluesky: refresh token format: %w (issued by Exchange)", err)
