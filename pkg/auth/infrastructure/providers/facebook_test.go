@@ -44,6 +44,10 @@ func TestFacebookAuthCodeURL(t *testing.T) {
 		t.Fatalf("AuthCodeURL returned unparseable URL: %v", err)
 	}
 
+	if parsed.Path != "/dialog/oauth" {
+		t.Errorf("AuthCodeURL path = %q, want /dialog/oauth (a regression here would point users at the wrong endpoint)", parsed.Path)
+	}
+
 	q := parsed.Query()
 	cases := map[string]string{
 		"client_id":             "app-1",
@@ -269,6 +273,156 @@ func TestFacebookName(t *testing.T) {
 	f := NewFacebook(FacebookConfig{})
 	if got := f.Name(); got != "facebook" {
 		t.Errorf("Name() = %q, want facebook", got)
+	}
+}
+
+func TestFacebookDefaultScopes(t *testing.T) {
+	t.Parallel()
+
+	f := NewFacebook(FacebookConfig{ClientID: "app-1", ClientSecret: "secret"})
+	if got, want := strings.Join(f.scopes, ","), "email,public_profile"; got != want {
+		t.Errorf("default scopes = %q, want %q", got, want)
+	}
+}
+
+func TestFacebookExchange_TokenResponseMissingAccessToken(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token_type":"bearer","expires_in":3600}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := newFacebookForTest(FacebookConfig{ClientID: "app-1", ClientSecret: "secret"}, srv.URL)
+
+	_, err := f.Exchange(context.Background(), "code", "verifier", "https://example.com/cb")
+	if err == nil {
+		t.Fatal("Exchange returned nil error when token response had no access_token")
+	}
+	if !strings.Contains(err.Error(), "missing access_token") {
+		t.Errorf("error = %q, want it to mention missing access_token", err.Error())
+	}
+}
+
+func TestFacebookExchange_MalformedTokenJSON(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not-json`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := newFacebookForTest(FacebookConfig{ClientID: "app-1", ClientSecret: "secret"}, srv.URL)
+
+	_, err := f.Exchange(context.Background(), "code", "verifier", "https://example.com/cb")
+	if err == nil {
+		t.Fatal("Exchange returned nil error for malformed token JSON")
+	}
+	if !strings.Contains(err.Error(), "parse token response") {
+		t.Errorf("error = %q, want parse token response", err.Error())
+	}
+}
+
+func TestFacebookExchange_MalformedUserInfoJSON(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/oauth/access_token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"fb-access","token_type":"bearer","expires_in":3600}`))
+	})
+	mux.HandleFunc("/me", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`also-not-json`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := newFacebookForTest(FacebookConfig{ClientID: "app-1", ClientSecret: "secret"}, srv.URL)
+
+	_, err := f.Exchange(context.Background(), "code", "verifier", "https://example.com/cb")
+	if err == nil {
+		t.Fatal("Exchange returned nil error for malformed userinfo JSON")
+	}
+	if !strings.Contains(err.Error(), "parse userinfo response") {
+		t.Errorf("error = %q, want parse userinfo response", err.Error())
+	}
+}
+
+func TestFacebookRevokeToken_Non200Status(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v18.0/me/permissions", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"message":"Invalid OAuth access token","type":"OAuthException","code":190}}`, http.StatusUnauthorized)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := newFacebookForTest(FacebookConfig{ClientID: "app-1", ClientSecret: "secret"}, srv.URL)
+
+	err := f.RevokeToken(context.Background(), "fb-access")
+	if err == nil {
+		t.Fatal("RevokeToken returned nil error for HTTP 401")
+	}
+	if !strings.Contains(err.Error(), "status 401") {
+		t.Errorf("error = %q, want status 401", err.Error())
+	}
+}
+
+func TestFacebookRevokeToken_UnparseableBody(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v18.0/me/permissions", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html>maintenance page</html>`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := newFacebookForTest(FacebookConfig{ClientID: "app-1", ClientSecret: "secret"}, srv.URL)
+
+	err := f.RevokeToken(context.Background(), "fb-access")
+	if err == nil {
+		t.Fatal("RevokeToken returned nil error when 200 body was not JSON; this would be the silent-failure case")
+	}
+	if !strings.Contains(err.Error(), "unparseable body") {
+		t.Errorf("error = %q, want it to mention unparseable body", err.Error())
+	}
+}
+
+func TestFacebookRevokeToken_URLEncodesToken(t *testing.T) {
+	t.Parallel()
+
+	const tokenWithSpecialChars = "fb/access+token=" // +, /, = are all reserved
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v18.0/me/permissions", func(w http.ResponseWriter, r *http.Request) {
+		// r.URL.Query().Get auto-decodes; verify the server sees the original token, not the percent-encoded form.
+		if got := r.URL.Query().Get("access_token"); got != tokenWithSpecialChars {
+			t.Errorf("revoke access_token (decoded) = %q, want %q", got, tokenWithSpecialChars)
+		}
+		// Sanity: the raw query should contain percent-encoding, not raw '+' (which decodes to space).
+		if !strings.Contains(r.URL.RawQuery, "%2F") || !strings.Contains(r.URL.RawQuery, "%2B") {
+			t.Errorf("RawQuery = %q, expected percent-encoded reserved characters", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	f := newFacebookForTest(FacebookConfig{ClientID: "app-1", ClientSecret: "secret"}, srv.URL)
+
+	if err := f.RevokeToken(context.Background(), tokenWithSpecialChars); err != nil {
+		t.Fatalf("RevokeToken returned error: %v", err)
 	}
 }
 

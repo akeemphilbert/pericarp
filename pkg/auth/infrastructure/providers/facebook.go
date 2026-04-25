@@ -24,8 +24,11 @@ const (
 )
 
 // ErrFacebookIDTokenUnsupported indicates that Facebook's standard Login flow
-// does not issue OIDC ID tokens. Callers should resolve user identity via
-// Exchange (which calls the Graph API) instead of relying on ValidateIDToken.
+// does not issue OIDC ID tokens. Callers MUST distinguish this case from a
+// real validation failure using errors.Is — treating any non-nil error from
+// ValidateIDToken as an authentication failure would incorrectly reject every
+// Facebook login. On errors.Is(err, ErrFacebookIDTokenUnsupported) the caller
+// should route to Exchange (which calls the Graph API) for identity resolution.
 var ErrFacebookIDTokenUnsupported = errors.New("facebook: ID tokens are not supported by Facebook Login; use Exchange to resolve user info")
 
 // FacebookConfig holds configuration for the Facebook OAuth provider.
@@ -150,8 +153,13 @@ func (f *Facebook) Exchange(ctx context.Context, code string, codeVerifier strin
 
 // RefreshToken returns application.ErrTokenRefreshFailed because Facebook
 // user-access tokens are not refreshable via the standard refresh_token grant.
-// Long-lived tokens are obtained server-side via Facebook's
-// fb_exchange_token flow, which is intentionally outside this interface.
+// Long-lived tokens are obtained server-side via Facebook's fb_exchange_token
+// flow, which is intentionally outside this interface.
+//
+// This is a permanent capability mismatch, not a transient failure: callers
+// SHOULD NOT retry. The issue #15 contract specifies this sentinel; if
+// retry-vs-permanent discrimination is needed across providers later, that
+// belongs in the application layer, not in this provider's contract.
 func (f *Facebook) RefreshToken(_ context.Context, _ string) (*application.AuthResult, error) {
 	return nil, application.ErrTokenRefreshFailed
 }
@@ -175,16 +183,24 @@ func (f *Facebook) RevokeToken(ctx context.Context, token string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("facebook: failed to read revoke response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("facebook: revoke failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Graph returns {"success": true} on success; treat anything else as an error.
+	// Graph returns {"success": true} on success. An unparseable 200 body is
+	// surfaced rather than swallowed — otherwise an HTML error page or a
+	// truncated response would silently look like success.
 	var result struct {
 		Success bool `json:"success"`
 	}
-	if err := json.Unmarshal(body, &result); err == nil && !result.Success {
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("facebook: revoke returned status 200 with unparseable body: %w (body=%q)", err, string(body))
+	}
+	if !result.Success {
 		return fmt.Errorf("facebook: revoke returned success=false: %s", string(body))
 	}
 	return nil
