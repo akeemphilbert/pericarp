@@ -119,13 +119,19 @@ func TestGORM_AccountScopedPreferredOverAgentOnly(t *testing.T) {
 	if claim.Plan != "team_free" {
 		t.Errorf("Plan = %q, want team_free (account-scoped row wins over agent-only)", claim.Plan)
 	}
+	if claim.Status != auth.SubscriptionStatusInactive {
+		// Pin the status to the team-scoped row so a regression that
+		// blends results between rows would surface here.
+		t.Errorf("Status = %q, want inactive (team row's status, not personal row's active)", claim.Status)
+	}
 }
 
-func TestGORM_NoAccountMatch_FallsBackToAgentOnly(t *testing.T) {
-	// When the requested account has no row but the agent has an
-	// agent-only row, the fallback returns it. (B2B account inherits
-	// the agent's personal subscription only when no team-scoped row
-	// exists.)
+func TestGORM_NonEmptyAccountWithNoMatch_ReturnsNil(t *testing.T) {
+	// Critical invariant: a paid personal-account subscription must NOT
+	// silently grant paid-tier access to a B2B/team account the same
+	// agent belongs to. When accountID is non-empty and no
+	// account-scoped row exists, the lookup returns (nil, nil) — it
+	// does not fall back to the agent-only personal row.
 	t.Parallel()
 
 	db := newGormTestDB(t)
@@ -143,11 +149,8 @@ func TestGORM_NoAccountMatch_FallsBackToAgentOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSubscription error: %v", err)
 	}
-	if claim == nil {
-		t.Fatal("expected agent-only fallback claim")
-	}
-	if claim.Plan != "personal" {
-		t.Errorf("Plan = %q, want personal", claim.Plan)
+	if claim != nil {
+		t.Errorf("expected nil claim, got %+v — personal subscription must not leak across account scope", claim)
 	}
 }
 
@@ -293,7 +296,7 @@ func TestGORM_EmptyAgentID_Errors(t *testing.T) {
 	}
 }
 
-func TestGORM_NilExpiresAt_ZeroOnClaim(t *testing.T) {
+func TestGORM_NilExpiresAt_ZeroOnClaim_ActiveLifetime(t *testing.T) {
 	t.Parallel()
 
 	db := newGormTestDB(t)
@@ -312,5 +315,170 @@ func TestGORM_NilExpiresAt_ZeroOnClaim(t *testing.T) {
 	}
 	if !claim.ExpiresAt.IsZero() {
 		t.Errorf("ExpiresAt = %v, want zero for nil row.expires_at", claim.ExpiresAt)
+	}
+	if !claim.IsActive() {
+		t.Error("IsActive() = false, want true for active lifetime claim with no expiry")
+	}
+}
+
+func TestGORM_NullAccountID_MatchedInAgentOnlyLookup(t *testing.T) {
+	// Schemas that store account_id as nullable rather than empty string
+	// must still match the agent-only fallback. Seed with raw SQL because
+	// the default *string SubscriptionRecord schema writes "" for the
+	// zero value.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	if err := db.Exec(
+		"INSERT INTO subscriptions (agent_id, account_id, status, plan, updated_at) VALUES (?, NULL, ?, ?, ?)",
+		"agent-1", "active", "pro", time.Now(),
+	).Error; err != nil {
+		t.Fatalf("seed via raw SQL: %v", err)
+	}
+
+	g := subscription.NewGORM(db)
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim == nil {
+		t.Fatal("expected claim for NULL account_id row")
+	}
+	if claim.Plan != "pro" {
+		t.Errorf("Plan = %q, want pro", claim.Plan)
+	}
+}
+
+func TestGORM_NoMatchAtAll_ReturnsNil(t *testing.T) {
+	// A different agent has a row; agent-1 has none. Both lookups must
+	// miss and the function returns (nil, nil) without surfacing
+	// gorm.ErrRecordNotFound to the caller.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	row := &subscription.SubscriptionRecord{
+		AgentID: "agent-other", AccountID: "team-1",
+		Status: "active", Plan: "pro", UpdatedAt: time.Now(),
+	}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	g := subscription.NewGORM(db)
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "team-1")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim != nil {
+		t.Errorf("expected nil claim, got %+v", claim)
+	}
+}
+
+func TestGORM_DBError_NotSwallowed(t *testing.T) {
+	// Closing the underlying DB causes any subsequent query to return a
+	// non-ErrRecordNotFound error. Adapter must propagate it (caller
+	// distinguishes "no record" from "lookup failed").
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get *sql.DB: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close DB: %v", err)
+	}
+
+	g := subscription.NewGORM(db)
+
+	for _, accountID := range []string{"", "team-1"} {
+		_, err := g.GetSubscription(context.Background(), "agent-1", accountID)
+		if err == nil {
+			t.Errorf("accountID=%q: expected error, got nil", accountID)
+		}
+	}
+}
+
+func TestGORM_RowProvider_WinsOverFallbackOption(t *testing.T) {
+	// Pin the documented contract: when the row's provider column is
+	// non-empty, WithGORMProvider's fallback is ignored.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	row := &subscription.SubscriptionRecord{
+		AgentID: "agent-1", Status: "active", Plan: "pro",
+		Provider: "stripe", UpdatedAt: time.Now(),
+	}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	g := subscription.NewGORM(db, subscription.WithGORMProvider("internal"))
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim.Provider != "stripe" {
+		t.Errorf("Provider = %q, want stripe (row value must win over WithGORMProvider fallback)", claim.Provider)
+	}
+}
+
+func TestGORM_EmptyAgentID_ResolverNotInvoked(t *testing.T) {
+	// The empty-agentID guard must run before resolver dispatch — a
+	// custom resolver should never see an empty agentID.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	called := false
+	g := subscription.NewGORM(db, subscription.WithGORMResolver(func(ctx context.Context, _ *gorm.DB, _, _ string) (*auth.SubscriptionClaim, error) {
+		called = true
+		return nil, nil
+	}))
+	if _, err := g.GetSubscription(context.Background(), "", "team-1"); err == nil {
+		t.Fatal("expected error for empty agent ID")
+	}
+	if called {
+		t.Error("resolver was invoked despite empty agentID")
+	}
+}
+
+func TestGORM_InvalidStatusFromResolver_ReturnsError(t *testing.T) {
+	// A buggy resolver returning a non-canonical status (wrong case,
+	// typo, etc.) must not silently propagate into a JWT — the adapter
+	// surfaces it as an error so it lands in the caller's log.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	g := subscription.NewGORM(db, subscription.WithGORMResolver(func(_ context.Context, _ *gorm.DB, _, _ string) (*auth.SubscriptionClaim, error) {
+		return &auth.SubscriptionClaim{Status: "ACTIVE"}, nil
+	}))
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "")
+	if err == nil {
+		t.Fatal("expected error for invalid status")
+	}
+	if claim != nil {
+		t.Errorf("expected nil claim on invalid status, got %+v", claim)
+	}
+}
+
+func TestGORM_InvalidStatusFromRow_ReturnsError(t *testing.T) {
+	// Same defense from the default-row path.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	row := &subscription.SubscriptionRecord{
+		AgentID: "agent-1", Status: "ACTIVE", Plan: "pro", UpdatedAt: time.Now(),
+	}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	g := subscription.NewGORM(db)
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "")
+	if err == nil {
+		t.Fatal("expected error for invalid status")
+	}
+	if claim != nil {
+		t.Errorf("expected nil claim, got %+v", claim)
 	}
 }

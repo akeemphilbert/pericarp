@@ -82,11 +82,15 @@ func WithGORMProvider(name string) GORMOption {
 // GORM resolves SubscriptionClaim values from a relational projection
 // owned by the consumer service. Implements application.SubscriptionService.
 //
-// The default resolver expects a table matching SubscriptionRecord and
-// picks, for the given (agentID, accountID), the row with the latest
-// updated_at — preferring an exact account match when accountID is
-// non-empty, falling back to the agent-only row otherwise. For schemas
-// that don't fit that shape, supply WithGORMResolver.
+// The default resolver expects a table matching SubscriptionRecord. When
+// accountID is non-empty the lookup requires an exact (agent_id,
+// account_id) match — the agent-only row is NOT used as a fallback,
+// because a paid personal-account subscription must not silently grant
+// paid-tier access to a B2B account the same agent belongs to. When
+// accountID is empty, the agent-only row (account_id = '' or IS NULL)
+// is matched. Among matches, latest updated_at wins; ties break on the
+// row's primary key id so output is deterministic. For schemas that
+// don't fit that shape, supply WithGORMResolver.
 type GORM struct {
 	db               *gorm.DB
 	table            string
@@ -111,7 +115,10 @@ func NewGORM(db *gorm.DB, opts ...GORMOption) *GORM {
 
 // GetSubscription resolves the claim for agentID (optionally scoped to
 // accountID). Returns (nil, nil) for "no record"; an error for actual
-// database failures or a nil database.
+// database failures, a nil database, or a returned claim whose status
+// doesn't match the closed set of SubscriptionStatus values (which would
+// otherwise silently propagate a misconfigured row or buggy resolver
+// into the issued JWT).
 func (g *GORM) GetSubscription(ctx context.Context, agentID, accountID string) (*auth.SubscriptionClaim, error) {
 	if g.db == nil {
 		return nil, errors.New("gorm: database is nil")
@@ -119,37 +126,44 @@ func (g *GORM) GetSubscription(ctx context.Context, agentID, accountID string) (
 	if agentID == "" {
 		return nil, errors.New("gorm: agentID must not be empty")
 	}
+	var (
+		claim *auth.SubscriptionClaim
+		err   error
+	)
 	if g.resolver != nil {
-		return g.resolver(ctx, g.db, agentID, accountID)
+		claim, err = g.resolver(ctx, g.db, agentID, accountID)
+	} else {
+		claim, err = g.defaultLookup(ctx, agentID, accountID)
 	}
-	return g.defaultLookup(ctx, agentID, accountID)
+	if err != nil || claim == nil {
+		return claim, err
+	}
+	if !claim.Status.Valid() {
+		return nil, fmt.Errorf("gorm: invalid subscription status %q for agent %s", claim.Status, agentID)
+	}
+	return claim, nil
 }
 
 func (g *GORM) defaultLookup(ctx context.Context, agentID, accountID string) (*auth.SubscriptionClaim, error) {
 	var rec SubscriptionRecord
-	q := g.db.WithContext(ctx).Table(g.table).Where("agent_id = ?", agentID)
+	base := g.db.WithContext(ctx).Table(g.table).Where("agent_id = ?", agentID)
 
-	// Prefer an exact account match when one was requested. Fall back to
-	// the latest agent-scoped row only if no account-scoped row exists,
-	// so a paid personal-account subscription doesn't accidentally apply
-	// to a B2B account the same agent belongs to.
 	if accountID != "" {
-		err := q.Where("account_id = ?", accountID).
-			Order("updated_at DESC").
+		err := base.Where("account_id = ?", accountID).
+			Order("updated_at DESC, id DESC").
 			Limit(1).
 			Take(&rec).Error
-		if err == nil {
-			return g.toClaim(rec), nil
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
+		if err != nil {
 			return nil, fmt.Errorf("gorm: query account-scoped subscription: %w", err)
 		}
+		return g.toClaim(rec), nil
 	}
 
-	err := g.db.WithContext(ctx).
-		Table(g.table).
-		Where("agent_id = ? AND (account_id = ? OR account_id IS NULL)", agentID, "").
-		Order("updated_at DESC").
+	err := base.Where("account_id = ? OR account_id IS NULL", "").
+		Order("updated_at DESC, id DESC").
 		Limit(1).
 		Take(&rec).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
