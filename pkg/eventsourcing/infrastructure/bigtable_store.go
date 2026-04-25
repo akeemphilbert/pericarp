@@ -53,14 +53,19 @@ var _ domain.EventStore = (*BigtableEventStore)(nil)
 // Concurrency limitation (read this before adopting): Append performs a
 // non-atomic read-then-write version check (GetCurrentVersion followed by
 // ApplyBulk). Two concurrent writers passing the same expectedVersion can
-// both observe the pre-write state and both succeed, producing duplicate
-// sequence numbers. The store therefore does NOT provide strict optimistic
-// concurrency — implementing that on Bigtable requires CheckAndMutateRow
-// against a per-aggregate version marker, which this store deliberately
-// does not yet do. Acceptable for low-contention workloads (single-writer
-// per aggregate, idempotent producers, append-only feeds). High-contention
-// callers must serialize writes per aggregate (e.g., an actor mailbox) or
-// use a different EventStore.
+// both observe the pre-write state and both succeed. Because the event row
+// key is deterministic ("e#<aggregateID>#<seq:20>") and ApplyBulk's writes
+// are unconditional, the second writer's mutation OVERWRITES the first's
+// event row — one writer's payload is silently lost, and the id-index /
+// tx-index rows for the lost event remain pointing at the surviving event
+// row's (now incorrect) payload. The store therefore does NOT provide
+// strict optimistic concurrency — implementing that on Bigtable requires
+// CheckAndMutateRow against a per-aggregate version marker (or a
+// "row-does-not-exist" predicate per event row), which this store
+// deliberately does not yet do. Acceptable for low-contention workloads
+// (single-writer per aggregate, idempotent producers, append-only feeds).
+// High-contention callers must serialize writes per aggregate (e.g., an
+// actor mailbox) or use a different EventStore.
 //
 // All reads apply a LatestNFilter(1): the column family is expected to retain
 // only the most recent version per cell. If duplicate appends (per the
