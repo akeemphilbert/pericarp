@@ -119,7 +119,14 @@ func newFakeInstance(t *testing.T, host string) *fakeInstance {
 // proxied HTTP if a regression caused an unexpected host to slip through.
 // Panicking turns any such regression into a loud test failure with no
 // network fallback.
+//
+// AllowInsecureInstanceHosts is forced to true so the SSRF guard's DNS
+// resolution doesn't try to leave the box for the test hosts (which use
+// public-looking names like "mastodon.social" but are routed at httptest
+// servers). Tests covering the SSRF guard itself construct providers
+// directly via NewMastodon and override lookupHostFn.
 func newMastodonForTest(cfg MastodonConfig, instances map[string]*fakeInstance) *Mastodon {
+	cfg.AllowInsecureInstanceHosts = true
 	m := NewMastodon(cfg)
 	m.instanceBase = func(host string) string {
 		if fi, ok := instances[host]; ok {
@@ -328,6 +335,69 @@ func TestMastodonRevokeTokenAtInstance_Success(t *testing.T) {
 	}
 	if got := social.revokeCalls.Load(); got != 1 {
 		t.Errorf("revoke calls = %d, want 1", got)
+	}
+}
+
+func TestMastodonValidateInstanceHost_SSRFGuard(t *testing.T) {
+	t.Parallel()
+
+	publicIP := []string{"93.184.216.34"}
+	internalIP := []string{"10.0.0.5"}
+	mixedIPs := []string{"93.184.216.34", "127.0.0.1"}
+
+	cases := []struct {
+		name        string
+		insecureOK  bool
+		host        string
+		lookup      []string
+		lookupErr   error
+		wantErr     bool
+		errContains string
+	}{
+		{name: "public hostname allowed", host: "mastodon.social", lookup: publicIP, wantErr: false},
+		{name: "scheme rejected", host: "https://mastodon.social", wantErr: true, errContains: "bare DNS hostname"},
+		{name: "path rejected", host: "mastodon.social/oauth", wantErr: true, errContains: "bare DNS hostname"},
+		{name: "userinfo rejected", host: "user@mastodon.social", wantErr: true, errContains: "bare DNS hostname"},
+		{name: "loopback IP rejected", host: "127.0.0.1", wantErr: true, errContains: "loopback"},
+		{name: "rfc1918 private rejected", host: "10.0.0.1", wantErr: true, errContains: "loopback"},
+		{name: "192.168 private rejected", host: "192.168.1.1", wantErr: true, errContains: "loopback"},
+		{name: "link-local rejected", host: "169.254.169.254", wantErr: true, errContains: "loopback"},
+		{name: "ipv6 loopback rejected", host: "::1", wantErr: true, errContains: "bare DNS hostname"}, // ':' caught by syntactic check
+		{name: "localhost name rejected", host: "localhost", wantErr: true, errContains: "localhost"},
+		{name: "DNS rebinding to internal IP rejected", host: "evil.example.com", lookup: internalIP, wantErr: true, errContains: "internal address"},
+		{name: "DNS rebinding even one internal IP rejected", host: "evil.example.com", lookup: mixedIPs, wantErr: true, errContains: "internal address"},
+		{name: "DNS lookup failure surfaces", host: "nx.example.com", lookupErr: errors.New("no such host"), wantErr: true, errContains: "resolve"},
+		{name: "insecure flag allows localhost", insecureOK: true, host: "localhost", wantErr: false},
+		{name: "insecure flag allows loopback IP", insecureOK: true, host: "127.0.0.1", wantErr: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := NewMastodon(MastodonConfig{
+				AppCache:                   NewMemoryMastodonAppCache(),
+				AllowInsecureInstanceHosts: tc.insecureOK,
+			})
+			m.lookupHostFn = func(context.Context, string) ([]string, error) {
+				if tc.lookupErr != nil {
+					return nil, tc.lookupErr
+				}
+				return tc.lookup, nil
+			}
+			err := m.validateMastodonHost(context.Background(), tc.host)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateMastodonHost(%q) = nil, want error", tc.host)
+				}
+				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
+					t.Errorf("validateMastodonHost(%q) error %q does not contain %q", tc.host, err.Error(), tc.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("validateMastodonHost(%q) = %v, want nil", tc.host, err)
+			}
+		})
 	}
 }
 

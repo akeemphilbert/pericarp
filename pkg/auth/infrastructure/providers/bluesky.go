@@ -32,6 +32,12 @@ const (
 	blueskyDefaultHandleResolveBase = "https://bsky.social"
 	blueskyDefaultPLCDirectoryBase  = "https://plc.directory"
 	blueskyFlowTTL                  = 10 * time.Minute
+	// blueskyDPoPNonceTTL bounds how long a cached DPoP-Nonce stays usable.
+	// AT-Proto auth servers rotate nonces on the order of minutes; an hour
+	// is a comfortable upper bound that also caps memory growth in
+	// dpopNonceCacheM (entries are keyed by issuer, so a long-running
+	// service that talks to many distinct PDSes would otherwise leak).
+	blueskyDPoPNonceTTL = 1 * time.Hour
 )
 
 // Bluesky-specific sentinel errors. Each is PERMANENT for the failing flow;
@@ -187,7 +193,8 @@ type Bluesky struct {
 	bindCounter          atomic.Uint64
 	nowFn                func() time.Time
 	jtiFn                func() string // overridable for deterministic tests
-	dpopNonceCacheM      sync.Map      // issuer -> latest DPoP-Nonce header
+	dpopNonceCacheM      sync.Map      // issuer -> *dpopNonceEntry
+	dpopNonceCounter     atomic.Uint64 // drives probabilistic GC of dpopNonceCacheM
 	allowInsecurePDSURLs bool
 	// lookupHostFn is the resolver used by the SSRF guard; overridable in
 	// tests so DNS doesn't have to leave the box. Context-aware so resolver
@@ -782,7 +789,7 @@ func (b *Bluesky) pushAuthorizationRequest(ctx context.Context, asMeta *blueskyA
 		}
 
 		if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
-			b.dpopNonceCacheM.Store(issuer, nonce)
+			b.storeDPoPNonce(issuer, nonce)
 		}
 
 		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
@@ -858,7 +865,7 @@ func (b *Bluesky) tokenRequestWithDPoP(ctx context.Context, tokenURL, issuer str
 		}
 
 		if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
-			b.dpopNonceCacheM.Store(issuer, nonce)
+			b.storeDPoPNonce(issuer, nonce)
 		}
 
 		// Parse the OAuth error JSON to dispatch on the canonical `error`
@@ -897,13 +904,53 @@ func (b *Bluesky) tokenRequestWithDPoP(ctx context.Context, tokenURL, issuer str
 	panic("unreachable: tokenRequestWithDPoP must return inside the loop")
 }
 
-// dpopNonceFor returns the most recently observed DPoP-Nonce from this server,
-// or "" if none has been observed yet.
+// dpopNonceEntry is the value stored in dpopNonceCacheM; it carries the
+// latest DPoP-Nonce together with an expiry so the cache can't grow without
+// bound for a long-running service that sees many distinct issuers.
+type dpopNonceEntry struct {
+	nonce     string
+	expiresAt time.Time
+}
+
+// dpopNonceFor returns the most recently observed, still-valid DPoP-Nonce
+// for server, or "" if none has been observed yet (or the cached one has
+// expired). Expired entries are deleted lazily on read.
 func (b *Bluesky) dpopNonceFor(server string) string {
 	if v, ok := b.dpopNonceCacheM.Load(server); ok {
-		return v.(string)
+		entry := v.(*dpopNonceEntry)
+		if b.nowFn().Before(entry.expiresAt) {
+			return entry.nonce
+		}
+		b.dpopNonceCacheM.Delete(server)
 	}
 	return ""
+}
+
+// storeDPoPNonce caches a freshly-observed DPoP-Nonce for the given issuer
+// with the package-wide TTL. Every gcSweepEvery writes it opportunistically
+// sweeps expired entries so a service that churns through issuers eventually
+// drops them — without that, the per-issuer entry only goes away on a
+// subsequent read for that exact issuer.
+func (b *Bluesky) storeDPoPNonce(issuer, nonce string) {
+	now := b.nowFn()
+	b.dpopNonceCacheM.Store(issuer, &dpopNonceEntry{
+		nonce:     nonce,
+		expiresAt: now.Add(blueskyDPoPNonceTTL),
+	})
+	if b.dpopNonceCounter.Add(1)%gcSweepEvery == 0 {
+		b.sweepDPoPNonces(now)
+	}
+}
+
+// sweepDPoPNonces drops entries whose TTL has passed. Called probabilistically
+// from storeDPoPNonce so amortised cost is O(1) per write.
+func (b *Bluesky) sweepDPoPNonces(now time.Time) {
+	b.dpopNonceCacheM.Range(func(k, v any) bool {
+		if now.After(v.(*dpopNonceEntry).expiresAt) {
+			b.dpopNonceCacheM.Delete(k)
+		}
+		return true
+	})
 }
 
 // ----- DPoP proof construction -----

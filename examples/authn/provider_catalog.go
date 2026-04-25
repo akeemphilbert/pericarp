@@ -119,6 +119,11 @@ func RunMastodonAgainstFake(ctx context.Context, out io.Writer) error {
 			_ = host
 			return fake.URL
 		},
+		// fakeHost ("demo.mastodon.test") doesn't resolve in DNS, so the
+		// production SSRF guard would reject it. The demo legitimately
+		// targets a local httptest server via InstanceBase, so opt out
+		// of the guard the same way newMastodonForTest does.
+		AllowInsecureInstanceHosts: true,
 	})
 
 	// Real services MUST generate state and the PKCE verifier with the

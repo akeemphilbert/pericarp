@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -131,6 +132,15 @@ type MastodonConfig struct {
 	// httptest server for end-to-end fakes. Production deployments should
 	// leave this nil unless they have a specific routing need.
 	InstanceBase func(host string) string
+	// AllowInsecureInstanceHosts disables the SSRF-style guard on the
+	// caller-supplied instance host. Production must leave this false: the
+	// host is fed straight into instanceBase(host), so a value like
+	// "127.0.0.1", "10.0.0.5", "localhost", or any DNS name that resolves
+	// to a loopback/private/link-local address would let a malicious or
+	// confused caller turn the flow into a probe of internal services.
+	// Tests and local development against trusted httptest fakes set it
+	// to true (newMastodonForTest does this).
+	AllowInsecureInstanceHosts bool
 }
 
 // flowBinding ties a codeChallenge to the instance host the user was redirected
@@ -165,6 +175,15 @@ type Mastodon struct {
 	// httptest server.
 	instanceBase func(host string) string
 
+	// allowInsecureInstanceHosts opts out of the SSRF guard on caller-
+	// supplied hosts. See MastodonConfig.AllowInsecureInstanceHosts.
+	allowInsecureInstanceHosts bool
+
+	// lookupHostFn is the resolver the SSRF guard uses to detect DNS names
+	// that resolve to internal IPs. Overridable in tests so unit tests
+	// don't have to leave the box.
+	lookupHostFn func(ctx context.Context, host string) ([]string, error)
+
 	// nowFn is overridable for deterministic flow-binding TTL tests.
 	nowFn func() time.Time
 }
@@ -185,16 +204,18 @@ func NewMastodon(config MastodonConfig) *Mastodon {
 		instanceBase = func(host string) string { return "https://" + strings.ToLower(host) }
 	}
 	return &Mastodon{
-		appName:      config.AppName,
-		redirectURI:  config.RedirectURI,
-		scopes:       scopes,
-		website:      config.Website,
-		appCache:     cache,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
-		flowTTL:      mastodonFlowTTL,
-		tombstoneTTL: mastodonFlowTTL, // tombstone lives at least as long as a binding could
-		instanceBase: instanceBase,
-		nowFn:        time.Now,
+		appName:                    config.AppName,
+		redirectURI:                config.RedirectURI,
+		scopes:                     scopes,
+		website:                    config.Website,
+		appCache:                   cache,
+		httpClient:                 &http.Client{Timeout: 30 * time.Second},
+		flowTTL:                    mastodonFlowTTL,
+		tombstoneTTL:               mastodonFlowTTL, // tombstone lives at least as long as a binding could
+		instanceBase:               instanceBase,
+		allowInsecureInstanceHosts: config.AllowInsecureInstanceHosts,
+		lookupHostFn:               net.DefaultResolver.LookupHost,
+		nowFn:                      time.Now,
 	}
 }
 
@@ -209,12 +230,21 @@ func normalizeHost(host string) string {
 	return strings.ToLower(strings.TrimSpace(host))
 }
 
-// validateMastodonHost rejects values that aren't a bare DNS hostname.
-// AuthCodeURLForInstance feeds host straight into instanceBase(host), which by
-// default builds "https://" + host; without this check, a caller passing
-// "evil.com/path", "internal:8080", "user@host", or "http://internal" can turn
-// a Mastodon flow into an SSRF vector or produce malformed authorize URLs.
-func validateMastodonHost(host string) error {
+// validateMastodonHost guards the caller-supplied instance host on every
+// flow entry point. AuthCodeURLForInstance / Exchange / RevokeTokenAtInstance
+// feed host straight into instanceBase(host), which by default builds
+// "https://" + host; without this check, a caller could turn the flow into
+// an SSRF probe of internal services or produce malformed authorize URLs.
+//
+// The syntactic check (no scheme/path/port/userinfo/whitespace) is always
+// on. The SSRF rejection — `localhost`, loopback / RFC1918-private /
+// link-local / unspecified IP literals, and DNS names whose A/AAAA answers
+// resolve to those ranges — fires by default; tests/dev opt out via
+// MastodonConfig.AllowInsecureInstanceHosts.
+//
+// Like Bluesky's analogous guard, the DNS check is best-effort and does not
+// defeat true DNS rebinding.
+func (m *Mastodon) validateMastodonHost(ctx context.Context, host string) error {
 	if host == "" {
 		return fmt.Errorf("mastodon: host must not be empty")
 	}
@@ -222,6 +252,31 @@ func validateMastodonHost(host string) error {
 	// (query/fragment), and whitespace are all illegal in a bare hostname.
 	if strings.ContainsAny(host, "/:@?# \t\r\n") {
 		return fmt.Errorf("mastodon: host %q must be a bare DNS hostname (no scheme, port, path, or userinfo)", host)
+	}
+	if m.allowInsecureInstanceHosts {
+		return nil
+	}
+	if strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("mastodon: host %q points at localhost (SSRF guard)", host)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if isInternalIP(ip) {
+			return fmt.Errorf("mastodon: host %q points at loopback/private host (SSRF guard)", host)
+		}
+		return nil
+	}
+	addrs, err := m.lookupHostFn(ctx, host)
+	if err != nil {
+		return fmt.Errorf("mastodon: resolve host %q: %w", host, err)
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
+		}
+		if isInternalIP(ip) {
+			return fmt.Errorf("mastodon: host %q resolves to internal address %s (SSRF guard)", host, addr)
+		}
 	}
 	return nil
 }
@@ -254,7 +309,7 @@ func (m *Mastodon) AuthCodeURL(_, _, _, _ string) string {
 // cause Mastodon to reject the callback and would also bind the wrong app.
 func (m *Mastodon) AuthCodeURLForInstance(ctx context.Context, host, state, codeChallenge, _, redirectURI string) (string, error) {
 	host = normalizeHost(host)
-	if err := validateMastodonHost(host); err != nil {
+	if err := m.validateMastodonHost(ctx, host); err != nil {
 		return "", err
 	}
 	// codeChallenge keys the flow binding; an empty key would collide every
@@ -375,7 +430,7 @@ func (m *Mastodon) RevokeToken(_ context.Context, _ string) error {
 // RevokeTokenAtInstance revokes a token at the given Mastodon instance.
 func (m *Mastodon) RevokeTokenAtInstance(ctx context.Context, host, token string) error {
 	host = normalizeHost(host)
-	if err := validateMastodonHost(host); err != nil {
+	if err := m.validateMastodonHost(ctx, host); err != nil {
 		return err
 	}
 	app, err := m.appCache.GetApp(ctx, host)
