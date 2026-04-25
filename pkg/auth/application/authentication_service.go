@@ -603,6 +603,17 @@ func (s *DefaultAuthenticationService) RegisterPassword(ctx context.Context, ema
 		}
 	}
 	if err := s.credentials.Save(ctx, credential); err != nil {
+		// Race against a concurrent register: another caller wrote a
+		// credential row for the same (provider, lower(email)) between
+		// our pre-check and this Save. Translate to the same sentinel
+		// the pre-check would have returned. Note: the agent + account
+		// rows we wrote above are now orphaned; cleaning them up
+		// requires wrapping projection writes in a DB transaction,
+		// which is tracked as a follow-up (the same race exists in
+		// FindOrCreateAgent for OAuth flows today).
+		if errors.Is(err, repositories.ErrDuplicateCredential) {
+			return nil, nil, nil, ErrEmailAlreadyTaken
+		}
 		return nil, nil, nil, fmt.Errorf("authentication: save credential: %w", err)
 	}
 	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
@@ -768,6 +779,17 @@ func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Cont
 	}
 
 	if err := s.credentials.Save(ctx, credential); err != nil {
+		// Race-induced dup-key after an idempotent pre-check returned
+		// nil: another caller landed the same (provider, lower(email))
+		// in the meantime. Treat the import as a no-op to preserve
+		// idempotent semantics. The CredentialCreated and
+		// PasswordCredentialCreated events we already committed to the
+		// event store describe an aggregate without a projection row;
+		// this is the same divergence the broader transaction
+		// follow-up will close.
+		if errors.Is(err, repositories.ErrDuplicateCredential) {
+			return nil
+		}
 		return fmt.Errorf("authentication: save credential: %w", err)
 	}
 	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {

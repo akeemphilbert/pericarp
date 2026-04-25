@@ -12,6 +12,7 @@ import (
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
+	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
 	gorminfra "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/database/gorm"
 	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
 	esinfra "github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
@@ -695,5 +696,122 @@ func TestPasswordSupportNotConfigured(t *testing.T) {
 	}
 	if err := svc.UpdatePassword(ctx, "agent", "old", "new"); !errors.Is(err, application.ErrPasswordSupportNotConfigured) {
 		t.Errorf("UpdatePassword: %v", err)
+	}
+}
+
+// blindCredentialRepo wraps a real CredentialRepository but always reports
+// "no existing credential" from FindByProvider. This deterministically
+// simulates the TOCTOU race where two concurrent RegisterPassword calls
+// both pass the pre-check and the second one hits the unique index on
+// (provider, provider_user_id) at credentials.Save.
+type blindCredentialRepo struct {
+	repositories.CredentialRepository
+}
+
+func (b *blindCredentialRepo) FindByProvider(ctx context.Context, provider, providerUserID string) (*entities.Credential, error) {
+	return nil, nil
+}
+
+func TestRegisterPassword_DuplicateOnSaveTranslates(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gorminfra.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	credRepo := gorminfra.NewCredentialRepository(db)
+
+	// Seed an existing password credential for alice@example.com so the
+	// second register's Save will violate the unique index.
+	seed := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		gorminfra.NewAgentRepository(db),
+		credRepo,
+		gorminfra.NewAuthSessionRepository(db),
+		gorminfra.NewAccountRepository(db),
+		application.WithPasswordCredentialRepository(gorminfra.NewPasswordCredentialRepository(db)),
+		application.WithBcryptCost(bcrypt.MinCost),
+	)
+	if _, _, _, err := seed.RegisterPassword(ctx, "alice@example.com", "Alice", "hunter2"); err != nil {
+		t.Fatalf("seed RegisterPassword: %v", err)
+	}
+
+	// New service whose CredentialRepository always lies on FindByProvider —
+	// the pre-check passes, Save runs, the unique index fires.
+	racy := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		gorminfra.NewAgentRepository(db),
+		&blindCredentialRepo{CredentialRepository: credRepo},
+		gorminfra.NewAuthSessionRepository(db),
+		gorminfra.NewAccountRepository(db),
+		application.WithPasswordCredentialRepository(gorminfra.NewPasswordCredentialRepository(db)),
+		application.WithBcryptCost(bcrypt.MinCost),
+	)
+
+	_, _, _, err = racy.RegisterPassword(ctx, "alice@example.com", "Alice2", "hunter3")
+	if !errors.Is(err, application.ErrEmailAlreadyTaken) {
+		t.Fatalf("error = %v, want ErrEmailAlreadyTaken (dup-key was not translated)", err)
+	}
+}
+
+func TestImportPasswordCredential_DuplicateOnSaveIsIdempotent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gorminfra.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	credRepo := gorminfra.NewCredentialRepository(db)
+
+	seed := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		gorminfra.NewAgentRepository(db),
+		credRepo,
+		gorminfra.NewAuthSessionRepository(db),
+		gorminfra.NewAccountRepository(db),
+		application.WithPasswordCredentialRepository(gorminfra.NewPasswordCredentialRepository(db)),
+		application.WithBcryptCost(bcrypt.MinCost),
+	)
+	owner, _, ownerAccount, err := seed.RegisterPassword(ctx, "owner@example.com", "Owner", "ownerpass")
+	if err != nil {
+		t.Fatalf("seed RegisterPassword: %v", err)
+	}
+	// Seed a real credential for the email we'll import; the racy
+	// service's blind FindByProvider will skip the idempotent pre-check
+	// and fall through to credentials.Save where the unique index fires.
+	if err := seed.ImportPasswordCredential(ctx,
+		"legacy@example.com", "Legacy",
+		"$2a$04$abcdefghijklmnopqrstuuwOl4ZJN8xpZ/Hf1jZQp7m/0ePI1ZGGy",
+		owner.GetID(), ownerAccount.GetID()); err != nil {
+		t.Fatalf("seed ImportPasswordCredential: %v", err)
+	}
+
+	racy := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		gorminfra.NewAgentRepository(db),
+		&blindCredentialRepo{CredentialRepository: credRepo},
+		gorminfra.NewAuthSessionRepository(db),
+		gorminfra.NewAccountRepository(db),
+		application.WithPasswordCredentialRepository(gorminfra.NewPasswordCredentialRepository(db)),
+		application.WithBcryptCost(bcrypt.MinCost),
+	)
+
+	if err := racy.ImportPasswordCredential(ctx,
+		"legacy@example.com", "Legacy",
+		"$2a$04$abcdefghijklmnopqrstuuwOl4ZJN8xpZ/Hf1jZQp7m/0ePI1ZGGy",
+		owner.GetID(), ownerAccount.GetID()); err != nil {
+		t.Fatalf("ImportPasswordCredential after dup-key race must be idempotent (nil), got %v", err)
 	}
 }
