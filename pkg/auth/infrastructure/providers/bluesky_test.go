@@ -191,6 +191,9 @@ func newBlueskyForTest(env *fakeBlueskyEnv, cfg BlueskyConfig) *Bluesky {
 	if cfg.KeyStore == nil {
 		cfg.KeyStore = NewMemoryBlueskyKeyStore()
 	}
+	// httptest servers are http://127.0.0.1:port; the production SSRF guard
+	// rejects both, so opt out here.
+	cfg.AllowInsecurePDSURLs = true
 	b := NewBluesky(cfg)
 	b.handleResolveBase = env.resolveSrv.URL
 	b.plcDirectoryBase = env.plcSrv.URL
@@ -267,6 +270,50 @@ func TestBluesky_DIDDocumentMissingPDS(t *testing.T) {
 	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge("v"), "", "")
 	if !errors.Is(err, ErrBlueskyDIDResolutionFailed) {
 		t.Errorf("err = %v, want ErrBlueskyDIDResolutionFailed", err)
+	}
+}
+
+func TestBluesky_ValidatePDSURL_SSRFGuard(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		insecureOK  bool
+		url         string
+		wantErr     bool
+		errContains string
+	}{
+		{name: "https public hostname allowed", url: "https://pds.example.com", wantErr: false},
+		{name: "http rejected by default", url: "http://pds.example.com", wantErr: true, errContains: "https"},
+		{name: "loopback rejected by default", url: "https://127.0.0.1", wantErr: true, errContains: "loopback"},
+		{name: "ipv6 loopback rejected by default", url: "https://[::1]", wantErr: true, errContains: "loopback"},
+		{name: "localhost name rejected by default", url: "https://localhost:8443", wantErr: true, errContains: "localhost"},
+		{name: "rfc1918 private rejected by default", url: "https://10.0.0.1", wantErr: true, errContains: "loopback"},
+		{name: "192.168 private rejected by default", url: "https://192.168.1.1", wantErr: true, errContains: "loopback"},
+		{name: "link-local rejected by default", url: "https://169.254.169.254", wantErr: true, errContains: "loopback"},
+		{name: "missing host rejected", url: "https://", wantErr: true, errContains: "no host"},
+		{name: "insecure flag allows http loopback", insecureOK: true, url: "http://127.0.0.1:9000", wantErr: false},
+		{name: "insecure flag allows localhost", insecureOK: true, url: "http://localhost:9000", wantErr: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: tc.insecureOK})
+			err := b.validatePDSURL(tc.url)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validatePDSURL(%q) = nil, want error", tc.url)
+				}
+				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
+					t.Errorf("validatePDSURL(%q) error %q does not contain %q", tc.url, err.Error(), tc.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("validatePDSURL(%q) = %v, want nil", tc.url, err)
+			}
+		})
 	}
 }
 
@@ -867,8 +914,8 @@ func TestBluesky_DecodeRefreshToken_BadVariants(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"wrong prefix", "googletoken"},
-		{"v1 legacy prefix", "btr.v1.YWJj"},                  // base64url("abc") under old prefix
-		{"bad base64", "btr.v2.!!!"},                          // not base64url
+		{"v1 legacy prefix", "btr.v1.YWJj"}, // base64url("abc") under old prefix
+		{"bad base64", "btr.v2.!!!"},        // not base64url
 		{"too few parts", "btr.v2." + base64.RawURLEncoding.EncodeToString([]byte("only|two"))},
 		{"empty payload", "btr.v2." + base64.RawURLEncoding.EncodeToString([]byte(""))},
 	}
@@ -886,11 +933,11 @@ func TestBluesky_DecodeRefreshToken_BadVariants(t *testing.T) {
 func TestBluesky_NormalizeHTU(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"https://pds/oauth/token":                       "https://pds/oauth/token",
-		"https://pds/oauth/token?foo=bar":               "https://pds/oauth/token",
-		"https://pds/oauth/token#frag":                  "https://pds/oauth/token",
-		"https://pds/oauth/token?foo=bar#frag":          "https://pds/oauth/token",
-		"https://pds:8443/oauth/token":                  "https://pds:8443/oauth/token",
+		"https://pds/oauth/token":              "https://pds/oauth/token",
+		"https://pds/oauth/token?foo=bar":      "https://pds/oauth/token",
+		"https://pds/oauth/token#frag":         "https://pds/oauth/token",
+		"https://pds/oauth/token?foo=bar#frag": "https://pds/oauth/token",
+		"https://pds:8443/oauth/token":         "https://pds:8443/oauth/token",
 	}
 	for in, want := range cases {
 		if got := normalizeHTU(in); got != want {

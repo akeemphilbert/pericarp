@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -116,6 +117,12 @@ type BlueskyConfig struct {
 	// KeyStore stores the ECDSA P-256 signing key for DPoP proofs.
 	// If nil, an in-memory ephemeral keystore is used.
 	KeyStore BlueskyKeyStore
+	// AllowInsecurePDSURLs permits the DID document's serviceEndpoint to use
+	// http or to point at loopback/private/link-local hosts. Production must
+	// leave this false: an attacker-controlled did:web document could
+	// otherwise pivot the flow into an SSRF against internal services. Tests
+	// and local development against httptest fakes set it to true.
+	AllowInsecurePDSURLs bool
 }
 
 // blueskyFlow ties a codeChallenge to the PDS the auth flow targets, so
@@ -168,14 +175,15 @@ type Bluesky struct {
 	handleResolveBase string
 	plcDirectoryBase  string
 
-	flows           sync.Map // codeChallenge -> *blueskyFlow
-	flowConsumed    sync.Map // codeChallenge -> consumedAt
-	flowTTL         time.Duration
-	tombstoneTTL    time.Duration
-	bindCounter     atomic.Uint64
-	nowFn           func() time.Time
-	jtiFn           func() string // overridable for deterministic tests
-	dpopNonceCacheM sync.Map      // pdsURL -> latest DPoP-Nonce header
+	flows                sync.Map // codeChallenge -> *blueskyFlow
+	flowConsumed         sync.Map // codeChallenge -> *flowTombstone
+	flowTTL              time.Duration
+	tombstoneTTL         time.Duration
+	bindCounter          atomic.Uint64
+	nowFn                func() time.Time
+	jtiFn                func() string // overridable for deterministic tests
+	dpopNonceCacheM      sync.Map      // issuer -> latest DPoP-Nonce header
+	allowInsecurePDSURLs bool
 }
 
 // NewBluesky constructs a Bluesky provider.
@@ -189,17 +197,18 @@ func NewBluesky(config BlueskyConfig) *Bluesky {
 		store = NewMemoryBlueskyKeyStore()
 	}
 	return &Bluesky{
-		clientMetadataURL: config.ClientMetadataURL,
-		redirectURI:       config.RedirectURI,
-		scopes:            scopes,
-		keyStore:          store,
-		httpClient:        &http.Client{Timeout: 30 * time.Second},
-		handleResolveBase: blueskyDefaultHandleResolveBase,
-		plcDirectoryBase:  blueskyDefaultPLCDirectoryBase,
-		flowTTL:           blueskyFlowTTL,
-		tombstoneTTL:      blueskyFlowTTL,
-		nowFn:             time.Now,
-		jtiFn:             func() string { return ksuid.New().String() },
+		clientMetadataURL:    config.ClientMetadataURL,
+		redirectURI:          config.RedirectURI,
+		scopes:               scopes,
+		keyStore:             store,
+		httpClient:           &http.Client{Timeout: 30 * time.Second},
+		handleResolveBase:    blueskyDefaultHandleResolveBase,
+		plcDirectoryBase:     blueskyDefaultPLCDirectoryBase,
+		flowTTL:              blueskyFlowTTL,
+		tombstoneTTL:         blueskyFlowTTL,
+		nowFn:                time.Now,
+		jtiFn:                func() string { return ksuid.New().String() },
+		allowInsecurePDSURLs: config.AllowInsecurePDSURLs,
 	}
 }
 
@@ -353,8 +362,15 @@ func (b *Bluesky) RefreshToken(ctx context.Context, refreshToken string) (*appli
 		return nil, fmt.Errorf("bluesky: token refresh: %w", err)
 	}
 
-	// Re-wrap so the next refresh round-trips correctly.
-	encoded := encodeBlueskyRefreshToken(pdsURL, tokenURL, issuer, tokenResp.RefreshToken)
+	// Re-wrap so the next refresh round-trips correctly. Some servers rotate
+	// refresh tokens; others omit refresh_token on refresh and expect the
+	// client to keep using the previously issued opaque value. Returning a
+	// wrapped empty refresh would brick subsequent refreshes for the latter.
+	nextOpaque := opaque
+	if tokenResp.RefreshToken != "" {
+		nextOpaque = tokenResp.RefreshToken
+	}
+	encoded := encodeBlueskyRefreshToken(pdsURL, tokenURL, issuer, nextOpaque)
 
 	return &application.AuthResult{
 		AccessToken:  tokenResp.AccessToken,
@@ -457,10 +473,49 @@ func (b *Bluesky) resolveDIDToPDS(ctx context.Context, did string) (string, erro
 	}
 	for _, svc := range doc.Service {
 		if svc.Type == "AtprotoPersonalDataServer" {
-			return strings.TrimRight(svc.ServiceEndpoint, "/"), nil
+			pdsURL := strings.TrimRight(svc.ServiceEndpoint, "/")
+			if err := b.validatePDSURL(pdsURL); err != nil {
+				return "", err
+			}
+			return pdsURL, nil
 		}
 	}
 	return "", fmt.Errorf("DID document has no AtprotoPersonalDataServer service entry")
+}
+
+// validatePDSURL guards the serviceEndpoint we just fetched from a (possibly
+// attacker-controlled) DID document — did:web in particular is hostable by
+// anyone. Without this, a malicious DID document could route subsequent HTTP
+// calls at internal hosts (SSRF) or downgrade the flow to plaintext http.
+//
+// Defaults: scheme must be https, host must be present, and the host must not
+// resolve at lookup time to a loopback / private / link-local IP. Tests and
+// local development opt out via BlueskyConfig.AllowInsecurePDSURLs.
+func (b *Bluesky) validatePDSURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("PDS URL %q: %w", raw, err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("PDS URL %q has no host", raw)
+	}
+	if !b.allowInsecurePDSURLs {
+		if u.Scheme != "https" {
+			return fmt.Errorf("PDS URL %q must use https scheme", raw)
+		}
+		hostname := u.Hostname()
+		if hostname == "" {
+			return fmt.Errorf("PDS URL %q has no hostname", raw)
+		}
+		if ip := net.ParseIP(hostname); ip != nil {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+				return fmt.Errorf("PDS URL %q points at loopback/private host (SSRF guard)", raw)
+			}
+		} else if strings.EqualFold(hostname, "localhost") {
+			return fmt.Errorf("PDS URL %q points at localhost (SSRF guard)", raw)
+		}
+	}
+	return nil
 }
 
 // didDocumentURL maps a DID to a fetchable URL. did:plc:* uses the PLC
@@ -790,8 +845,9 @@ func (b *Bluesky) takeFlow(codeChallenge string) (*blueskyFlow, flowStatus) {
 	v, ok := b.flows.LoadAndDelete(codeChallenge)
 	if !ok {
 		if t, ok := b.flowConsumed.Load(codeChallenge); ok {
-			if b.nowFn().Before(t.(time.Time)) {
-				return nil, flowStatusConsumed
+			tomb := t.(*flowTombstone)
+			if b.nowFn().Before(tomb.expiresAt) {
+				return nil, tomb.status
 			}
 			b.flowConsumed.Delete(codeChallenge)
 		}
@@ -800,9 +856,19 @@ func (b *Bluesky) takeFlow(codeChallenge string) (*blueskyFlow, flowStatus) {
 	flow := v.(*blueskyFlow)
 	now := b.nowFn()
 	if now.After(flow.expiresAt) {
+		// Tombstone the expired flow so a duplicate callback keeps returning
+		// ErrBlueskyFlowExpired instead of degrading to ErrBlueskyFlowMissing
+		// once the binding has been removed.
+		b.flowConsumed.Store(codeChallenge, &flowTombstone{
+			status:    flowStatusExpired,
+			expiresAt: now.Add(b.tombstoneTTL),
+		})
 		return nil, flowStatusExpired
 	}
-	b.flowConsumed.Store(codeChallenge, now.Add(b.tombstoneTTL))
+	b.flowConsumed.Store(codeChallenge, &flowTombstone{
+		status:    flowStatusConsumed,
+		expiresAt: now.Add(b.tombstoneTTL),
+	})
 	return flow, flowStatusOK
 }
 
@@ -814,10 +880,9 @@ func (b *Bluesky) sweepExpired(now time.Time) {
 		return true
 	})
 	b.flowConsumed.Range(func(k, v any) bool {
-		if now.After(v.(time.Time)) {
+		if now.After(v.(*flowTombstone).expiresAt) {
 			b.flowConsumed.Delete(k)
 		}
 		return true
 	})
 }
-

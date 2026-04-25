@@ -115,7 +115,12 @@ type MastodonConfig struct {
 	// Scopes default to ["read"]. Mastodon does not expose user email via
 	// its public API regardless of scope, so UserInfo.Email is left empty.
 	Scopes []string
-	// AppCache stores per-instance app credentials. Required.
+	// AppCache stores per-instance app credentials. If nil, an in-memory
+	// cache is used — this is only safe for single-replica deployments and
+	// tests because Mastodon's /api/v1/apps endpoint creates a new app on
+	// every call. Multi-replica deployments MUST supply a shared backing
+	// store (Redis, DynamoDB, etc.) so every replica reuses one registration
+	// per instance host instead of leaving abandoned upstream apps behind.
 	AppCache MastodonAppCache
 	// Website is optional; populated in the app registration request.
 	Website string
@@ -149,10 +154,10 @@ type Mastodon struct {
 	// flowConsumed records challenges that have already been taken so a
 	// duplicate Exchange call can return ErrMastodonFlowAlreadyConsumed
 	// instead of conflating with "never bound." TTL'd via tombstoneTTL.
-	flowConsumed   sync.Map // codeChallenge -> consumedAt
-	tombstoneTTL   time.Duration
-	registerSF     singleflight.Group // dedupes concurrent /api/v1/apps registrations per host
-	bindCounter    atomic.Uint64      // drives probabilistic GC sweeps in bindFlow
+	flowConsumed sync.Map // codeChallenge -> consumedAt
+	tombstoneTTL time.Duration
+	registerSF   singleflight.Group // dedupes concurrent /api/v1/apps registrations per host
+	bindCounter  atomic.Uint64      // drives probabilistic GC sweeps in bindFlow
 
 	// instanceBase resolves a host (e.g. "mastodon.social") to a base URL
 	// (e.g. "https://mastodon.social"). Tests override it to point at an
@@ -202,6 +207,23 @@ func normalizeHost(host string) string {
 	return strings.ToLower(strings.TrimSpace(host))
 }
 
+// validateMastodonHost rejects values that aren't a bare DNS hostname.
+// AuthCodeURLForInstance feeds host straight into instanceBase(host), which by
+// default builds "https://" + host; without this check, a caller passing
+// "evil.com/path", "internal:8080", "user@host", or "http://internal" can turn
+// a Mastodon flow into an SSRF vector or produce malformed authorize URLs.
+func validateMastodonHost(host string) error {
+	if host == "" {
+		return fmt.Errorf("mastodon: host must not be empty")
+	}
+	// '/' (paths), ':' (ports/scheme delimiter), '@' (userinfo), '?'/'#'
+	// (query/fragment), and whitespace are all illegal in a bare hostname.
+	if strings.ContainsAny(host, "/:@?# \t\r\n") {
+		return fmt.Errorf("mastodon: host %q must be a bare DNS hostname (no scheme, port, path, or userinfo)", host)
+	}
+	return nil
+}
+
 // Name returns the provider identifier.
 func (m *Mastodon) Name() string {
 	return "mastodon"
@@ -230,8 +252,14 @@ func (m *Mastodon) AuthCodeURL(_, _, _, _ string) string {
 // cause Mastodon to reject the callback and would also bind the wrong app.
 func (m *Mastodon) AuthCodeURLForInstance(ctx context.Context, host, state, codeChallenge, _, redirectURI string) (string, error) {
 	host = normalizeHost(host)
-	if host == "" {
-		return "", fmt.Errorf("mastodon: host must not be empty")
+	if err := validateMastodonHost(host); err != nil {
+		return "", err
+	}
+	// codeChallenge keys the flow binding; an empty key would collide every
+	// concurrent flow into the same slot and let the first-finishing Exchange
+	// route a code at the wrong instance.
+	if codeChallenge == "" {
+		return "", fmt.Errorf("mastodon: codeChallenge must not be empty")
 	}
 	if redirectURI != "" && redirectURI != m.redirectURI {
 		return "", fmt.Errorf("mastodon: redirectURI %q does not match configured RedirectURI %q", redirectURI, m.redirectURI)
@@ -463,7 +491,10 @@ func (m *Mastodon) registerApp(ctx context.Context, host string) (*MastodonApp, 
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 	if out.ClientID == "" || out.ClientSecret == "" {
-		return nil, fmt.Errorf("registration response missing client credentials: %s", string(body))
+		// Body is omitted: a successful /api/v1/apps response carries
+		// client_secret, and dumping it into wrapped errors would leak
+		// secrets to logs/metrics for any caller that prints the error chain.
+		return nil, fmt.Errorf("registration response missing client credentials")
 	}
 	return &MastodonApp{ClientID: out.ClientID, ClientSecret: out.ClientSecret}, nil
 }
@@ -504,7 +535,10 @@ func (m *Mastodon) requestToken(ctx context.Context, host string, data url.Value
 		return nil, fmt.Errorf("parse token response: %w", err)
 	}
 	if out.AccessToken == "" {
-		return nil, fmt.Errorf("token response missing access_token: %s", string(body))
+		// Body is omitted: a 200 response that lacks access_token may still
+		// carry refresh_token / id_token / scope, and dumping the raw body
+		// into wrapped errors would leak those secrets to logs.
+		return nil, errors.New("token response missing access_token")
 	}
 	return &out, nil
 }
@@ -577,6 +611,14 @@ const (
 	flowStatusConsumed                   // bound previously, already taken
 )
 
+// flowTombstone records what happened to a previously-bound flow so a
+// duplicate Exchange returns the same sentinel until TTL elapses, instead of
+// degrading to flowStatusMissing once the bind entry has been removed.
+type flowTombstone struct {
+	status    flowStatus // flowStatusConsumed or flowStatusExpired
+	expiresAt time.Time
+}
+
 // gcSweepEvery sets how often (per bindFlow call) the provider opportunistically
 // scans for and removes expired flow bindings, bounding sync.Map retention for
 // abandoned flows. Probabilistic so amortised cost is O(1) per bind.
@@ -603,10 +645,13 @@ func (m *Mastodon) bindFlow(codeChallenge, host string) {
 func (m *Mastodon) takeFlow(codeChallenge string) (string, flowStatus) {
 	v, ok := m.flowBindings.LoadAndDelete(codeChallenge)
 	if !ok {
-		// Distinguish "never bound" from "already consumed" via tombstone map.
+		// Distinguish "never bound" from "already consumed/expired" via the
+		// tombstone map so retried callbacks return the same sentinel until
+		// the tombstone TTL elapses.
 		if t, ok := m.flowConsumed.Load(codeChallenge); ok {
-			if m.nowFn().Before(t.(time.Time)) {
-				return "", flowStatusConsumed
+			tomb := t.(*flowTombstone)
+			if m.nowFn().Before(tomb.expiresAt) {
+				return "", tomb.status
 			}
 			m.flowConsumed.Delete(codeChallenge)
 		}
@@ -615,11 +660,21 @@ func (m *Mastodon) takeFlow(codeChallenge string) (string, flowStatus) {
 	binding := v.(*flowBinding)
 	now := m.nowFn()
 	if now.After(binding.expiresAt) {
+		// Tombstone the expired flow so a duplicate callback keeps returning
+		// ErrMastodonFlowExpired instead of degrading to ErrMastodonInstanceRequired
+		// once the binding has been removed.
+		m.flowConsumed.Store(codeChallenge, &flowTombstone{
+			status:    flowStatusExpired,
+			expiresAt: now.Add(m.tombstoneTTL),
+		})
 		return "", flowStatusExpired
 	}
 	// Mark as consumed so a duplicate Exchange returns ErrMastodonFlowAlreadyConsumed
 	// instead of looking like "never bound."
-	m.flowConsumed.Store(codeChallenge, now.Add(m.tombstoneTTL))
+	m.flowConsumed.Store(codeChallenge, &flowTombstone{
+		status:    flowStatusConsumed,
+		expiresAt: now.Add(m.tombstoneTTL),
+	})
 	return binding.host, flowStatusOK
 }
 
@@ -634,7 +689,7 @@ func (m *Mastodon) sweepExpired(now time.Time) {
 		return true
 	})
 	m.flowConsumed.Range(func(k, v any) bool {
-		if now.After(v.(time.Time)) {
+		if now.After(v.(*flowTombstone).expiresAt) {
 			m.flowConsumed.Delete(k)
 		}
 		return true

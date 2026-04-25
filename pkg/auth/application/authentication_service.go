@@ -20,17 +20,17 @@ import (
 
 // Sentinel errors for the authentication domain.
 var (
-	ErrInvalidProvider               = errors.New("authentication: invalid provider")
-	ErrInvalidState                  = errors.New("authentication: invalid state parameter")
-	ErrCodeExchangeFailed            = errors.New("authentication: code exchange failed")
-	ErrSessionNotFound               = errors.New("authentication: session not found")
-	ErrSessionExpired                = errors.New("authentication: session expired")
-	ErrSessionRevoked                = errors.New("authentication: session revoked")
-	ErrTokenRefreshFailed            = errors.New("authentication: token refresh failed")
-	ErrCredentialNotFound            = errors.New("authentication: credential not found")
-	ErrEmailAlreadyTaken             = errors.New("authentication: email already registered with a password")
-	ErrPasswordSupportNotConfigured  = errors.New("authentication: password support not configured")
-	ErrPasswordCredentialMissing     = errors.New("authentication: password credential not found for agent")
+	ErrInvalidProvider              = errors.New("authentication: invalid provider")
+	ErrInvalidState                 = errors.New("authentication: invalid state parameter")
+	ErrCodeExchangeFailed           = errors.New("authentication: code exchange failed")
+	ErrSessionNotFound              = errors.New("authentication: session not found")
+	ErrSessionExpired               = errors.New("authentication: session expired")
+	ErrSessionRevoked               = errors.New("authentication: session revoked")
+	ErrTokenRefreshFailed           = errors.New("authentication: token refresh failed")
+	ErrCredentialNotFound           = errors.New("authentication: credential not found")
+	ErrEmailAlreadyTaken            = errors.New("authentication: email already registered with a password")
+	ErrPasswordSupportNotConfigured = errors.New("authentication: password support not configured")
+	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
 )
 
 // AuthRequest represents the result of initiating an OAuth authorization flow.
