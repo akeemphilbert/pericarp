@@ -94,8 +94,13 @@ func TestFacebookExchange_Success(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("userinfo: method = %s, want GET", r.Method)
 		}
-		if got := r.URL.Query().Get("access_token"); got != "fb-access" {
-			t.Errorf("userinfo access_token = %q, want fb-access", got)
+		// Token must come via the Authorization header, not the URL query —
+		// otherwise it ends up in HTTP / proxy / referrer logs.
+		if got, want := r.Header.Get("Authorization"), "Bearer fb-access"; got != want {
+			t.Errorf("userinfo Authorization = %q, want %q", got, want)
+		}
+		if got := r.URL.Query().Get("access_token"); got != "" {
+			t.Errorf("userinfo access_token leaked into URL query: %q", got)
 		}
 		if got := r.URL.Query().Get("fields"); got != "id,name,email,picture" {
 			t.Errorf("userinfo fields = %q, want id,name,email,picture", got)

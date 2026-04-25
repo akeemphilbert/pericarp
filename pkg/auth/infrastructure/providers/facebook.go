@@ -242,7 +242,10 @@ func (f *Facebook) requestToken(ctx context.Context, data url.Values) (*facebook
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
 	}
 	if tokenResp.AccessToken == "" {
-		return nil, fmt.Errorf("token response missing access_token: %s", string(body))
+		// Body is omitted: a 200 response that lacks access_token may still
+		// carry refresh_token / scope / other secrets, and dumping the raw
+		// body into wrapped errors would leak them to logs.
+		return nil, errors.New("token response missing access_token")
 	}
 	return &tokenResp, nil
 }
@@ -250,14 +253,16 @@ func (f *Facebook) requestToken(ctx context.Context, data url.Values) (*facebook
 // fetchUserInfo calls Graph /me with the requested fields.
 func (f *Facebook) fetchUserInfo(ctx context.Context, accessToken string) (*facebookUserInfo, error) {
 	endpoint := f.userInfoEndpoint + "?" + url.Values{
-		"fields":       {"id,name,email,picture"},
-		"access_token": {accessToken},
+		"fields": {"id,name,email,picture"},
 	}.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create userinfo request: %w", err)
 	}
+	// Send the token via Authorization rather than ?access_token=... so it
+	// doesn't end up in HTTP logs, proxy access logs, or Referer headers.
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := f.httpClient.Do(req)

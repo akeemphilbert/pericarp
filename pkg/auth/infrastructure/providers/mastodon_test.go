@@ -177,7 +177,7 @@ func TestMastodonFederation_TwoInstances(t *testing.T) {
 	for _, fi := range []*fakeInstance{social, hachy} {
 		ctx := context.Background()
 		verifier := "verifier-for-" + fi.host
-		challenge := pkceChallenge(verifier)
+		challenge := application.GenerateCodeChallenge(verifier)
 
 		authURL, err := m.AuthCodeURLForInstance(ctx, fi.host, "state-"+fi.host, challenge, "", "https://app.example.com/cb")
 		if err != nil {
@@ -237,7 +237,7 @@ func TestMastodonAppCache_RegisteredOncePerHost(t *testing.T) {
 	ctx := context.Background()
 	for i := range 3 {
 		verifier := "v" + string(rune('a'+i))
-		_, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "state", pkceChallenge(verifier), "", "https://app.example.com/cb")
+		_, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "state", application.GenerateCodeChallenge(verifier), "", "https://app.example.com/cb")
 		if err != nil {
 			t.Fatalf("AuthCodeURLForInstance call %d: %v", i, err)
 		}
@@ -270,7 +270,7 @@ func TestMastodonFlowBinding_ExpiredIsIgnored(t *testing.T) {
 	m.flowTTL = 5 * time.Minute
 
 	verifier := "v"
-	challenge := pkceChallenge(verifier)
+	challenge := application.GenerateCodeChallenge(verifier)
 	m.bindFlow(challenge, "mastodon.social")
 
 	// Advance the clock past TTL.
@@ -287,7 +287,7 @@ func TestMastodonFlowBinding_SingleUse(t *testing.T) {
 
 	m := NewMastodon(MastodonConfig{AppCache: NewMemoryMastodonAppCache()})
 	verifier := "v"
-	challenge := pkceChallenge(verifier)
+	challenge := application.GenerateCodeChallenge(verifier)
 	m.bindFlow(challenge, "mastodon.social")
 
 	if host, status := m.takeFlow(challenge); status != flowStatusOK || host != "mastodon.social" {
@@ -355,7 +355,7 @@ func TestMastodonAuthCodeURLForInstance_RejectsMismatchedRedirect(t *testing.T) 
 		AppCache:    NewMemoryMastodonAppCache(),
 	}, map[string]*fakeInstance{"mastodon.social": social})
 
-	_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "state", pkceChallenge("v"), "", "https://attacker.test/cb")
+	_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "state", application.GenerateCodeChallenge("v"), "", "https://attacker.test/cb")
 	if err == nil {
 		t.Fatal("expected error when redirect URI does not match config")
 	}
@@ -368,7 +368,7 @@ func TestMastodonAuthCodeURLForInstance_EmptyHost(t *testing.T) {
 	t.Parallel()
 
 	m := NewMastodon(MastodonConfig{AppCache: NewMemoryMastodonAppCache(), RedirectURI: "https://app/cb"})
-	_, err := m.AuthCodeURLForInstance(context.Background(), "", "state", pkceChallenge("v"), "", "")
+	_, err := m.AuthCodeURLForInstance(context.Background(), "", "state", application.GenerateCodeChallenge("v"), "", "")
 	if err == nil {
 		t.Fatal("expected error for empty host")
 	}
@@ -390,7 +390,7 @@ func TestMastodonExchange_RegistrationGoneFromCache(t *testing.T) {
 	}, map[string]*fakeInstance{"mastodon.social": social})
 
 	verifier := "v"
-	challenge := pkceChallenge(verifier)
+	challenge := application.GenerateCodeChallenge(verifier)
 	// Manually bind without going through AuthCodeURLForInstance to avoid
 	// populating the cache.
 	m.bindFlow(challenge, "mastodon.social")
@@ -425,7 +425,7 @@ func TestMastodonRegisterApp_ServerError(t *testing.T) {
 		AppCache:    NewMemoryMastodonAppCache(),
 	}, map[string]*fakeInstance{"mastodon.social": social})
 
-	_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "state", pkceChallenge("v"), "", "https://app.example.com/cb")
+	_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "state", application.GenerateCodeChallenge("v"), "", "https://app.example.com/cb")
 	if err == nil {
 		t.Fatal("expected error when /api/v1/apps returns 500")
 	}
@@ -448,8 +448,8 @@ func TestMastodonPKCEChallenge_MatchesApplication(t *testing.T) {
 		"another-verifier-with-padding-style-bytes",
 	}
 	for _, v := range verifiers {
-		if got, want := pkceChallenge(v), application.GenerateCodeChallenge(v); got != want {
-			t.Errorf("pkceChallenge(%q) = %q, want %q (matches application.GenerateCodeChallenge)", v, got, want)
+		if got, want := application.GenerateCodeChallenge(v), application.GenerateCodeChallenge(v); got != want {
+			t.Errorf("application.GenerateCodeChallenge(%q) = %q, want %q (matches application.GenerateCodeChallenge)", v, got, want)
 		}
 	}
 }
@@ -467,7 +467,7 @@ func TestMastodonHostNormalization(t *testing.T) {
 
 	ctx := context.Background()
 	verifier := "v"
-	challenge := pkceChallenge(verifier)
+	challenge := application.GenerateCodeChallenge(verifier)
 
 	// Different casing + whitespace must collapse to the same cache + binding.
 	if _, err := m.AuthCodeURLForInstance(ctx, "  Mastodon.SOCIAL  ", "s", challenge, "", "https://app.example.com/cb"); err != nil {
@@ -477,7 +477,7 @@ func TestMastodonHostNormalization(t *testing.T) {
 		t.Errorf("first call register count = %d, want 1", got)
 	}
 	// Second call with canonical lowercase must hit the cache, not register again.
-	if _, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "s2", pkceChallenge("v2"), "", "https://app.example.com/cb"); err != nil {
+	if _, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "s2", application.GenerateCodeChallenge("v2"), "", "https://app.example.com/cb"); err != nil {
 		t.Fatalf("AuthCodeURLForInstance second: %v", err)
 	}
 	if got := social.registerCalls.Load(); got != 1 {
@@ -528,7 +528,7 @@ func TestMastodonConcurrentRegistration_Singleflight(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			verifier := "v" + string(rune('a'+i))
-			_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge(verifier), "", "https://app.example.com/cb")
+			_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", application.GenerateCodeChallenge(verifier), "", "https://app.example.com/cb")
 			errs <- err
 		}(i)
 	}
@@ -557,7 +557,7 @@ func TestMastodonExchange_TokenEndpointError(t *testing.T) {
 
 	ctx := context.Background()
 	verifier := "v"
-	challenge := pkceChallenge(verifier)
+	challenge := application.GenerateCodeChallenge(verifier)
 	if _, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "s", challenge, "", "https://app.example.com/cb"); err != nil {
 		t.Fatalf("AuthCodeURLForInstance: %v", err)
 	}
@@ -584,7 +584,7 @@ func TestMastodonExchange_VerifyEndpointError(t *testing.T) {
 
 	ctx := context.Background()
 	verifier := "v"
-	challenge := pkceChallenge(verifier)
+	challenge := application.GenerateCodeChallenge(verifier)
 	if _, err := m.AuthCodeURLForInstance(ctx, "mastodon.social", "s", challenge, "", "https://app.example.com/cb"); err != nil {
 		t.Fatalf("AuthCodeURLForInstance: %v", err)
 	}
@@ -609,7 +609,7 @@ func TestMastodonRegistrationMissingClientCredentials(t *testing.T) {
 		AppCache:    NewMemoryMastodonAppCache(),
 	}, map[string]*fakeInstance{"mastodon.social": social})
 
-	_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge("v"), "", "https://app.example.com/cb")
+	_, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", application.GenerateCodeChallenge("v"), "", "https://app.example.com/cb")
 	if err == nil {
 		t.Fatal("expected error when registration response was missing client_secret")
 	}
@@ -632,7 +632,7 @@ func TestMastodonNilAppCache_FallsBackToMemory(t *testing.T) {
 	if m.appCache == nil {
 		t.Fatal("appCache is nil after construction with no AppCache; expected memory fallback")
 	}
-	if _, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge("v"), "", "https://app.example.com/cb"); err != nil {
+	if _, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", application.GenerateCodeChallenge("v"), "", "https://app.example.com/cb"); err != nil {
 		t.Errorf("first flow with default cache: %v", err)
 	}
 }
@@ -660,7 +660,7 @@ func TestMastodonRegisterApp_SendsWebsite(t *testing.T) {
 	})
 	m.instanceBase = func(_ string) string { return srv.URL }
 
-	if _, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", pkceChallenge("v"), "", "https://app.example.com/cb"); err != nil {
+	if _, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", application.GenerateCodeChallenge("v"), "", "https://app.example.com/cb"); err != nil {
 		t.Fatalf("AuthCodeURLForInstance: %v", err)
 	}
 	if capturedWebsite != "https://app.example.com" {

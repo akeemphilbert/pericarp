@@ -2,8 +2,6 @@ package providers
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -304,7 +302,7 @@ func (m *Mastodon) AuthCodeURLForInstance(ctx context.Context, host, state, code
 // (duplicate Exchange). None of these should be retried — callers must start
 // a fresh flow via AuthCodeURLForInstance.
 func (m *Mastodon) Exchange(ctx context.Context, code, codeVerifier, redirectURI string) (*application.AuthResult, error) {
-	challenge := pkceChallenge(codeVerifier)
+	challenge := application.GenerateCodeChallenge(codeVerifier)
 	host, status := m.takeFlow(challenge)
 	switch status {
 	case flowStatusOK:
@@ -724,9 +722,3 @@ func (m *Mastodon) sweepExpired(now time.Time) {
 	})
 }
 
-// pkceChallenge computes the S256 PKCE challenge for a verifier (matches
-// application.GenerateCodeChallenge).
-func pkceChallenge(verifier string) string {
-	h := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(h[:])
-}

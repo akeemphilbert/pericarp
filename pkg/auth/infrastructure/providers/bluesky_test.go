@@ -247,7 +247,7 @@ func TestBluesky_HandleResolution_Failure(t *testing.T) {
 	defer env.resolveSrv.Close()
 
 	b := newBlueskyForTest(env, BlueskyConfig{})
-	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge("v"), "", "")
+	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge("v"), "", "")
 	if !errors.Is(err, ErrBlueskyHandleResolutionFailed) {
 		t.Errorf("AuthCodeURLForHandle err = %v, want errors.Is == ErrBlueskyHandleResolutionFailed", err)
 	}
@@ -267,7 +267,7 @@ func TestBluesky_DIDDocumentMissingPDS(t *testing.T) {
 	defer env.plcSrv.Close()
 
 	b := newBlueskyForTest(env, BlueskyConfig{})
-	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge("v"), "", "")
+	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge("v"), "", "")
 	if !errors.Is(err, ErrBlueskyDIDResolutionFailed) {
 		t.Errorf("err = %v, want ErrBlueskyDIDResolutionFailed", err)
 	}
@@ -428,7 +428,7 @@ func TestBluesky_PARSucceeds_AuthURLContainsRequestURI(t *testing.T) {
 	b := newBlueskyForTest(env, BlueskyConfig{})
 
 	verifier := "verifier-abc"
-	challenge := pkceChallenge(verifier)
+	challenge := application.GenerateCodeChallenge(verifier)
 
 	authURL, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "state-1", challenge, "", "")
 	if err != nil {
@@ -468,12 +468,12 @@ func TestBluesky_PAR_DPoPNonceHandshake(t *testing.T) {
 	// should fail loud — the consumer issues a second AuthCodeURLForHandle
 	// call which should now succeed because the cache is warm.
 	verifier := "v"
-	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge(verifier), "", "")
+	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge(verifier), "", "")
 	if err == nil {
 		t.Fatal("first PAR with use_dpop_nonce should fail without a retry; nonce was learned from response")
 	}
 	// Second flow: nonce cache is now populated, request succeeds.
-	authURL, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s2", pkceChallenge(verifier+"x"), "", "")
+	authURL, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s2", application.GenerateCodeChallenge(verifier+"x"), "", "")
 	if err != nil {
 		t.Fatalf("second AuthCodeURLForHandle (nonce primed): %v", err)
 	}
@@ -497,7 +497,7 @@ func TestBluesky_DPoPProof_HasJWKAndSignsCorrectly(t *testing.T) {
 	store := NewMemoryBlueskyKeyStore()
 	b := newBlueskyForTest(env, BlueskyConfig{KeyStore: store})
 
-	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge("v"), "", ""); err != nil {
+	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge("v"), "", ""); err != nil {
 		t.Fatalf("AuthCodeURLForHandle: %v", err)
 	}
 
@@ -553,7 +553,7 @@ func TestBluesky_Exchange_ReturnsDPoPBoundTokens(t *testing.T) {
 	b := newBlueskyForTest(env, BlueskyConfig{})
 
 	verifier := "v-exchange"
-	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge(verifier), "", ""); err != nil {
+	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge(verifier), "", ""); err != nil {
 		t.Fatalf("AuthCodeURLForHandle: %v", err)
 	}
 
@@ -608,7 +608,7 @@ func TestBluesky_RefreshToken_DPoPBound(t *testing.T) {
 
 	// Run Exchange to obtain a wrapped refresh token bound to this PDS.
 	verifier := "v"
-	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge(verifier), "", ""); err != nil {
+	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge(verifier), "", ""); err != nil {
 		t.Fatalf("AuthCodeURLForHandle: %v", err)
 	}
 	res, err := b.Exchange(context.Background(), env.authCode, verifier, "")
@@ -863,7 +863,7 @@ func TestBluesky_AuthServerMetadataIssuerMismatch(t *testing.T) {
 	defer env.plcSrv.Close()
 
 	b := newBlueskyForTest(env, BlueskyConfig{})
-	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge("v"), "", "")
+	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge("v"), "", "")
 	if !errors.Is(err, ErrBlueskyIssuerMismatch) {
 		t.Errorf("err = %v, want ErrBlueskyIssuerMismatch (a malicious DID document must not redirect us through an unverified issuer)", err)
 	}
@@ -933,7 +933,7 @@ func TestBluesky_TokenEndpointDPoPNonceHandshake(t *testing.T) {
 
 	b := newBlueskyForTest(env, BlueskyConfig{})
 	verifier := "v"
-	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge(verifier), "", ""); err != nil {
+	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge(verifier), "", ""); err != nil {
 		t.Fatalf("AuthCodeURLForHandle: %v", err)
 	}
 	res, err := b.Exchange(context.Background(), env.authCode, verifier, "")
@@ -991,7 +991,7 @@ func TestBluesky_TokenEndpoint_Non200WithoutNonce(t *testing.T) {
 
 	b := newBlueskyForTest(env, BlueskyConfig{})
 	verifier := "v"
-	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge(verifier), "", ""); err != nil {
+	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge(verifier), "", ""); err != nil {
 		t.Fatalf("AuthCodeURLForHandle: %v", err)
 	}
 	_, err := b.Exchange(context.Background(), env.authCode, verifier, "")

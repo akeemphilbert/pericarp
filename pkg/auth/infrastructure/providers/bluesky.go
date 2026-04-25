@@ -294,7 +294,7 @@ func (b *Bluesky) AuthCodeURLForHandle(ctx context.Context, handle, state, codeC
 // Exchange swaps the authorization code for DPoP-bound tokens at the same
 // PDS the auth URL was issued by.
 func (b *Bluesky) Exchange(ctx context.Context, code, codeVerifier, redirectURI string) (*application.AuthResult, error) {
-	challenge := pkceChallenge(codeVerifier)
+	challenge := application.GenerateCodeChallenge(codeVerifier)
 	flow, status := b.takeFlow(challenge)
 	switch status {
 	case flowStatusOK:
