@@ -276,22 +276,33 @@ func TestBluesky_DIDDocumentMissingPDS(t *testing.T) {
 func TestBluesky_ValidatePDSURL_SSRFGuard(t *testing.T) {
 	t.Parallel()
 
+	// Static stub resolver so the test never depends on real DNS. The default
+	// answer is a public IP; specific tests override it.
+	publicIP := []string{"93.184.216.34"}
+	internalIP := []string{"10.0.0.5"}
+	mixedIPs := []string{"93.184.216.34", "127.0.0.1"}
+
 	cases := []struct {
 		name        string
 		insecureOK  bool
 		url         string
+		lookup      []string
+		lookupErr   error
 		wantErr     bool
 		errContains string
 	}{
-		{name: "https public hostname allowed", url: "https://pds.example.com", wantErr: false},
+		{name: "https public hostname allowed", url: "https://pds.example.com", lookup: publicIP, wantErr: false},
 		{name: "http rejected by default", url: "http://pds.example.com", wantErr: true, errContains: "https"},
-		{name: "loopback rejected by default", url: "https://127.0.0.1", wantErr: true, errContains: "loopback"},
-		{name: "ipv6 loopback rejected by default", url: "https://[::1]", wantErr: true, errContains: "loopback"},
-		{name: "localhost name rejected by default", url: "https://localhost:8443", wantErr: true, errContains: "localhost"},
-		{name: "rfc1918 private rejected by default", url: "https://10.0.0.1", wantErr: true, errContains: "loopback"},
-		{name: "192.168 private rejected by default", url: "https://192.168.1.1", wantErr: true, errContains: "loopback"},
-		{name: "link-local rejected by default", url: "https://169.254.169.254", wantErr: true, errContains: "loopback"},
+		{name: "loopback IP rejected", url: "https://127.0.0.1", wantErr: true, errContains: "loopback"},
+		{name: "ipv6 loopback rejected", url: "https://[::1]", wantErr: true, errContains: "loopback"},
+		{name: "localhost name rejected", url: "https://localhost:8443", wantErr: true, errContains: "localhost"},
+		{name: "rfc1918 private IP rejected", url: "https://10.0.0.1", wantErr: true, errContains: "loopback"},
+		{name: "192.168 private IP rejected", url: "https://192.168.1.1", wantErr: true, errContains: "loopback"},
+		{name: "link-local IP rejected", url: "https://169.254.169.254", wantErr: true, errContains: "loopback"},
 		{name: "missing host rejected", url: "https://", wantErr: true, errContains: "no host"},
+		{name: "DNS rebinding to internal IP rejected", url: "https://evil.example.com", lookup: internalIP, wantErr: true, errContains: "internal address"},
+		{name: "DNS rebinding even one internal IP rejected", url: "https://evil.example.com", lookup: mixedIPs, wantErr: true, errContains: "internal address"},
+		{name: "DNS lookup failure surfaces", url: "https://nx.example.com", lookupErr: errors.New("no such host"), wantErr: true, errContains: "resolve"},
 		{name: "insecure flag allows http loopback", insecureOK: true, url: "http://127.0.0.1:9000", wantErr: false},
 		{name: "insecure flag allows localhost", insecureOK: true, url: "http://localhost:9000", wantErr: false},
 	}
@@ -300,6 +311,12 @@ func TestBluesky_ValidatePDSURL_SSRFGuard(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: tc.insecureOK})
+			b.lookupHostFn = func(string) ([]string, error) {
+				if tc.lookupErr != nil {
+					return nil, tc.lookupErr
+				}
+				return tc.lookup, nil
+			}
 			err := b.validatePDSURL(tc.url)
 			if tc.wantErr {
 				if err == nil {

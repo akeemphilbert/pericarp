@@ -105,7 +105,10 @@ func (m *memoryMastodonAppCache) SetApp(_ context.Context, host string, app *Mas
 	return nil
 }
 
-// MastodonConfig configures the Mastodon OAuth provider. AppCache is required.
+// MastodonConfig configures the Mastodon OAuth provider. AppCache is optional;
+// if nil, an in-memory cache is used, which is only safe for single-replica
+// deployments and tests. See the AppCache field doc for the multi-replica
+// caveat.
 type MastodonConfig struct {
 	// AppName is the client_name registered at each instance.
 	AppName string
@@ -168,7 +171,8 @@ type Mastodon struct {
 	nowFn func() time.Time
 }
 
-// NewMastodon creates a Mastodon provider. AppCache is required.
+// NewMastodon creates a Mastodon provider. If AppCache is nil, an in-memory
+// cache is used (single-replica only — see MastodonConfig.AppCache).
 func NewMastodon(config MastodonConfig) *Mastodon {
 	scopes := config.Scopes
 	if len(scopes) == 0 {
@@ -314,6 +318,12 @@ func (m *Mastodon) Exchange(ctx context.Context, code, codeVerifier, redirectURI
 	}
 	if redirectURI == "" {
 		redirectURI = m.redirectURI
+	} else if redirectURI != m.redirectURI {
+		// Mirror the AuthCodeURLForInstance check: a mismatched redirectURI
+		// here would either be silently accepted (and rejected at the upstream
+		// token endpoint) or, worse, sent to a different host than the auth
+		// URL was issued against.
+		return nil, fmt.Errorf("mastodon: redirectURI %q does not match configured RedirectURI %q", redirectURI, m.redirectURI)
 	}
 
 	app, err := m.appCache.GetApp(ctx, host)
@@ -367,6 +377,9 @@ func (m *Mastodon) RevokeToken(_ context.Context, _ string) error {
 // RevokeTokenAtInstance revokes a token at the given Mastodon instance.
 func (m *Mastodon) RevokeTokenAtInstance(ctx context.Context, host, token string) error {
 	host = normalizeHost(host)
+	if err := validateMastodonHost(host); err != nil {
+		return err
+	}
 	app, err := m.appCache.GetApp(ctx, host)
 	if err != nil {
 		return fmt.Errorf("mastodon: load app for %q: %w", host, err)
@@ -428,27 +441,42 @@ func (m *Mastodon) ensureApp(ctx context.Context, host string) (*MastodonApp, er
 		return app, nil
 	}
 
-	v, err, _ := m.registerSF.Do(host, func() (any, error) {
+	// The shared registration must not be tied to the winning caller's ctx:
+	// singleflight.Do propagates the first goroutine's context to the work
+	// function, so a quick caller cancellation would tear down the upstream
+	// /api/v1/apps call for every joined caller. Use WithoutCancel for the
+	// shared work and respect each caller's ctx only while waiting on the
+	// channel — that way one caller's cancellation never bricks the others.
+	sharedCtx := context.WithoutCancel(ctx)
+	resultCh := m.registerSF.DoChan(host, func() (any, error) {
 		// Re-check the cache inside the singleflight critical section: the
 		// first goroutine to win the flight may have populated it; subsequent
 		// goroutines that joined the flight should see the cached value.
-		if app, getErr := m.appCache.GetApp(ctx, host); getErr == nil && app != nil {
+		if app, getErr := m.appCache.GetApp(sharedCtx, host); getErr == nil && app != nil {
 			return app, nil
 		}
-		registered, regErr := m.registerApp(ctx, host)
+		registered, regErr := m.registerApp(sharedCtx, host)
 		if regErr != nil {
 			return nil, fmt.Errorf("register app: %w", regErr)
 		}
-		// Best-effort cache write: a failure here is logged via a no-op
-		// (callers wire their own logger at the application layer) but does
-		// not poison the in-flight registration.
-		_ = m.appCache.SetApp(ctx, host, registered)
+		// Best-effort cache write: failures are intentionally ignored so they
+		// do not poison the in-flight registration. Surfacing them as errors
+		// would make the caller discard the just-issued credential and re-
+		// register on retry — the exact pollution pattern the singleflight
+		// here exists to prevent.
+		_ = m.appCache.SetApp(sharedCtx, host, registered)
 		return registered, nil
 	})
-	if err != nil {
-		return nil, err
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-resultCh:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*MastodonApp), nil
 	}
-	return v.(*MastodonApp), nil
 }
 
 // registerApp posts to /api/v1/apps at the given instance to obtain client

@@ -184,6 +184,9 @@ type Bluesky struct {
 	jtiFn                func() string // overridable for deterministic tests
 	dpopNonceCacheM      sync.Map      // issuer -> latest DPoP-Nonce header
 	allowInsecurePDSURLs bool
+	// lookupHostFn is the resolver used by the SSRF guard; overridable in
+	// tests so DNS doesn't have to leave the box.
+	lookupHostFn func(string) ([]string, error)
 }
 
 // NewBluesky constructs a Bluesky provider.
@@ -209,6 +212,7 @@ func NewBluesky(config BlueskyConfig) *Bluesky {
 		nowFn:                time.Now,
 		jtiFn:                func() string { return ksuid.New().String() },
 		allowInsecurePDSURLs: config.AllowInsecurePDSURLs,
+		lookupHostFn:         net.LookupHost,
 	}
 }
 
@@ -226,6 +230,12 @@ func (b *Bluesky) AuthCodeURLForHandle(ctx context.Context, handle, state, codeC
 	handle = strings.ToLower(strings.TrimSpace(handle))
 	if handle == "" {
 		return "", ErrBlueskyHandleRequired
+	}
+	// codeChallenge keys the flow binding; an empty key would collide every
+	// concurrent flow into the same slot and let the first-finishing Exchange
+	// route a code at the wrong PDS / issuer.
+	if strings.TrimSpace(codeChallenge) == "" {
+		return "", fmt.Errorf("bluesky: codeChallenge must not be empty")
 	}
 	if redirectURI == "" {
 		redirectURI = b.redirectURI
@@ -297,6 +307,11 @@ func (b *Bluesky) Exchange(ctx context.Context, code, codeVerifier, redirectURI 
 	}
 	if redirectURI == "" {
 		redirectURI = b.redirectURI
+	} else if redirectURI != b.redirectURI {
+		// Mirror AuthCodeURLForHandle: a different redirect_uri here than the
+		// one used during PAR will be rejected by the PDS, but checking
+		// upfront keeps the error path local and unambiguous.
+		return nil, fmt.Errorf("bluesky: redirectURI %q does not match configured RedirectURI %q", redirectURI, b.redirectURI)
 	}
 
 	form := url.Values{
@@ -488,9 +503,18 @@ func (b *Bluesky) resolveDIDToPDS(ctx context.Context, did string) (string, erro
 // anyone. Without this, a malicious DID document could route subsequent HTTP
 // calls at internal hosts (SSRF) or downgrade the flow to plaintext http.
 //
-// Defaults: scheme must be https, host must be present, and the host must not
-// resolve at lookup time to a loopback / private / link-local IP. Tests and
-// local development opt out via BlueskyConfig.AllowInsecurePDSURLs.
+// Defaults: scheme must be https, host must be present, and (a) the literal
+// host must not be a loopback / private / link-local / unspecified IP and
+// (b) if the host is a DNS name, no resolved A/AAAA must fall in those
+// ranges either — that defends against did:web documents that point at a
+// public-looking name whose DNS happens to resolve to an internal IP. Tests
+// and local development opt out via BlueskyConfig.AllowInsecurePDSURLs.
+//
+// This DNS check is best-effort: it does not defeat true DNS rebinding
+// (where the resolver returns a different IP at dial time than at lookup
+// time). Hardening that fully requires a custom Dialer that re-checks each
+// resolved address; this guard catches the common static-misconfiguration
+// case while we leave the rebinding-hardened dialer for a follow-up.
 func (b *Bluesky) validatePDSURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -499,23 +523,47 @@ func (b *Bluesky) validatePDSURL(raw string) error {
 	if u.Host == "" {
 		return fmt.Errorf("PDS URL %q has no host", raw)
 	}
-	if !b.allowInsecurePDSURLs {
-		if u.Scheme != "https" {
-			return fmt.Errorf("PDS URL %q must use https scheme", raw)
+	if b.allowInsecurePDSURLs {
+		return nil
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("PDS URL %q must use https scheme", raw)
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("PDS URL %q has no hostname", raw)
+	}
+	if strings.EqualFold(hostname, "localhost") {
+		return fmt.Errorf("PDS URL %q points at localhost (SSRF guard)", raw)
+	}
+	if ip := net.ParseIP(hostname); ip != nil {
+		if isInternalIP(ip) {
+			return fmt.Errorf("PDS URL %q points at loopback/private host (SSRF guard)", raw)
 		}
-		hostname := u.Hostname()
-		if hostname == "" {
-			return fmt.Errorf("PDS URL %q has no hostname", raw)
+		return nil
+	}
+	// DNS name: resolve and reject if any answer falls in an internal range.
+	addrs, err := b.lookupHostFn(hostname)
+	if err != nil {
+		return fmt.Errorf("PDS URL %q: resolve %s: %w", raw, hostname, err)
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
 		}
-		if ip := net.ParseIP(hostname); ip != nil {
-			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-				return fmt.Errorf("PDS URL %q points at loopback/private host (SSRF guard)", raw)
-			}
-		} else if strings.EqualFold(hostname, "localhost") {
-			return fmt.Errorf("PDS URL %q points at localhost (SSRF guard)", raw)
+		if isInternalIP(ip) {
+			return fmt.Errorf("PDS URL %q resolves to internal address %s (SSRF guard)", raw, addr)
 		}
 	}
 	return nil
+}
+
+// isInternalIP reports whether ip is a loopback, private (RFC1918 / ULA),
+// link-local, or unspecified address — i.e. one that an externally-issued
+// DID document should never legitimately resolve to.
+func isInternalIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
 // didDocumentURL maps a DID to a fetchable URL. did:plc:* uses the PLC
