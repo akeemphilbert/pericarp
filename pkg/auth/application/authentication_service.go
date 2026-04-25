@@ -528,8 +528,12 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 		sub, err := s.subscriptionService.GetSubscription(ctx, agent.GetID(), activeAccountID)
 		if err != nil {
 			s.logger.Warn(ctx, "auth: subscription lookup failed", "agent_id", agent.GetID(), "active_account_id", activeAccountID, "error", err)
-		} else {
-			subscription = sub
+		} else if sub != nil {
+			if sub.Status.Valid() {
+				subscription = sub
+			} else {
+				s.logger.Warn(ctx, "auth: subscription lookup returned invalid status", "agent_id", agent.GetID(), "active_account_id", activeAccountID, "status", sub.Status)
+			}
 		}
 	}
 	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription)
