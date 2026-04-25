@@ -113,15 +113,19 @@ func newFakeInstance(t *testing.T, host string) *fakeInstance {
 }
 
 // newMastodonForTest builds a Mastodon provider whose instanceBase resolver
-// routes every host to the corresponding fakeInstance.server.URL. Hosts not in
-// the map fail loud rather than escaping to the real internet.
+// routes every host to the corresponding fakeInstance.server.URL. Hosts not
+// in the map panic instead of returning a synthetic URL: the previous
+// "invalid.test.local" sentinel could still trigger real DNS lookups or
+// proxied HTTP if a regression caused an unexpected host to slip through.
+// Panicking turns any such regression into a loud test failure with no
+// network fallback.
 func newMastodonForTest(cfg MastodonConfig, instances map[string]*fakeInstance) *Mastodon {
 	m := NewMastodon(cfg)
 	m.instanceBase = func(host string) string {
 		if fi, ok := instances[host]; ok {
 			return fi.server.URL
 		}
-		return "http://invalid.test.local/" + host
+		panic("newMastodonForTest: unexpected host " + host + " (not in instances map)")
 	}
 	return m
 }

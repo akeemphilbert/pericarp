@@ -97,7 +97,15 @@ func BuildProviderRegistry() application.OAuthProviderRegistry {
 // MastodonConfig.InstanceBase is the public seam used here — it routes
 // every host lookup at the fake httptest server. Production deployments
 // leave InstanceBase nil; staging mirrors set it to a fixed mirror URL.
-func RunMastodonAgainstFake(ctx context.Context) error {
+//
+// out is where the demo writes its narrative output (authorize URL, exchanged
+// identity). main.go passes os.Stdout; tests pass io.Discard so parallel runs
+// don't interleave with go test's progress lines. A nil out is also accepted
+// as "discard all output."
+func RunMastodonAgainstFake(ctx context.Context, out io.Writer) error {
+	if out == nil {
+		out = io.Discard
+	}
 	fake := newFakeMastodonInstance()
 	defer fake.Close()
 
@@ -130,13 +138,13 @@ func RunMastodonAgainstFake(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("AuthCodeURLForInstance: %w", err)
 	}
-	fmt.Printf("[mastodon-demo] authorize URL: %s\n", authURL)
+	_, _ = fmt.Fprintf(out, "[mastodon-demo] authorize URL: %s\n", authURL)
 
 	result, err := mastodon.Exchange(ctx, "auth-code-demo", verifier, "https://app.example.com/cb")
 	if err != nil {
 		return fmt.Errorf("Exchange: %w", err)
 	}
-	fmt.Printf("[mastodon-demo] exchanged: provider_user_id=%s display_name=%s\n",
+	_, _ = fmt.Fprintf(out, "[mastodon-demo] exchanged: provider_user_id=%s display_name=%s\n",
 		result.UserInfo.ProviderUserID, result.UserInfo.DisplayName)
 
 	if result.UserInfo.Provider != "mastodon" {

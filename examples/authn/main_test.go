@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -34,7 +35,9 @@ func TestProviderCatalog_AllProvidersRegistered(t *testing.T) {
 
 func TestRunMastodonAgainstFake_EndToEnd(t *testing.T) {
 	t.Parallel()
-	if err := RunMastodonAgainstFake(context.Background()); err != nil {
+	// io.Discard keeps the demo's narrative output out of `go test`'s
+	// progress stream so parallel test runs don't interleave with it.
+	if err := RunMastodonAgainstFake(context.Background(), io.Discard); err != nil {
 		t.Fatalf("RunMastodonAgainstFake: %v", err)
 	}
 }

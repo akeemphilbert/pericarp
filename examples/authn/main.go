@@ -192,7 +192,7 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("=== End-to-end Mastodon flow against an httptest fake ===")
-	if err := RunMastodonAgainstFake(ctx); err != nil {
+	if err := RunMastodonAgainstFake(ctx, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "Mastodon demo ERROR: %v\n", err)
 		os.Exit(1)
 	}
