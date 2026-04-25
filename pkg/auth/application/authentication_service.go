@@ -503,14 +503,11 @@ func (s *DefaultAuthenticationService) RevokeAllSessions(ctx context.Context, ag
 	return s.sessions.RevokeAllForAgent(ctx, agentID)
 }
 
-// IssueIdentityToken issues a signed JWT for the given agent.
-// Returns ("", nil) if no JWTService is configured.
-//
-// When a SubscriptionService is configured, this method snapshots the agent's
-// current subscription state and embeds it as a claim. Subscription lookup
-// failures are logged but do not block token issuance — billing-provider
-// outages must not break login. The consumer interprets a missing claim as
-// "no active subscription".
+// IssueIdentityToken issues a signed JWT for the given agent, or ("", nil)
+// if no JWTService is configured. When a SubscriptionService is wired the
+// current claim is snapshotted into the token; lookup failures are logged
+// but do not block issuance — billing-provider outages must not break
+// login.
 func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
 	if s.jwtService == nil {
 		return "", nil

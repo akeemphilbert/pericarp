@@ -22,7 +22,12 @@ var (
 
 // RequireAuth returns HTTP middleware that validates the session cookie and
 // injects the SessionInfo into the request context.
-// It also injects an auth.Identity for use via auth.AgentFromCtx.
+// It also injects an auth.Identity for use via auth.AgentFromCtx. The
+// injected Identity.Subscription is always nil — sessions don't snapshot
+// subscription state. Services that mix RequireAuth and RequireJWT will
+// see different IsActive() results for the same agent depending on which
+// middleware served the request; gate paid-tier features behind RequireJWT
+// or fetch subscription state explicitly under RequireAuth.
 // Unauthenticated requests receive a 401 JSON response.
 func RequireAuth(
 	sm session.SessionManager,

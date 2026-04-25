@@ -19,11 +19,10 @@ var (
 
 // PericarpClaims contains the JWT claims issued by the auth system.
 // AgentID mirrors RegisteredClaims.Subject for convenient access without
-// parsing the standard "sub" field.
-//
-// Subscription is set by AuthenticationService.IssueIdentityToken when a
-// SubscriptionService is configured; it is omitted from the JWT when nil so
-// tokens issued in opaque-session-only deployments stay byte-compatible.
+// parsing the standard "sub" field. Subscription is set by
+// AuthenticationService.IssueIdentityToken when a SubscriptionService is
+// configured; the omitempty tag keeps the claim absent (rather than null)
+// in opaque-session-only deployments.
 type PericarpClaims struct {
 	jwt.RegisteredClaims
 	AgentID         string                  `json:"agent_id"`

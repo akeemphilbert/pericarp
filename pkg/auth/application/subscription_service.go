@@ -7,15 +7,13 @@ import (
 )
 
 // SubscriptionService resolves the current subscription state for an agent
-// at token-issuance time. The resulting SubscriptionClaim is embedded in the
-// JWT so consumer services can gate paid-tier access without per-request
-// billing API calls.
-//
-// Implementations should return a non-nil *SubscriptionClaim with
-// SubscriptionStatusInactive when the agent has no record at the provider,
-// so the absence of a paid plan is captured explicitly rather than as a
-// nil claim. A nil claim with a nil error means "no claim to embed" and is
-// also valid (the JWT will omit the field).
+// at token-issuance time. The resulting SubscriptionClaim is embedded in
+// the JWT so consumer services can gate paid-tier access without per-
+// request billing API calls. Returning (nil, nil) is the canonical "no
+// record" answer — the claim is omitted from the token and consumers see
+// inactive via SubscriptionClaim.IsActive on the nil pointer. Errors are
+// logged by the caller and treated the same as no record so a billing-
+// provider outage cannot block login.
 type SubscriptionService interface {
 	GetSubscription(ctx context.Context, agentID, accountID string) (*auth.SubscriptionClaim, error)
 }

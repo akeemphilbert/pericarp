@@ -41,6 +41,15 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-04-25: SubscriptionClaim.IsActive honors ExpiresAt (PR #25 review)
+
+- `IsActive()` now returns false when `ExpiresAt` is non-zero and in the past, regardless of `Status`. Previously the field was carried through the JWT and into `ReissueToken` snapshots but never consulted, so a stale claim held across an account-switch could grant paid access past the provider-attested expiry. Zero `ExpiresAt` is still treated as "no expiry expressed" so providers without a fixed expiry (lifetime entitlements) keep working
+- Added `SubscriptionStatus.Valid()` so adapter-side tests can assert the provider's status string normalization didn't drift (e.g., catching `"ACTIVE"` vs `"active"` before it silently downgrades a paying customer)
+- Tightened doc-strings flagged by review: `SubscriptionService` resolved the contradictory "should return non-nil Inactive" / "nil is also valid" prose into a single canonical contract; `ReissueToken` no longer overstates its claim-stability invariant; `RequireAuth` documents the session-vs-JWT divergence at the wiring point so a service mounting both middlewares isn't surprised by inconsistent `IsActive()` results
+- **Why:** Surfaced by silent-failure-hunter PR review on #25 — the `ExpiresAt` field existed end-to-end but no code path read it, which is exactly the kind of trap the review process is meant to catch
+
+---
+
 ### 2026-04-25: SubscriptionService extensibility — interface + JWT wiring (Story 1 of #24)
 
 - Added `auth.SubscriptionClaim` value type (`pkg/auth/subscription.go`) with `SubscriptionStatus` constants (`active`, `trialing`, `past_due`, `cancelled`, `inactive`) and an `IsActive()` helper that centralizes the "what counts as paying" rule (only `active` and `trialing` grant access)

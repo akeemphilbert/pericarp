@@ -173,9 +173,10 @@ func (s *RSAJWTService) ValidateInviteToken(ctx context.Context, tokenString str
 
 // ReissueToken creates a new JWT with a different ActiveAccountID, copying
 // AgentID, Subject, AccountIDs, and Subscription from the existing claims.
-// The subscription claim is preserved verbatim — account-switch reissuance
-// does not re-query the SubscriptionService, so the snapshot stays stable
-// for the lifetime of the original sign-in.
+// The subscription claim is copied verbatim — account-switch reissuance
+// prefers a stale-but-stable snapshot over a per-switch billing call. A
+// fresh snapshot is only taken on the next IssueIdentityToken (e.g. when
+// the JWT expires and the user re-authenticates).
 func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.PericarpClaims, activeAccountID string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

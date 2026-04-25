@@ -1111,6 +1111,37 @@ func TestIssueIdentityToken_WithSubscriptionService_EmbedsClaim(t *testing.T) {
 	}
 }
 
+func TestIssueIdentityToken_NonNilInactiveClaim_EmbeddedAsIs(t *testing.T) {
+	// Adapters that distinguish "no record" from "found, no paid plan"
+	// return a non-nil claim with Status=Inactive. Verify that flows
+	// through end-to-end rather than getting collapsed into nil.
+	t.Parallel()
+	ctx := context.Background()
+
+	want := &auth.SubscriptionClaim{Status: auth.SubscriptionStatusInactive, Provider: "stripe"}
+	subSvc := &mockSubscriptionService{claim: want}
+	jwtSvc := &mockJWTService{}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if jwtSvc.lastSubscription != want {
+		t.Fatalf("subscription passed to JWTService = %+v, want %+v", jwtSvc.lastSubscription, want)
+	}
+	if jwtSvc.lastSubscription.IsActive() {
+		t.Error("inactive claim should not report active")
+	}
+}
+
 func TestIssueIdentityToken_SubscriptionLookupError_TokenStillIssued(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

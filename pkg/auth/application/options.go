@@ -70,8 +70,8 @@ func WithPasswordCredentialRepository(repo repositories.PasswordCredentialReposi
 }
 
 // WithSubscriptionService wires a SubscriptionService for snapshotting
-// subscription state into issued JWTs. When unset, the issued tokens omit
-// the subscription claim and consumers see an inactive subscription.
+// subscription state into issued JWTs. When unset, IssueIdentityToken
+// issues tokens with no subscription claim.
 func WithSubscriptionService(svc SubscriptionService) AuthServiceOption {
 	return func(s *DefaultAuthenticationService) {
 		if svc != nil {

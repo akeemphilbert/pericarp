@@ -498,6 +498,9 @@ func TestRequireAuth_ValidSession_InjectsIdentity(t *testing.T) {
 	if len(capturedID.AccountIDs) != 1 || capturedID.AccountIDs[0] != "acc-1" {
 		t.Errorf("AccountIDs = %v, want [acc-1]", capturedID.AccountIDs)
 	}
+	if capturedID.Subscription != nil {
+		t.Errorf("Identity.Subscription = %+v, want nil — sessions don't carry subscription state", capturedID.Subscription)
+	}
 }
 
 func TestRequireJWT_NoToken_NoIdentity(t *testing.T) {
