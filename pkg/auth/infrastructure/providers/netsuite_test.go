@@ -37,8 +37,11 @@ func TestNetSuite_DefaultScopes(t *testing.T) {
 		t.Fatalf("parse auth URL: %v", err)
 	}
 
-	if got := parsed.Query().Get("scope"); got != "restlets" {
-		t.Errorf("default scope = %q, want %q", got, "restlets")
+	// rest_webservices is the SuiteTalk REST scope that authorizes the
+	// userinfo endpoint Exchange calls after token issuance — defaulting
+	// elsewhere would make the default Exchange flow fail.
+	if got := parsed.Query().Get("scope"); got != "rest_webservices" {
+		t.Errorf("default scope = %q, want %q", got, "rest_webservices")
 	}
 }
 
@@ -409,14 +412,277 @@ func TestNetSuite_ValidateIDToken_ReturnsSentinel(t *testing.T) {
 	}
 }
 
+// TestNetSuite_RevokeURL_OverrideWinsOverDerived covers the same trap as for
+// auth/token: explicit override must win over the derived URL even when
+// AccountID is set.
+func TestNetSuite_RevokeURL_OverrideWinsOverDerived(t *testing.T) {
+	t.Parallel()
+
+	var hit string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := providers.NewNetSuite(providers.NetSuiteConfig{
+		ClientID:       "id",
+		ClientSecret:   "secret",
+		AccountID:      "1234567",
+		RevokeEndpoint: srv.URL + "/revoke",
+	})
+
+	if err := n.RevokeToken(context.Background(), "tok"); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+	if hit != "/revoke" {
+		t.Errorf("revoke endpoint hit = %q, want %q (override should win over derived URL)", hit, "/revoke")
+	}
+}
+
+// TestNetSuite_UserInfoURL_OverrideWinsOverDerived covers the same trap for
+// the userinfo endpoint.
+func TestNetSuite_UserInfoURL_OverrideWinsOverDerived(t *testing.T) {
+	t.Parallel()
+
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTokenResponse(t, w, netSuiteTokenStub{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer tokenSrv.Close()
+
+	var hit string
+	userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = r.URL.Path
+		writeUserInfoResponse(t, w, netSuiteUserInfoStub{Sub: "u1", Email: "u@example.com"})
+	}))
+	defer userSrv.Close()
+
+	n := providers.NewNetSuite(providers.NetSuiteConfig{
+		ClientID:         "id",
+		ClientSecret:     "secret",
+		AccountID:        "1234567",
+		TokenEndpoint:    tokenSrv.URL,
+		UserInfoEndpoint: userSrv.URL + "/userinfo",
+	})
+
+	if _, err := n.Exchange(context.Background(), "code", "verifier", "https://app.example.com/cb"); err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if hit != "/userinfo" {
+		t.Errorf("userinfo endpoint hit = %q, want %q (override should win over derived URL)", hit, "/userinfo")
+	}
+}
+
+// TestNetSuite_Exchange_UserInfoFailure asserts that a userinfo failure after
+// a successful token exchange propagates as an error rather than being
+// silently masked into a partial AuthResult.
+func TestNetSuite_Exchange_UserInfoFailure(t *testing.T) {
+	t.Parallel()
+
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTokenResponse(t, w, netSuiteTokenStub{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer tokenSrv.Close()
+
+	userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"backend"}`))
+	}))
+	defer userSrv.Close()
+
+	n := providers.NewNetSuite(providers.NetSuiteConfig{
+		ClientID:         "id",
+		ClientSecret:     "secret",
+		AccountID:        "1234567",
+		TokenEndpoint:    tokenSrv.URL,
+		UserInfoEndpoint: userSrv.URL,
+	})
+
+	_, err := n.Exchange(context.Background(), "code", "verifier", "https://app.example.com/cb")
+	if err == nil {
+		t.Fatal("expected error from Exchange when userinfo returns 500, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch user info") {
+		t.Errorf("error = %v, want it to mention failed to fetch user info", err)
+	}
+}
+
+// TestNetSuite_RefreshToken_UserInfoFailure asserts the same propagation on
+// the refresh path; the error message must distinguish refresh from initial
+// exchange.
+func TestNetSuite_RefreshToken_UserInfoFailure(t *testing.T) {
+	t.Parallel()
+
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTokenResponse(t, w, netSuiteTokenStub{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer tokenSrv.Close()
+
+	userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer userSrv.Close()
+
+	n := providers.NewNetSuite(providers.NetSuiteConfig{
+		ClientID:         "id",
+		ClientSecret:     "secret",
+		AccountID:        "1234567",
+		TokenEndpoint:    tokenSrv.URL,
+		UserInfoEndpoint: userSrv.URL,
+	})
+
+	_, err := n.RefreshToken(context.Background(), "old-refresh")
+	if err == nil {
+		t.Fatal("expected error from RefreshToken when userinfo returns 500, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch user info after refresh") {
+		t.Errorf("error = %v, want refresh-specific user info failure message", err)
+	}
+}
+
+// TestNetSuite_Exchange_TokenSuccessWithoutAccessToken guards against a
+// silent-failure mode: NetSuite (or a fronting proxy) returns 200 with an
+// OAuth error body or empty access_token. We must NOT then call userinfo with
+// an empty Bearer token.
+func TestNetSuite_Exchange_TokenSuccessWithoutAccessToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		body    netSuiteTokenStub
+		wantSub string
+	}{
+		{
+			name:    "OAuth error body on 200",
+			body:    netSuiteTokenStub{Error: "invalid_grant", ErrorDescription: "code expired"},
+			wantSub: "token endpoint error",
+		},
+		{
+			name:    "missing access_token on 200",
+			body:    netSuiteTokenStub{TokenType: "Bearer", ExpiresIn: 3600},
+			wantSub: "missing access_token",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeTokenResponse(t, w, tt.body)
+			}))
+			defer tokenSrv.Close()
+
+			userInfoCalled := false
+			userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				userInfoCalled = true
+				writeUserInfoResponse(t, w, netSuiteUserInfoStub{Sub: "u1"})
+			}))
+			defer userSrv.Close()
+
+			n := providers.NewNetSuite(providers.NetSuiteConfig{
+				ClientID:         "id",
+				ClientSecret:     "secret",
+				AccountID:        "1234567",
+				TokenEndpoint:    tokenSrv.URL,
+				UserInfoEndpoint: userSrv.URL,
+			})
+
+			_, err := n.Exchange(context.Background(), "code", "verifier", "https://app.example.com/cb")
+			if err == nil {
+				t.Fatal("expected error from Exchange, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("error = %v, want it to mention %q", err, tt.wantSub)
+			}
+			if userInfoCalled {
+				t.Error("userinfo must not be called when token endpoint did not return a usable access_token")
+			}
+		})
+	}
+}
+
+// TestNetSuite_Exchange_UserInfoMissingSub guards against silently issuing an
+// identity with an empty ProviderUserID when NetSuite returns a partial
+// userinfo payload.
+func TestNetSuite_Exchange_UserInfoMissingSub(t *testing.T) {
+	t.Parallel()
+
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTokenResponse(t, w, netSuiteTokenStub{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer tokenSrv.Close()
+
+	userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeUserInfoResponse(t, w, netSuiteUserInfoStub{Email: "u@example.com"})
+	}))
+	defer userSrv.Close()
+
+	n := providers.NewNetSuite(providers.NetSuiteConfig{
+		ClientID:         "id",
+		ClientSecret:     "secret",
+		AccountID:        "1234567",
+		TokenEndpoint:    tokenSrv.URL,
+		UserInfoEndpoint: userSrv.URL,
+	})
+
+	_, err := n.Exchange(context.Background(), "code", "verifier", "https://app.example.com/cb")
+	if err == nil {
+		t.Fatal("expected error from Exchange when userinfo omits sub, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing sub") {
+		t.Errorf("error = %v, want it to mention missing sub", err)
+	}
+}
+
+// TestNetSuite_Exchange_DisplayNameFallback covers the PreferredUsername
+// fallback NetSuite often returns for service / system accounts that lack a
+// human-readable Name.
+func TestNetSuite_Exchange_DisplayNameFallback(t *testing.T) {
+	t.Parallel()
+
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeTokenResponse(t, w, netSuiteTokenStub{AccessToken: "tok", TokenType: "Bearer", ExpiresIn: 3600})
+	}))
+	defer tokenSrv.Close()
+
+	userSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeUserInfoResponse(t, w, netSuiteUserInfoStub{
+			Sub:               "user-1",
+			Email:             "svc@example.com",
+			PreferredUsername: "svcaccount",
+		})
+	}))
+	defer userSrv.Close()
+
+	n := providers.NewNetSuite(providers.NetSuiteConfig{
+		ClientID:         "id",
+		ClientSecret:     "secret",
+		AccountID:        "1234567",
+		TokenEndpoint:    tokenSrv.URL,
+		UserInfoEndpoint: userSrv.URL,
+	})
+
+	res, err := n.Exchange(context.Background(), "code", "verifier", "https://app.example.com/cb")
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if res.UserInfo.DisplayName != "svcaccount" {
+		t.Errorf("DisplayName = %q, want svcaccount (preferred_username fallback)", res.UserInfo.DisplayName)
+	}
+}
+
 // --- helpers ---
 
 type netSuiteTokenStub struct {
-	AccessToken  string `json:"access_token,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	IDToken      string `json:"id_token,omitempty"`
-	TokenType    string `json:"token_type,omitempty"`
-	ExpiresIn    int    `json:"expires_in,omitempty"`
+	AccessToken      string `json:"access_token,omitempty"`
+	RefreshToken     string `json:"refresh_token,omitempty"`
+	IDToken          string `json:"id_token,omitempty"`
+	TokenType        string `json:"token_type,omitempty"`
+	ExpiresIn        int    `json:"expires_in,omitempty"`
+	Error            string `json:"error,omitempty"`
+	ErrorDescription string `json:"error_description,omitempty"`
 }
 
 type netSuiteUserInfoStub struct {
