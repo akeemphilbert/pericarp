@@ -111,9 +111,11 @@ type revenueCatSubscription struct {
 // GetSubscription queries RevenueCat for agentID's current subscription
 // state. accountID is unused — RevenueCat keys on a single app_user_id, so
 // callers should arrange to use agentID consistently across registration
-// and lookup. Returns (nil, nil) when the subscriber has no active or
-// recently-active entitlement; returns an error for transport failures and
-// non-2xx responses other than 404 (which is also treated as "no record").
+// and lookup. Returns (nil, nil) when RevenueCat has no record for the
+// subscriber (404) or when there is no entitlement data to build a claim.
+// Expired entitlements may still produce a non-nil claim with inactive
+// status. Returns an error for transport failures and non-2xx responses
+// other than 404.
 func (r *RevenueCat) GetSubscription(ctx context.Context, agentID, accountID string) (*auth.SubscriptionClaim, error) {
 	_ = accountID
 	if r.apiKey == "" {
@@ -246,7 +248,6 @@ type subscriptionSignals struct {
 	isTrial               bool
 	unsubscribedAt        *time.Time
 	unsubscribedExpiresAt *time.Time
-	matchedHadUnsubscribe bool
 }
 
 func readSubscriptionSignals(all map[string]revenueCatSubscription, matched revenueCatSubscription, hasMatch bool) subscriptionSignals {
@@ -256,7 +257,6 @@ func readSubscriptionSignals(all map[string]revenueCatSubscription, matched reve
 		s.isTrial = matched.PeriodType == "trial"
 		s.unsubscribedAt = matched.UnsubscribeDetectedAt
 		s.unsubscribedExpiresAt = matched.ExpiresDate
-		s.matchedHadUnsubscribe = matched.UnsubscribeDetectedAt != nil
 		return s
 	}
 	for _, sub := range all {

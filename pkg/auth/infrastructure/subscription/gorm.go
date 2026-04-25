@@ -20,8 +20,8 @@ const (
 // WithGORMTable; for fully custom schemas use WithGORMResolver.
 type SubscriptionRecord struct {
 	ID        uint       `gorm:"primaryKey"`
-	AgentID   string     `gorm:"size:64;index:idx_sub_agent;not null"`
-	AccountID string     `gorm:"size:64;index:idx_sub_agent_account"`
+	AgentID   string     `gorm:"size:64;index:idx_sub_agent_account,priority:1;not null"`
+	AccountID string     `gorm:"size:64;index:idx_sub_agent_account,priority:2"`
 	Status    string     `gorm:"size:32;not null"`
 	Plan      string     `gorm:"size:128"`
 	Provider  string     `gorm:"size:64"`
@@ -162,7 +162,7 @@ func (g *GORM) defaultLookup(ctx context.Context, agentID, accountID string) (*a
 		return g.toClaim(rec), nil
 	}
 
-	err := base.Where("account_id = ? OR account_id IS NULL", "").
+	err := base.Where("(account_id = ? OR account_id IS NULL)", "").
 		Order("updated_at DESC, id DESC").
 		Limit(1).
 		Take(&rec).Error
