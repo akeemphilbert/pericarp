@@ -185,8 +185,9 @@ type Bluesky struct {
 	dpopNonceCacheM      sync.Map      // issuer -> latest DPoP-Nonce header
 	allowInsecurePDSURLs bool
 	// lookupHostFn is the resolver used by the SSRF guard; overridable in
-	// tests so DNS doesn't have to leave the box.
-	lookupHostFn func(string) ([]string, error)
+	// tests so DNS doesn't have to leave the box. Context-aware so resolver
+	// hangs respect the caller's deadline/cancellation.
+	lookupHostFn func(ctx context.Context, host string) ([]string, error)
 }
 
 // NewBluesky constructs a Bluesky provider.
@@ -212,7 +213,7 @@ func NewBluesky(config BlueskyConfig) *Bluesky {
 		nowFn:                time.Now,
 		jtiFn:                func() string { return ksuid.New().String() },
 		allowInsecurePDSURLs: config.AllowInsecurePDSURLs,
-		lookupHostFn:         net.LookupHost,
+		lookupHostFn:         net.DefaultResolver.LookupHost,
 	}
 }
 
@@ -372,7 +373,7 @@ func (b *Bluesky) RefreshToken(ctx context.Context, refreshToken string) (*appli
 	// scheme/host/non-internal checks plus a same-host check tying
 	// tokenURL/issuer to pdsURL. Without this, a poisoned `btr.v2.` payload
 	// could redirect refresh POSTs at internal services.
-	if err := b.validateRefreshTokenURLs(pdsURL, tokenURL, issuer); err != nil {
+	if err := b.validateRefreshTokenURLs(ctx, pdsURL, tokenURL, issuer); err != nil {
 		return nil, fmt.Errorf("bluesky: refresh token URLs: %w", err)
 	}
 
@@ -498,7 +499,7 @@ func (b *Bluesky) resolveDIDToPDS(ctx context.Context, did string) (string, erro
 	for _, svc := range doc.Service {
 		if svc.Type == "AtprotoPersonalDataServer" {
 			pdsURL := strings.TrimRight(svc.ServiceEndpoint, "/")
-			if err := b.validatePDSURL(pdsURL); err != nil {
+			if err := b.validatePDSURL(ctx, pdsURL); err != nil {
 				return "", err
 			}
 			return pdsURL, nil
@@ -524,13 +525,20 @@ func (b *Bluesky) resolveDIDToPDS(ctx context.Context, did string) (string, erro
 // time). Hardening that fully requires a custom Dialer that re-checks each
 // resolved address; this guard catches the common static-misconfiguration
 // case while we leave the rebinding-hardened dialer for a follow-up.
-func (b *Bluesky) validatePDSURL(raw string) error {
+func (b *Bluesky) validatePDSURL(ctx context.Context, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("PDS URL %q: %w", raw, err)
 	}
 	if u.Host == "" {
 		return fmt.Errorf("PDS URL %q has no host", raw)
+	}
+	// Reject userinfo regardless of insecure-mode: a serviceEndpoint shaped
+	// like https://user:pass@host has no legitimate use, encourages
+	// credential-in-URL anti-patterns, and enables URL-confusion tricks where
+	// the apparent host differs from the actual authority.
+	if u.User != nil {
+		return fmt.Errorf("PDS URL %q must not contain userinfo", raw)
 	}
 	if b.allowInsecurePDSURLs {
 		return nil
@@ -552,7 +560,7 @@ func (b *Bluesky) validatePDSURL(raw string) error {
 		return nil
 	}
 	// DNS name: resolve and reject if any answer falls in an internal range.
-	addrs, err := b.lookupHostFn(hostname)
+	addrs, err := b.lookupHostFn(ctx, hostname)
 	if err != nil {
 		return fmt.Errorf("PDS URL %q: resolve %s: %w", raw, hostname, err)
 	}
@@ -628,7 +636,7 @@ func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*
 	if meta.AuthorizationEndpoint == "" || meta.TokenEndpoint == "" || meta.PushedAuthorizationRequestEndpoint == "" {
 		return nil, fmt.Errorf("auth server metadata missing required endpoints: %s", string(body))
 	}
-	if err := b.validateAuthServerEndpoints(pdsURL, &meta); err != nil {
+	if err := b.validateAuthServerEndpoints(ctx, pdsURL, &meta); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -645,7 +653,7 @@ func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*
 // makes the PDS the authorization server, so a different host on any
 // endpoint indicates either a mis-configured server or a redirect attempt.
 // AllowInsecurePDSURLs bypasses both layers.
-func (b *Bluesky) validateAuthServerEndpoints(pdsURL string, meta *blueskyAuthServerMetadata) error {
+func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, pdsURL string, meta *blueskyAuthServerMetadata) error {
 	if b.allowInsecurePDSURLs {
 		return nil
 	}
@@ -662,7 +670,7 @@ func (b *Bluesky) validateAuthServerEndpoints(pdsURL string, meta *blueskyAuthSe
 		{"token_endpoint", meta.TokenEndpoint},
 		{"pushed_authorization_request_endpoint", meta.PushedAuthorizationRequestEndpoint},
 	} {
-		if err := b.validatePDSURL(ep.raw); err != nil {
+		if err := b.validatePDSURL(ctx, ep.raw); err != nil {
 			return fmt.Errorf("auth server %s: %w", ep.name, err)
 		}
 		u, err := url.Parse(ep.raw)
@@ -684,11 +692,11 @@ func (b *Bluesky) validateAuthServerEndpoints(pdsURL string, meta *blueskyAuthSe
 // validateAuthServerEndpoints: each URL goes through validatePDSURL, and
 // tokenURL / issuer must share a host with pdsURL. AllowInsecurePDSURLs
 // bypasses both layers for tests/dev.
-func (b *Bluesky) validateRefreshTokenURLs(pdsURL, tokenURL, issuer string) error {
+func (b *Bluesky) validateRefreshTokenURLs(ctx context.Context, pdsURL, tokenURL, issuer string) error {
 	if b.allowInsecurePDSURLs {
 		return nil
 	}
-	if err := b.validatePDSURL(pdsURL); err != nil {
+	if err := b.validatePDSURL(ctx, pdsURL); err != nil {
 		return fmt.Errorf("pdsURL: %w", err)
 	}
 	pdsParsed, err := url.Parse(pdsURL)
@@ -703,7 +711,7 @@ func (b *Bluesky) validateRefreshTokenURLs(pdsURL, tokenURL, issuer string) erro
 		{"tokenURL", tokenURL},
 		{"issuer", issuer},
 	} {
-		if err := b.validatePDSURL(ep.raw); err != nil {
+		if err := b.validatePDSURL(ctx, ep.raw); err != nil {
 			return fmt.Errorf("%s: %w", ep.name, err)
 		}
 		u, err := url.Parse(ep.raw)

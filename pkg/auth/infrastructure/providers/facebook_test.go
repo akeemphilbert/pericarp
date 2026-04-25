@@ -234,8 +234,13 @@ func TestFacebookRevokeToken_Success(t *testing.T) {
 		if r.Method != http.MethodDelete {
 			t.Errorf("revoke method = %s, want DELETE", r.Method)
 		}
-		if got := r.URL.Query().Get("access_token"); got != "fb-access" {
-			t.Errorf("revoke access_token = %q, want fb-access", got)
+		// Token must come via the Authorization header, not the URL query —
+		// otherwise it ends up in HTTP / proxy / telemetry logs.
+		if got, want := r.Header.Get("Authorization"), "Bearer fb-access"; got != want {
+			t.Errorf("revoke Authorization = %q, want %q", got, want)
+		}
+		if got := r.URL.Query().Get("access_token"); got != "" {
+			t.Errorf("revoke access_token leaked into URL query: %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"success":true}`))
@@ -403,20 +408,23 @@ func TestFacebookRevokeToken_UnparseableBody(t *testing.T) {
 	}
 }
 
-func TestFacebookRevokeToken_URLEncodesToken(t *testing.T) {
+func TestFacebookRevokeToken_PassesTokenLiterally(t *testing.T) {
 	t.Parallel()
 
-	const tokenWithSpecialChars = "fb/access+token=" // +, /, = are all reserved
+	// A token containing characters that historically required URL encoding
+	// when it lived in the query string. With the Authorization header it
+	// must round-trip exactly; HTTP header values pass these chars through
+	// without escaping.
+	const tokenWithSpecialChars = "fb/access+token="
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v18.0/me/permissions", func(w http.ResponseWriter, r *http.Request) {
-		// r.URL.Query().Get auto-decodes; verify the server sees the original token, not the percent-encoded form.
-		if got := r.URL.Query().Get("access_token"); got != tokenWithSpecialChars {
-			t.Errorf("revoke access_token (decoded) = %q, want %q", got, tokenWithSpecialChars)
+		if got, want := r.Header.Get("Authorization"), "Bearer "+tokenWithSpecialChars; got != want {
+			t.Errorf("revoke Authorization = %q, want %q", got, want)
 		}
-		// Sanity: the raw query should contain percent-encoding, not raw '+' (which decodes to space).
-		if !strings.Contains(r.URL.RawQuery, "%2F") || !strings.Contains(r.URL.RawQuery, "%2B") {
-			t.Errorf("RawQuery = %q, expected percent-encoded reserved characters", r.URL.RawQuery)
+		// And the token must NOT have leaked back into the URL.
+		if got := r.URL.Query().Get("access_token"); got != "" {
+			t.Errorf("revoke access_token leaked into URL: %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"success":true}`))

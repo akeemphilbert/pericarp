@@ -170,12 +170,15 @@ func (f *Facebook) RefreshToken(_ context.Context, _ string) (*application.AuthR
 // caller's bearer credential; this revokes ALL permissions granted to the app
 // for that user, which matches the standard OAuth "revoke" semantics.
 func (f *Facebook) RevokeToken(ctx context.Context, token string) error {
-	revokeURL := f.graphHost + facebookPermissionsPath + "?access_token=" + url.QueryEscape(token)
+	revokeURL := f.graphHost + facebookPermissionsPath
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, revokeURL, nil)
 	if err != nil {
 		return fmt.Errorf("facebook: failed to create revoke request: %w", err)
 	}
+	// Send the token via Authorization rather than ?access_token=... so it
+	// doesn't end up in HTTP logs, proxy access logs, or telemetry.
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := f.httpClient.Do(req)
 	if err != nil {

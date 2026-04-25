@@ -99,8 +99,17 @@ func RunMastodonAgainstFake(ctx context.Context) error {
 		},
 	})
 
-	state := "state-demo"
-	verifier := "verifier-demo-1234567890123456789012345"
+	// Real services MUST generate state and the PKCE verifier with the
+	// crypto/rand-backed helpers — hard-coded values would defeat both
+	// CSRF protection and PKCE's purpose. This is the demo seam for that.
+	state, err := application.GenerateState()
+	if err != nil {
+		return fmt.Errorf("GenerateState: %w", err)
+	}
+	verifier, err := application.GenerateCodeVerifier()
+	if err != nil {
+		return fmt.Errorf("GenerateCodeVerifier: %w", err)
+	}
 	challenge := application.GenerateCodeChallenge(verifier)
 
 	authURL, err := mastodon.AuthCodeURLForInstance(ctx, fakeHost, state, challenge, "", "https://app.example.com/cb")

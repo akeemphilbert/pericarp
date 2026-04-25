@@ -303,6 +303,8 @@ func TestBluesky_ValidatePDSURL_SSRFGuard(t *testing.T) {
 		{name: "DNS rebinding to internal IP rejected", url: "https://evil.example.com", lookup: internalIP, wantErr: true, errContains: "internal address"},
 		{name: "DNS rebinding even one internal IP rejected", url: "https://evil.example.com", lookup: mixedIPs, wantErr: true, errContains: "internal address"},
 		{name: "DNS lookup failure surfaces", url: "https://nx.example.com", lookupErr: errors.New("no such host"), wantErr: true, errContains: "resolve"},
+		{name: "userinfo rejected (strict)", url: "https://user:pass@pds.example.com", lookup: publicIP, wantErr: true, errContains: "userinfo"},
+		{name: "userinfo rejected (insecure)", insecureOK: true, url: "http://user:pass@127.0.0.1:9000", wantErr: true, errContains: "userinfo"},
 		{name: "insecure flag allows http loopback", insecureOK: true, url: "http://127.0.0.1:9000", wantErr: false},
 		{name: "insecure flag allows localhost", insecureOK: true, url: "http://localhost:9000", wantErr: false},
 	}
@@ -311,13 +313,13 @@ func TestBluesky_ValidatePDSURL_SSRFGuard(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: tc.insecureOK})
-			b.lookupHostFn = func(string) ([]string, error) {
+			b.lookupHostFn = func(context.Context, string) ([]string, error) {
 				if tc.lookupErr != nil {
 					return nil, tc.lookupErr
 				}
 				return tc.lookup, nil
 			}
-			err := b.validatePDSURL(tc.url)
+			err := b.validatePDSURL(context.Background(), tc.url)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("validatePDSURL(%q) = nil, want error", tc.url)
@@ -403,8 +405,8 @@ func TestBluesky_ValidateAuthServerEndpoints(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: tc.insecureOK})
-			b.lookupHostFn = func(string) ([]string, error) { return []string{"93.184.216.34"}, nil }
-			err := b.validateAuthServerEndpoints(tc.pdsURL, &tc.meta)
+			b.lookupHostFn = func(context.Context, string) ([]string, error) { return []string{"93.184.216.34"}, nil }
+			err := b.validateAuthServerEndpoints(context.Background(), tc.pdsURL, &tc.meta)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("validateAuthServerEndpoints = nil, want error")
@@ -484,8 +486,8 @@ func TestBluesky_ValidateRefreshTokenURLs_SSRFGuard(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: tc.insecureOK})
-			b.lookupHostFn = func(string) ([]string, error) { return []string{"93.184.216.34"}, nil }
-			err := b.validateRefreshTokenURLs(tc.pdsURL, tc.tokenURL, tc.issuer)
+			b.lookupHostFn = func(context.Context, string) ([]string, error) { return []string{"93.184.216.34"}, nil }
+			err := b.validateRefreshTokenURLs(context.Background(), tc.pdsURL, tc.tokenURL, tc.issuer)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("validateRefreshTokenURLs = nil, want error")
@@ -513,7 +515,7 @@ func TestBluesky_RefreshToken_RejectsTamperedURLs(t *testing.T) {
 		ClientMetadataURL: "https://app.example.com/c.json",
 		RedirectURI:       "https://app.example.com/cb",
 	})
-	b.lookupHostFn = func(string) ([]string, error) { return []string{"93.184.216.34"}, nil }
+	b.lookupHostFn = func(context.Context, string) ([]string, error) { return []string{"93.184.216.34"}, nil }
 
 	tampered := encodeBlueskyRefreshToken(
 		"https://pds.example.com",
