@@ -41,6 +41,19 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-04-25: SubscriptionService extensibility — interface + JWT wiring (Story 1 of #24)
+
+- Added `auth.SubscriptionClaim` value type (`pkg/auth/subscription.go`) with `SubscriptionStatus` constants (`active`, `trialing`, `past_due`, `cancelled`, `inactive`) and an `IsActive()` helper that centralizes the "what counts as paying" rule (only `active` and `trialing` grant access)
+- Type lives in `pkg/auth` (not `pkg/auth/application`) so both `Identity` (in `pkg/auth`) and `PericarpClaims` (in `pkg/auth/application`) can reference it without an inverse import — `application` already depends on the parent package, but `auth` does not depend on `application`
+- Added `application.SubscriptionService` interface with `GetSubscription(ctx, agentID, accountID) (*auth.SubscriptionClaim, error)`
+- `JWTService.IssueToken` gained a 5th `subscription *auth.SubscriptionClaim` parameter (breaking change to internal API; ~13 test callsites updated mechanically). `ReissueToken` preserves the existing claim verbatim — account-switch reissuance does not re-query the SubscriptionService, so the snapshot is stable for the lifetime of the original sign-in
+- `AuthenticationService.IssueIdentityToken` orchestrates the lookup when a `SubscriptionService` is wired via `WithSubscriptionService(svc)`. Lookup failures are logged but do **not** block token issuance — billing-provider outages must not break login
+- `RequireJWT` middleware now copies `claims.Subscription` onto `auth.Identity.Subscription`, so consumer services read it via `auth.AgentFromCtx(ctx).Subscription`. Session-based `RequireAuth` leaves it nil (sessions don't snapshot subscription state)
+- **Why:** Apollo and other downstream services were hand-rolling subscription lookups on every protected request. Promoting subscription to a first-class JWT claim moves the lookup off the hot path (looked up once at issuance, lives for token TTL) and gives every consumer a single canonical type to read
+- **Open follow-ups (Stories 2-4):** RevenueCat, Stripe, and GORM adapter implementations under `pkg/auth/infrastructure/subscription/`
+
+---
+
 ### 2026-04-25: Password credential support in pkg/auth
 
 - Added `PasswordCredential` aggregate (`pkg/auth/domain/entities/password_credential.go`) — its own KSUID, linked 1:1 to a `Credential` row of `provider="password"` by `CredentialID`. Bcrypt hash stored only on this row, never on `Credential` and never in any event payload

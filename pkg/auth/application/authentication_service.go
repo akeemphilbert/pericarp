@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akeemphilbert/pericarp/pkg/auth"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
 	"github.com/akeemphilbert/pericarp/pkg/ddd"
@@ -20,17 +21,17 @@ import (
 
 // Sentinel errors for the authentication domain.
 var (
-	ErrInvalidProvider               = errors.New("authentication: invalid provider")
-	ErrInvalidState                  = errors.New("authentication: invalid state parameter")
-	ErrCodeExchangeFailed            = errors.New("authentication: code exchange failed")
-	ErrSessionNotFound               = errors.New("authentication: session not found")
-	ErrSessionExpired                = errors.New("authentication: session expired")
-	ErrSessionRevoked                = errors.New("authentication: session revoked")
-	ErrTokenRefreshFailed            = errors.New("authentication: token refresh failed")
-	ErrCredentialNotFound            = errors.New("authentication: credential not found")
-	ErrEmailAlreadyTaken             = errors.New("authentication: email already registered with a password")
-	ErrPasswordSupportNotConfigured  = errors.New("authentication: password support not configured")
-	ErrPasswordCredentialMissing     = errors.New("authentication: password credential not found for agent")
+	ErrInvalidProvider              = errors.New("authentication: invalid provider")
+	ErrInvalidState                 = errors.New("authentication: invalid state parameter")
+	ErrCodeExchangeFailed           = errors.New("authentication: code exchange failed")
+	ErrSessionNotFound              = errors.New("authentication: session not found")
+	ErrSessionExpired               = errors.New("authentication: session expired")
+	ErrSessionRevoked               = errors.New("authentication: session revoked")
+	ErrTokenRefreshFailed           = errors.New("authentication: token refresh failed")
+	ErrCredentialNotFound           = errors.New("authentication: credential not found")
+	ErrEmailAlreadyTaken            = errors.New("authentication: email already registered with a password")
+	ErrPasswordSupportNotConfigured = errors.New("authentication: password support not configured")
+	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
 )
 
 // AuthRequest represents the result of initiating an OAuth authorization flow.
@@ -179,6 +180,7 @@ type DefaultAuthenticationService struct {
 	authorization       AuthorizationChecker
 	logger              Logger
 	jwtService          JWTService
+	subscriptionService SubscriptionService
 	bcryptCost          int
 	dummyHashOnce       sync.Once
 	dummyHashValue      string
@@ -503,6 +505,12 @@ func (s *DefaultAuthenticationService) RevokeAllSessions(ctx context.Context, ag
 
 // IssueIdentityToken issues a signed JWT for the given agent.
 // Returns ("", nil) if no JWTService is configured.
+//
+// When a SubscriptionService is configured, this method snapshots the agent's
+// current subscription state and embeds it as a claim. Subscription lookup
+// failures are logged but do not block token issuance — billing-provider
+// outages must not break login. The consumer interprets a missing claim as
+// "no active subscription".
 func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
 	if s.jwtService == nil {
 		return "", nil
@@ -518,7 +526,16 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 			return "", fmt.Errorf("authentication: failed to fetch accounts for token: %w", err)
 		}
 	}
-	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID)
+	var subscription *auth.SubscriptionClaim
+	if s.subscriptionService != nil {
+		sub, err := s.subscriptionService.GetSubscription(ctx, agent.GetID(), activeAccountID)
+		if err != nil {
+			s.logger.Warn(ctx, "auth: subscription lookup failed", "agent_id", agent.GetID(), "active_account_id", activeAccountID, "error", err)
+		} else {
+			subscription = sub
+		}
+	}
+	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription)
 }
 
 // normalizeEmail returns the canonical form of an email used as the

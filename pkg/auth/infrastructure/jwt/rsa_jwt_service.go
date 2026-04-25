@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/akeemphilbert/pericarp/pkg/auth"
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	gojwt "github.com/golang-jwt/jwt/v5"
@@ -38,7 +39,8 @@ func NewRSAJWTService(opts ...RSAJWTServiceOption) *RSAJWTService {
 }
 
 // IssueToken creates a signed JWT for the given agent and accounts.
-func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (string, error) {
+// A non-nil subscription is embedded as the "subscription" claim.
+func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -66,6 +68,7 @@ func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, a
 		AgentID:         agent.GetID(),
 		AccountIDs:      accountIDs,
 		ActiveAccountID: activeAccountID,
+		Subscription:    subscription,
 	}
 
 	token := gojwt.NewWithClaims(gojwt.SigningMethodRS256, claims)
@@ -169,7 +172,10 @@ func (s *RSAJWTService) ValidateInviteToken(ctx context.Context, tokenString str
 }
 
 // ReissueToken creates a new JWT with a different ActiveAccountID, copying
-// AgentID, Subject, and AccountIDs from the existing claims.
+// AgentID, Subject, AccountIDs, and Subscription from the existing claims.
+// The subscription claim is preserved verbatim — account-switch reissuance
+// does not re-query the SubscriptionService, so the snapshot stays stable
+// for the lifetime of the original sign-in.
 func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.PericarpClaims, activeAccountID string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -193,6 +199,7 @@ func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.Pe
 		AgentID:         claims.AgentID,
 		AccountIDs:      claims.AccountIDs,
 		ActiveAccountID: activeAccountID,
+		Subscription:    claims.Subscription,
 	}
 
 	token := gojwt.NewWithClaims(gojwt.SigningMethodRS256, newClaims)

@@ -10,10 +10,15 @@ var identityKey = &contextKey{"pericarp-identity"}
 
 // Identity represents an authenticated agent's identity, independent of the
 // underlying authentication mechanism (JWT, session, etc.).
+//
+// Subscription is populated by JWT-validating middleware when the validated
+// token carries a subscription claim. Session-based authentication leaves
+// it nil — sessions don't snapshot subscription state.
 type Identity struct {
 	AgentID         string
 	AccountIDs      []string
 	ActiveAccountID string
+	Subscription    *SubscriptionClaim
 }
 
 // AgentFromCtx extracts the Identity from ctx. Returns nil if no identity is present.

@@ -95,6 +95,7 @@ func RequireJWT(jwtService application.JWTService, cookieName string) func(http.
 				AgentID:         claims.AgentID,
 				AccountIDs:      claims.AccountIDs,
 				ActiveAccountID: claims.ActiveAccountID,
+				Subscription:    claims.Subscription,
 			}
 			ctx = auth.ContextWithAgent(ctx, id)
 			next.ServeHTTP(w, r.WithContext(ctx))

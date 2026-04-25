@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akeemphilbert/pericarp/pkg/auth"
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
@@ -899,12 +900,16 @@ func TestDefaultAuthenticationService_RefreshTokens_ProviderFails(t *testing.T) 
 // --- Mock JWTService ---
 
 type mockJWTService struct {
-	issueFunc func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (string, error)
+	issueFunc func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim) (string, error)
+	// lastSubscription captures the subscription passed to IssueToken so
+	// SubscriptionService-driven tests can assert what was embedded.
+	lastSubscription *auth.SubscriptionClaim
 }
 
-func (m *mockJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (string, error) {
+func (m *mockJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim) (string, error) {
+	m.lastSubscription = subscription
 	if m.issueFunc != nil {
-		return m.issueFunc(ctx, agent, accounts, activeAccountID)
+		return m.issueFunc(ctx, agent, accounts, activeAccountID, subscription)
 	}
 	return "mock-jwt-token", nil
 }
@@ -1027,6 +1032,132 @@ func TestIssueIdentityToken_NilAccountRepo_StillIssuesToken(t *testing.T) {
 	}
 	if token != "mock-jwt-token" {
 		t.Errorf("expected %q, got %q", "mock-jwt-token", token)
+	}
+}
+
+// --- SubscriptionService wiring tests ---
+
+type mockSubscriptionService struct {
+	claim         *auth.SubscriptionClaim
+	err           error
+	calledAgentID string
+	calledAccount string
+	called        bool
+}
+
+func (m *mockSubscriptionService) GetSubscription(_ context.Context, agentID, accountID string) (*auth.SubscriptionClaim, error) {
+	m.called = true
+	m.calledAgentID = agentID
+	m.calledAccount = accountID
+	return m.claim, m.err
+}
+
+func TestIssueIdentityToken_NoSubscriptionService_OmitsClaim(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if jwtSvc.lastSubscription != nil {
+		t.Errorf("expected nil subscription, got %+v", jwtSvc.lastSubscription)
+	}
+}
+
+func TestIssueIdentityToken_WithSubscriptionService_EmbedsClaim(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	want := &auth.SubscriptionClaim{
+		Status:   auth.SubscriptionStatusActive,
+		Plan:     "pro",
+		Provider: "stripe",
+	}
+	subSvc := &mockSubscriptionService{claim: want}
+	jwtSvc := &mockJWTService{}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if !subSvc.called {
+		t.Fatal("SubscriptionService.GetSubscription was not called")
+	}
+	if subSvc.calledAgentID != "agent-1" {
+		t.Errorf("called agentID = %q, want %q", subSvc.calledAgentID, "agent-1")
+	}
+	if subSvc.calledAccount != "account-1" {
+		t.Errorf("called accountID = %q, want %q", subSvc.calledAccount, "account-1")
+	}
+	if jwtSvc.lastSubscription != want {
+		t.Errorf("subscription passed to JWTService = %+v, want %+v", jwtSvc.lastSubscription, want)
+	}
+}
+
+func TestIssueIdentityToken_SubscriptionLookupError_TokenStillIssued(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	subSvc := &mockSubscriptionService{err: errors.New("billing provider unreachable")}
+	jwtSvc := &mockJWTService{}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	token, err := svc.IssueIdentityToken(ctx, agent, "account-1")
+	if err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected token despite subscription lookup error, got empty")
+	}
+	if jwtSvc.lastSubscription != nil {
+		t.Errorf("expected nil subscription on lookup error, got %+v", jwtSvc.lastSubscription)
+	}
+}
+
+func TestWithSubscriptionService_NilNoOp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(nil),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if jwtSvc.lastSubscription != nil {
+		t.Errorf("expected nil subscription, got %+v", jwtSvc.lastSubscription)
 	}
 }
 

@@ -179,7 +179,7 @@ func issueTestToken(t *testing.T, svc *authjwt.RSAJWTService) string {
 	if err != nil {
 		t.Fatalf("failed to create account: %v", err)
 	}
-	tokenString, err := svc.IssueToken(context.Background(), agent, []*entities.Account{account}, "acc-1")
+	tokenString, err := svc.IssueToken(context.Background(), agent, []*entities.Account{account}, "acc-1", nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
@@ -271,6 +271,57 @@ func TestRequireJWT_ValidBearerToken_InjectsClaimsAndCallsNext(t *testing.T) {
 	}
 	if capturedClaims.ActiveAccountID != "acc-1" {
 		t.Errorf("ActiveAccountID = %q, want %q", capturedClaims.ActiveAccountID, "acc-1")
+	}
+}
+
+func TestRequireJWT_PopulatesIdentitySubscription(t *testing.T) {
+	t.Parallel()
+
+	svc, _ := newTestJWTService(t)
+
+	agent, err := new(entities.Agent).With("agent-1", "Test User", entities.AgentTypePerson)
+	if err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+	subscription := &auth.SubscriptionClaim{
+		Status:   auth.SubscriptionStatusActive,
+		Plan:     "pro",
+		Provider: "stripe",
+	}
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", subscription)
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	var capturedIdentity *auth.Identity
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedIdentity = auth.AgentFromCtx(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware := authhttp.RequireJWT(svc, "")
+	handler := middleware(next)
+
+	r := httptest.NewRequest("GET", "/protected", nil)
+	r.Header.Set("Authorization", "Bearer "+tokenString)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if capturedIdentity == nil {
+		t.Fatal("expected Identity in context, got nil")
+	}
+	if capturedIdentity.Subscription == nil {
+		t.Fatal("expected Subscription on Identity, got nil")
+	}
+	if capturedIdentity.Subscription.Status != auth.SubscriptionStatusActive {
+		t.Errorf("Status = %q, want %q", capturedIdentity.Subscription.Status, auth.SubscriptionStatusActive)
+	}
+	if !capturedIdentity.Subscription.IsActive() {
+		t.Error("IsActive() = false, want true")
 	}
 }
 
