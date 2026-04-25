@@ -29,10 +29,10 @@ func hashPassword(plaintext string, cost int) (algorithm, hash string, err error
 }
 
 // verifyPassword compares plaintext against the stored hash for the named
-// algorithm. Returns entities.ErrInvalidPassword on mismatch and a wrapped
-// error if the algorithm is unsupported. Comparison errors other than
-// mismatch (e.g. corrupt hash) are surfaced as-is so the caller can
-// distinguish them in logs without leaking detail to end users.
+// algorithm. Returns ErrInvalidPassword on mismatch, and a wrapped error
+// for any other failure (corrupt hash, unsupported algorithm) so the
+// caller can log the detail internally while still reporting only
+// ErrInvalidPassword to the end user.
 func verifyPassword(algorithm, hash, plaintext string) error {
 	switch algorithm {
 	case entities.PasswordAlgorithmBcrypt:

@@ -54,6 +54,21 @@ func (p *PasswordCredential) With(id, credentialID, algorithm, hash string) (*Pa
 	return p, nil
 }
 
+// String redacts the Hash so the aggregate is safe to log via %v / %+v.
+// Callers needing the raw hash must use Hash() explicitly.
+func (p *PasswordCredential) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf(
+		"PasswordCredential{ID:%s CredentialID:%s Algorithm:%s Hash:[REDACTED]}",
+		p.GetID(), p.credentialID, p.algorithm,
+	)
+}
+
+// GoString mirrors String so %#v also redacts the hash.
+func (p *PasswordCredential) GoString() string { return p.String() }
+
 // CredentialID returns the ID of the parent Credential aggregate.
 func (p *PasswordCredential) CredentialID() string { return p.credentialID }
 

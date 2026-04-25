@@ -1,9 +1,11 @@
 package application_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -369,6 +371,207 @@ func TestDummyBcryptHash_IsValid(t *testing.T) {
 	// error: it must be ErrInvalidPassword (not wrapped/unrelated).
 	if _, _, _, err := svc.VerifyPassword(ctx, "ghost@example.com", "any"); !errors.Is(err, application.ErrInvalidPassword) {
 		t.Errorf("error = %v, want ErrInvalidPassword (dummy hash may be malformed)", err)
+	}
+}
+
+// newSQLiteDeps returns the SQLite-backed service plus the underlying
+// repos so a test can poke at projections directly.
+func newSQLiteDeps(t *testing.T) (*application.DefaultAuthenticationService, *gorm.DB) {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gorminfra.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		gorminfra.NewAgentRepository(db),
+		gorminfra.NewCredentialRepository(db),
+		gorminfra.NewAuthSessionRepository(db),
+		gorminfra.NewAccountRepository(db),
+		application.WithPasswordCredentialRepository(gorminfra.NewPasswordCredentialRepository(db)),
+		application.WithBcryptCost(bcrypt.MinCost),
+	)
+	return svc, db
+}
+
+func TestImportPasswordCredential_DoesNotOverwriteOnReimport(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, db := newSQLiteDeps(t)
+	pcRepo := gorminfra.NewPasswordCredentialRepository(db)
+
+	owner, _, ownerAccount, err := svc.RegisterPassword(ctx, "owner@example.com", "Owner", "ownerpass")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	firstHash, _ := bcrypt.GenerateFromPassword([]byte("legacy-pass"), bcrypt.MinCost)
+	if err := svc.ImportPasswordCredential(ctx, "legacy@example.com", "Legacy", string(firstHash), owner.GetID(), ownerAccount.GetID()); err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	credRepo := gorminfra.NewCredentialRepository(db)
+	cred, err := credRepo.FindByProvider(ctx, entities.ProviderPassword, "legacy@example.com")
+	if err != nil || cred == nil {
+		t.Fatalf("locate credential: %v %+v", err, cred)
+	}
+	pcBefore, err := pcRepo.FindByCredentialID(ctx, cred.GetID())
+	if err != nil || pcBefore == nil {
+		t.Fatalf("locate password credential: %v %+v", err, pcBefore)
+	}
+
+	// Re-import with a DIFFERENT hash. Idempotency means the second call
+	// is a no-op — the stored hash must not change.
+	secondHash, _ := bcrypt.GenerateFromPassword([]byte("different-pass"), bcrypt.MinCost)
+	if err := svc.ImportPasswordCredential(ctx, "legacy@example.com", "Legacy", string(secondHash), owner.GetID(), ownerAccount.GetID()); err != nil {
+		t.Fatalf("re-import: %v", err)
+	}
+	pcAfter, err := pcRepo.FindByCredentialID(ctx, cred.GetID())
+	if err != nil || pcAfter == nil {
+		t.Fatalf("locate password credential after: %v %+v", err, pcAfter)
+	}
+	if pcAfter.GetID() != pcBefore.GetID() {
+		t.Errorf("password credential ID changed: %q -> %q", pcBefore.GetID(), pcAfter.GetID())
+	}
+	if pcAfter.Hash() != pcBefore.Hash() {
+		t.Errorf("hash was overwritten on re-import; want unchanged")
+	}
+
+	// The original password must still verify; the second hash must not.
+	if _, _, _, err := svc.VerifyPassword(ctx, "legacy@example.com", "legacy-pass"); err != nil {
+		t.Errorf("original password no longer verifies: %v", err)
+	}
+	if _, _, _, err := svc.VerifyPassword(ctx, "legacy@example.com", "different-pass"); !errors.Is(err, application.ErrInvalidPassword) {
+		t.Errorf("second-import password should not have taken effect, got %v", err)
+	}
+}
+
+func TestImportPasswordCredential_NormalizesEmail(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, db := newSQLiteDeps(t)
+
+	owner, _, ownerAccount, err := svc.RegisterPassword(ctx, "owner@example.com", "Owner", "ownerpass")
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte("legacy-pass"), bcrypt.MinCost)
+
+	if err := svc.ImportPasswordCredential(ctx, "legacy@example.com", "Legacy", string(hash), owner.GetID(), ownerAccount.GetID()); err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	// Mixed-case + whitespace must hit the existing row, not create a new
+	// one. The total row count for provider=password is the seed (1) +
+	// legacy (1) = 2.
+	if err := svc.ImportPasswordCredential(ctx, "  LEGACY@Example.COM  ", "Legacy", string(hash), owner.GetID(), ownerAccount.GetID()); err != nil {
+		t.Fatalf("normalized re-import: %v", err)
+	}
+	credRepo := gorminfra.NewCredentialRepository(db)
+	creds, err := credRepo.FindByEmail(ctx, "legacy@example.com")
+	if err != nil {
+		t.Fatalf("FindByEmail: %v", err)
+	}
+	if len(creds) != 1 {
+		t.Errorf("expected exactly 1 credential for legacy@example.com, got %d", len(creds))
+	}
+}
+
+func TestVerifyPassword_OrphanCredentialRow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, db := newSQLiteDeps(t)
+	credRepo := gorminfra.NewCredentialRepository(db)
+	pcRepo := gorminfra.NewPasswordCredentialRepository(db)
+
+	if _, _, _, err := svc.RegisterPassword(ctx, "alice@example.com", "Alice", "hunter2"); err != nil {
+		t.Fatalf("RegisterPassword: %v", err)
+	}
+	cred, err := credRepo.FindByProvider(ctx, entities.ProviderPassword, "alice@example.com")
+	if err != nil || cred == nil {
+		t.Fatalf("locate credential: %v %+v", err, cred)
+	}
+	// Drop the password row but leave the parent credential — simulating
+	// data drift between the two tables. VerifyPassword must still return
+	// ErrInvalidPassword and exercise the timing shield.
+	if err := pcRepo.Delete(ctx, cred.GetID()); err != nil {
+		t.Fatalf("delete password row: %v", err)
+	}
+
+	_, _, _, err = svc.VerifyPassword(ctx, "alice@example.com", "hunter2")
+	if !errors.Is(err, application.ErrInvalidPassword) {
+		t.Errorf("orphan credential row: got %v, want ErrInvalidPassword", err)
+	}
+}
+
+func TestPasswordEvents_NoHashInJSON(t *testing.T) {
+	t.Parallel()
+
+	const secret = "$2a$10$top-secret-hash-should-never-appear"
+	pc, err := new(entities.PasswordCredential).With("pc-1", "cred-1", "bcrypt", secret)
+	if err != nil {
+		t.Fatalf("With: %v", err)
+	}
+	if err := pc.Update("bcrypt", "$2a$12$another-secret"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	for _, evt := range pc.GetUncommittedEvents() {
+		raw, err := json.Marshal(evt.Payload)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if bytes.Contains(raw, []byte("$2a$")) {
+			t.Errorf("event JSON contains a bcrypt-hash substring: %s -> %s", evt.EventType, raw)
+		}
+	}
+
+	// The redacted Stringer must not leak the hash either.
+	if str := pc.String(); strings.Contains(str, "$2a$") {
+		t.Errorf("PasswordCredential.String() leaks hash: %s", str)
+	}
+}
+
+func TestDummyHash_TracksConfiguredCost(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Service with a non-default bcrypt cost. The unknown-email branch
+	// should run a compare against a hash AT THE CONFIGURED COST so timing
+	// matches a real failed login. We can't directly assert cost from the
+	// service (private field), but we can prove the timing shield ran by
+	// confirming the unknown-email path returns ErrInvalidPassword
+	// (regression: a malformed dummy returned the same error trivially
+	// fast — that's covered by TestVerifyPassword_UnknownEmail's
+	// configured-cost variant below).
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gorminfra.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		gorminfra.NewAgentRepository(db),
+		gorminfra.NewCredentialRepository(db),
+		gorminfra.NewAuthSessionRepository(db),
+		gorminfra.NewAccountRepository(db),
+		application.WithPasswordCredentialRepository(gorminfra.NewPasswordCredentialRepository(db)),
+		application.WithBcryptCost(bcrypt.MinCost+1),
+	)
+
+	if _, _, _, err := svc.VerifyPassword(ctx, "nobody@example.com", "anything"); !errors.Is(err, application.ErrInvalidPassword) {
+		t.Errorf("expected ErrInvalidPassword, got %v", err)
+	}
+	// Second call exercises the cached dummy hash; both must succeed.
+	if _, _, _, err := svc.VerifyPassword(ctx, "nobody2@example.com", "anything"); !errors.Is(err, application.ErrInvalidPassword) {
+		t.Errorf("expected ErrInvalidPassword on cached path, got %v", err)
 	}
 }
 

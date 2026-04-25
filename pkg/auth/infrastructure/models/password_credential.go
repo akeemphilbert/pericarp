@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
@@ -23,6 +24,17 @@ type PasswordCredentialModel struct {
 func (PasswordCredentialModel) TableName() string {
 	return "password_credentials"
 }
+
+// String redacts the Hash field so the model is safe to log via %v / %+v.
+func (m PasswordCredentialModel) String() string {
+	return fmt.Sprintf(
+		"PasswordCredentialModel{ID:%s CredentialID:%s Algorithm:%s Hash:[REDACTED] CreatedAt:%s UpdatedAt:%s LastVerifiedAt:%s}",
+		m.ID, m.CredentialID, m.Algorithm, m.CreatedAt, m.UpdatedAt, m.LastVerifiedAt,
+	)
+}
+
+// GoString mirrors String so that %#v also redacts the hash.
+func (m PasswordCredentialModel) GoString() string { return m.String() }
 
 // ToEntity converts the GORM model to a PasswordCredential domain entity.
 func (m *PasswordCredentialModel) ToEntity() (*entities.PasswordCredential, error) {

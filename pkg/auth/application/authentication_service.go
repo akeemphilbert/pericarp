@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
@@ -13,6 +14,7 @@ import (
 	esApplication "github.com/akeemphilbert/pericarp/pkg/eventsourcing/application"
 	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 	"github.com/segmentio/ksuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Sentinel errors for the authentication domain.
@@ -177,6 +179,8 @@ type DefaultAuthenticationService struct {
 	logger              Logger
 	jwtService          JWTService
 	bcryptCost          int
+	dummyHashOnce       sync.Once
+	dummyHashValue      string
 }
 
 // NewDefaultAuthenticationService creates a new DefaultAuthenticationService.
@@ -621,11 +625,8 @@ func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email
 		return nil, nil, nil, fmt.Errorf("authentication: lookup credential: %w", err)
 	}
 	if credential == nil || !credential.Active() {
-		// Constant-time-ish: still hash the plaintext against a junk hash so
-		// failed lookups don't return measurably faster than failed compares.
-		// Errors from the dummy compare are discarded.
-		_ = verifyPassword(entities.PasswordAlgorithmBcrypt, dummyBcryptHash, plaintext)
-		s.logger.Info(ctx, "password verify: no active credential", "email", normalizedEmail)
+		s.runTimingShield(ctx, plaintext)
+		s.logger.Warn(ctx, "auth: password verify failed (no active credential)", "email", normalizedEmail)
 		return nil, nil, nil, ErrInvalidPassword
 	}
 
@@ -634,16 +635,21 @@ func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email
 		return nil, nil, nil, fmt.Errorf("authentication: lookup password credential: %w", err)
 	}
 	if passwordCredential == nil {
-		_ = verifyPassword(entities.PasswordAlgorithmBcrypt, dummyBcryptHash, plaintext)
-		s.logger.Info(ctx, "password verify: missing password row", "credential_id", credential.GetID())
+		s.runTimingShield(ctx, plaintext)
+		s.logger.Warn(ctx, "auth: password verify failed (missing password row)", "credential_id", credential.GetID())
 		return nil, nil, nil, ErrInvalidPassword
 	}
 
 	if err := verifyPassword(passwordCredential.Algorithm(), passwordCredential.Hash(), plaintext); err != nil {
-		if errors.Is(err, ErrInvalidPassword) {
-			return nil, nil, nil, ErrInvalidPassword
+		// Map any verify failure (mismatch OR corrupt hash / unsupported
+		// algorithm) to ErrInvalidPassword so timing and error-type do not
+		// distinguish the two cases. The internal log retains detail.
+		if !errors.Is(err, ErrInvalidPassword) {
+			s.logger.Error(ctx, "auth: password compare failed (non-mismatch error)", "credential_id", credential.GetID(), "error", err)
+		} else {
+			s.logger.Warn(ctx, "auth: password verify failed (mismatch)", "credential_id", credential.GetID())
 		}
-		return nil, nil, nil, fmt.Errorf("authentication: verify password: %w", err)
+		return nil, nil, nil, ErrInvalidPassword
 	}
 
 	agent, err := s.agents.FindByID(ctx, credential.AgentID())
@@ -662,18 +668,32 @@ func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email
 		}
 	}
 
+	// Housekeeping writes (last-used / last-verified) are best-effort: the
+	// password was correct, so denying login because a metadata projection
+	// failed to update would be a worse UX than a stale timestamp.
 	if err := credential.MarkUsed(); err != nil {
-		return nil, nil, nil, fmt.Errorf("authentication: mark credential used: %w", err)
-	}
-	if err := s.credentials.Save(ctx, credential); err != nil {
-		return nil, nil, nil, fmt.Errorf("authentication: save credential: %w", err)
+		s.logger.Warn(ctx, "auth: mark credential used failed", "credential_id", credential.GetID(), "error", err)
+	} else if err := s.credentials.Save(ctx, credential); err != nil {
+		s.logger.Warn(ctx, "auth: save credential after verify failed", "credential_id", credential.GetID(), "error", err)
 	}
 	passwordCredential.MarkVerified()
 	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
-		return nil, nil, nil, fmt.Errorf("authentication: save password credential: %w", err)
+		s.logger.Warn(ctx, "auth: save password credential after verify failed", "password_credential_id", passwordCredential.GetID(), "error", err)
 	}
 
 	return agent, credential, account, nil
+}
+
+// runTimingShield runs a real bcrypt compare against a parseable dummy
+// hash so the unknown-email / orphan-row branches of VerifyPassword do
+// not return measurably faster than a real failed login. The dummy hash
+// matches the service's configured cost. A non-mismatch error from the
+// compare means the shield is degraded; we log at Error level so it
+// surfaces in operational telemetry instead of being silent.
+func (s *DefaultAuthenticationService) runTimingShield(ctx context.Context, plaintext string) {
+	if err := verifyPassword(entities.PasswordAlgorithmBcrypt, s.dummyBcryptHash(ctx), plaintext); err != nil && !errors.Is(err, ErrInvalidPassword) {
+		s.logger.Error(ctx, "auth: timing-shield bcrypt compare failed (shield degraded)", "error", err)
+	}
 }
 
 // ImportPasswordCredential imports a pre-hashed bcrypt blob against existing
@@ -799,23 +819,45 @@ func (s *DefaultAuthenticationService) UpdatePassword(ctx context.Context, agent
 		return fmt.Errorf("authentication: update password credential: %w", err)
 	}
 
-	// Note: we deliberately do not commit a UnitOfWork here. The aggregate
-	// was rehydrated from the read-model via Restore(), which sets
-	// sequenceNo=0; appending to the event store with expectedVersion=0
-	// would conflict with the live history. This matches the existing
-	// pattern in FindOrCreateAgent's MarkUsed path (read-model-only
-	// mutations on rehydrated aggregates skip the event store).
+	// The aggregate was rehydrated via Restore(), which resets sequenceNo
+	// to 0; committing a UnitOfWork now would call EventStore.Append with
+	// expectedVersion=0 and conflict with the existing event stream. As a
+	// stop-gap we drop the PasswordUpdated event recorded by pc.Update by
+	// clearing the uncommitted slice — this keeps the projection update
+	// safe but means password rotations are NOT in the audit log. A
+	// follow-up should rebuild the aggregate from the event store before
+	// updating so the event lands durably.
+	pc.ClearUncommittedEvents()
 	if err := s.passwordCredentials.Save(ctx, pc); err != nil {
 		return fmt.Errorf("authentication: save password credential: %w", err)
 	}
 	return nil
 }
 
-// dummyBcryptHash is a real bcrypt(DefaultCost) hash used to keep
-// VerifyPassword's timing roughly constant when no credential row exists
-// for the given email. Generated once via bcrypt.GenerateFromPassword over
-// an unguessable plaintext so it parses correctly and forces a real
-// CompareHashAndPassword cycle. A unit test asserts that comparing it
-// returns ErrMismatchedHashAndPassword (not a parse error) so the timing
-// shield does not regress to a no-op.
-const dummyBcryptHash = "$2a$10$EEI56WhQ.0l6UnEoiuE3bOZM7ADLEEdvDaI6KNGpodfiLnQnL7kbO"
+// fallbackDummyBcryptHash is a real bcrypt(DefaultCost) hash used as a
+// last-resort timing-shield target if dummy-hash generation ever fails at
+// runtime. The corresponding plaintext is intentionally unguessable.
+const fallbackDummyBcryptHash = "$2a$10$EEI56WhQ.0l6UnEoiuE3bOZM7ADLEEdvDaI6KNGpodfiLnQnL7kbO"
+
+// dummyBcryptHash returns a parseable bcrypt hash whose cost matches the
+// service's configured bcryptCost, generated once per service instance.
+// VerifyPassword uses it as a timing-equalization target on the
+// unknown-email branch. Matching the live cost keeps the unknown-email
+// path indistinguishable from a real failed login by elapsed time, even
+// when WithBcryptCost configures a non-default cost.
+func (s *DefaultAuthenticationService) dummyBcryptHash(ctx context.Context) string {
+	s.dummyHashOnce.Do(func() {
+		cost := s.bcryptCost
+		if cost <= 0 {
+			cost = bcrypt.DefaultCost
+		}
+		out, err := bcrypt.GenerateFromPassword([]byte("__pericarp_dummy_unguessable_plaintext__"), cost)
+		if err != nil {
+			s.logger.Error(ctx, "auth: dummy hash generation failed; timing shield degraded to fallback cost", "error", err, "configured_cost", cost)
+			s.dummyHashValue = fallbackDummyBcryptHash
+			return
+		}
+		s.dummyHashValue = string(out)
+	})
+	return s.dummyHashValue
+}
