@@ -11,6 +11,23 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 )
 
+func TestProviderRegistry_RegistersExpectedProviders(t *testing.T) {
+	t.Parallel()
+
+	registry := BuildProviderRegistry()
+
+	for _, name := range []string{"mock-idp", "netsuite"} {
+		p, ok := registry[name]
+		if !ok {
+			t.Errorf("registry missing provider %q", name)
+			continue
+		}
+		if got := p.Name(); got != name {
+			t.Errorf("provider %q Name() = %q, want %q", name, got, name)
+		}
+	}
+}
+
 func TestAuthenticationFlow_FullLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
