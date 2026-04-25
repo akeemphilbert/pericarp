@@ -445,7 +445,7 @@ func TestImportPasswordCredential_RejectsMalformedHash(t *testing.T) {
 
 	cases := []string{
 		"not-a-bcrypt-hash",
-		"$2a$10$abc",          // truncated
+		"$2a$10$abc",         // truncated
 		"plaintext-password", // obvious migration mistake
 	}
 	for _, badHash := range cases {
