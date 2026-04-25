@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -85,9 +86,7 @@ func NewRevenueCat(apiKey string, opts ...RevenueCatOption) *RevenueCat {
 }
 
 // revenueCatResponse is the trimmed shape of GET /v1/subscribers/{app_user_id}.
-// Only the fields the adapter consumes are decoded; the rest of RevenueCat's
-// response is preserved opaquely in SubscriptionClaim.Metadata via
-// raw_entitlements when the caller wants provider-native data.
+// Only the fields the adapter consumes are decoded.
 type revenueCatResponse struct {
 	Subscriber struct {
 		Entitlements  map[string]revenueCatEntitlement  `json:"entitlements"`
@@ -124,8 +123,8 @@ func (r *RevenueCat) GetSubscription(ctx context.Context, agentID, accountID str
 		return nil, errors.New("revenuecat: agentID must not be empty")
 	}
 
-	url := fmt.Sprintf("%s/subscribers/%s", r.baseURL, agentID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	endpoint := fmt.Sprintf("%s/subscribers/%s", r.baseURL, url.PathEscape(agentID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("revenuecat: build request: %w", err)
 	}
@@ -203,16 +202,29 @@ func (r *RevenueCat) toClaim(resp revenueCatResponse) *auth.SubscriptionClaim {
 	}
 
 	// Status mapping prefers signals from the underlying subscription row
-	// (period_type == "trial", billing_issues_detected_at set) over the
-	// raw entitlement-expiry check, because RevenueCat surfaces those
-	// signals on the subscription, not the entitlement.
+	// (unsubscribe_detected_at, billing_issues_detected_at, period_type)
+	// over the raw entitlement-expiry check. RevenueCat surfaces those
+	// signals on the subscription, not the entitlement; multi-SKU
+	// offerings, upgrades, and promo-code grants can leave the
+	// entitlement's product_identifier pointing at a SKU that isn't keyed
+	// directly in the Subscriptions map, so a missed direct lookup falls
+	// back to scanning all rows for the worst signal rather than silently
+	// reporting Active.
 	sub, hasSub := resp.Subscriber.Subscriptions[bestEnt.ProductIdentifier]
+	signals := readSubscriptionSignals(resp.Subscriber.Subscriptions, sub, hasSub)
+
 	switch {
 	case !hasUnbound && now.After(bestExpiry):
 		claim.Status = auth.SubscriptionStatusInactive
-	case hasSub && sub.BillingIssuesDetectedAt != nil:
+	case signals.unsubscribedAndExpired(now):
+		// Refunded / revoked: provider says they no longer have access,
+		// not just "auto-renew off". For time-bounded subscriptions still
+		// in their paid window this branch does not fire — IsActive stays
+		// true until the entitlement actually lapses.
+		claim.Status = auth.SubscriptionStatusInactive
+	case signals.hasBillingIssues:
 		claim.Status = auth.SubscriptionStatusPastDue
-	case hasSub && sub.PeriodType == "trial":
+	case signals.isTrial:
 		claim.Status = auth.SubscriptionStatusTrialing
 	default:
 		claim.Status = auth.SubscriptionStatusActive
@@ -222,4 +234,56 @@ func (r *RevenueCat) toClaim(resp revenueCatResponse) *auth.SubscriptionClaim {
 		claim.Metadata["store"] = sub.Store
 	}
 	return claim
+}
+
+// subscriptionSignals collapses the set of subscription rows down to the
+// boolean signals the status switch cares about. The matched row (when
+// present) wins because it's the one tied to the chosen entitlement; we
+// fall back to scanning all rows so a billing-issue or unsubscribe on a
+// related-but-differently-keyed SKU isn't silently lost.
+type subscriptionSignals struct {
+	hasBillingIssues      bool
+	isTrial               bool
+	unsubscribedAt        *time.Time
+	unsubscribedExpiresAt *time.Time
+	matchedHadUnsubscribe bool
+}
+
+func readSubscriptionSignals(all map[string]revenueCatSubscription, matched revenueCatSubscription, hasMatch bool) subscriptionSignals {
+	var s subscriptionSignals
+	if hasMatch {
+		s.hasBillingIssues = matched.BillingIssuesDetectedAt != nil
+		s.isTrial = matched.PeriodType == "trial"
+		s.unsubscribedAt = matched.UnsubscribeDetectedAt
+		s.unsubscribedExpiresAt = matched.ExpiresDate
+		s.matchedHadUnsubscribe = matched.UnsubscribeDetectedAt != nil
+		return s
+	}
+	for _, sub := range all {
+		if sub.BillingIssuesDetectedAt != nil {
+			s.hasBillingIssues = true
+		}
+		if sub.PeriodType == "trial" {
+			s.isTrial = true
+		}
+		if sub.UnsubscribeDetectedAt != nil && s.unsubscribedAt == nil {
+			s.unsubscribedAt = sub.UnsubscribeDetectedAt
+			s.unsubscribedExpiresAt = sub.ExpiresDate
+		}
+	}
+	return s
+}
+
+// unsubscribedAndExpired reports whether the user has unsubscribed AND
+// either has no expiry or the expiry has passed — the conditions under
+// which RevenueCat indicates access should be revoked. A user who turned
+// off auto-renew but is still in their paid window stays active.
+func (s subscriptionSignals) unsubscribedAndExpired(now time.Time) bool {
+	if s.unsubscribedAt == nil {
+		return false
+	}
+	if s.unsubscribedExpiresAt == nil {
+		return true
+	}
+	return !s.unsubscribedExpiresAt.After(now)
 }
