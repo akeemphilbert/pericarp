@@ -130,6 +130,22 @@ func (m *mockAuthService) IssueIdentityToken(ctx context.Context, agent *entitie
 	return "", nil
 }
 
+func (m *mockAuthService) RegisterPassword(_ context.Context, _, _, _ string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	return nil, nil, nil, nil
+}
+
+func (m *mockAuthService) VerifyPassword(_ context.Context, _, _ string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	return nil, nil, nil, nil
+}
+
+func (m *mockAuthService) ImportPasswordCredential(_ context.Context, _, _, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockAuthService) UpdatePassword(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
 // --- Mock CredentialRepository ---
 
 type mockCredRepo struct {
