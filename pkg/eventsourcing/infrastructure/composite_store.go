@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"runtime/debug"
 	"sync"
 
@@ -25,9 +24,17 @@ var _ domain.EventStore = (*CompositeEventStore)(nil)
 
 // SecondaryErrorHandler is invoked when a secondary store's Append returns an
 // error. idx is the secondary's position in the slice passed to the constructor.
-// Handlers run on the secondary's own goroutine; panics are recovered and
-// written to stderr so replication keeps flowing.
+// Handlers run on the secondary's own goroutine; panics are recovered so
+// replication keeps flowing. By default the recovered panic is dropped
+// silently — supply WithPanicHandler to route it to a logger or telemetry
+// pipeline of your choice.
 type SecondaryErrorHandler func(idx int, err error, envelopes []domain.EventEnvelope[any])
+
+// PanicHandler is invoked when a SecondaryErrorHandler panics. recovered is
+// the value the handler panicked with; stack is debug.Stack() captured at
+// recovery. Runs on the secondary's own goroutine — keep it cheap and
+// non-blocking, and don't panic from inside it.
+type PanicHandler func(idx int, recovered any, stack []byte)
 
 // Option configures a CompositeEventStore.
 type Option func(*compositeConfig)
@@ -35,12 +42,21 @@ type Option func(*compositeConfig)
 type compositeConfig struct {
 	bufferSize   int
 	errorHandler SecondaryErrorHandler
+	panicHandler PanicHandler
 }
 
 // WithErrorHandler registers a callback invoked for every failed secondary Append.
 // Without this option, secondary errors are silently dropped.
 func WithErrorHandler(h SecondaryErrorHandler) Option {
 	return func(c *compositeConfig) { c.errorHandler = h }
+}
+
+// WithPanicHandler registers a callback invoked when the SecondaryErrorHandler
+// itself panics. The default behaviour is to silently swallow the panic;
+// install a handler to route it through your application's logger or
+// telemetry pipeline.
+func WithPanicHandler(h PanicHandler) Option {
+	return func(c *compositeConfig) { c.panicHandler = h }
 }
 
 // WithSecondaryBufferSize overrides the per-secondary channel buffer size.
@@ -70,6 +86,7 @@ type CompositeEventStore struct {
 	queues       []chan secondaryJob
 	wg           sync.WaitGroup
 	errorHandler SecondaryErrorHandler
+	panicHandler PanicHandler
 
 	// sendMu serializes Append calls (RLock) against Close (Lock). This makes
 	// close-on-queue safe: Close cannot close a channel while any Append holds
@@ -111,6 +128,7 @@ func NewCompositeEventStore(primary domain.EventStore, secondaries []domain.Even
 		secondaries:  secondaries,
 		queues:       make([]chan secondaryJob, len(secondaries)),
 		errorHandler: cfg.errorHandler,
+		panicHandler: cfg.panicHandler,
 	}
 	for i := range secondaries {
 		c.queues[i] = make(chan secondaryJob, cfg.bufferSize)
@@ -136,15 +154,15 @@ func (c *CompositeEventStore) runSecondary(idx int) {
 }
 
 // reportError invokes the caller-supplied handler. A handler panic is
-// recovered and written to stderr; losing the stack would turn real bugs
-// (nil map, type assertion, …) into silent failures.
+// recovered so replication keeps flowing; the recovered value is forwarded
+// to the optional PanicHandler (silently dropped if none was registered).
 func (c *CompositeEventStore) reportError(idx int, err error, envelopes []domain.EventEnvelope[any]) {
 	if c.errorHandler == nil {
 		return
 	}
 	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "composite: error handler panicked: %v\n%s\n", r, debug.Stack())
+		if r := recover(); r != nil && c.panicHandler != nil {
+			c.panicHandler(idx, r, debug.Stack())
 		}
 	}()
 	c.errorHandler(idx, err, envelopes)

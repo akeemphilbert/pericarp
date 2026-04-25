@@ -844,6 +844,66 @@ func TestComposite_SecondaryRecoversAfterTransientFailure(t *testing.T) {
 	}
 }
 
+func TestComposite_PanicHandlerReceivesRecoveredValue(t *testing.T) {
+	t.Parallel()
+
+	primary := infrastructure.NewMemoryStore()
+	failing := &failingAppendStore{inner: infrastructure.NewMemoryStore(), err: errors.New("boom")}
+
+	type captured struct {
+		idx       int
+		recovered any
+		stack     []byte
+	}
+	var (
+		mu     sync.Mutex
+		seen   []captured
+		called atomic.Int64
+	)
+	composite := infrastructure.NewCompositeEventStore(
+		primary,
+		[]domain.EventStore{failing},
+		infrastructure.WithErrorHandler(func(int, error, []domain.EventEnvelope[any]) {
+			panic("handler panic value")
+		}),
+		infrastructure.WithPanicHandler(func(idx int, recovered any, stack []byte) {
+			mu.Lock()
+			seen = append(seen, captured{idx: idx, recovered: recovered, stack: stack})
+			mu.Unlock()
+			called.Add(1)
+		}),
+	)
+
+	ev := createTestEvent("agg-panic", uniqueID("evt", 1), "test.created", 1)
+	if err := composite.Append(context.Background(), "agg-panic", 0, ev); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && called.Load() == 0 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := called.Load(); got != 1 {
+		t.Fatalf("panic handler called %d times, want 1", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if seen[0].idx != 0 {
+		t.Fatalf("idx = %d, want 0", seen[0].idx)
+	}
+	if seen[0].recovered != "handler panic value" {
+		t.Fatalf("recovered = %v, want %q", seen[0].recovered, "handler panic value")
+	}
+	if len(seen[0].stack) == 0 {
+		t.Fatalf("stack should be non-empty")
+	}
+
+	if err := composite.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
 func TestComposite_NilPrimaryPanics(t *testing.T) {
 	t.Parallel()
 

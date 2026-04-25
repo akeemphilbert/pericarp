@@ -50,11 +50,17 @@ var _ domain.EventStore = (*BigtableEventStore)(nil)
 // transaction IDs containing `#` or NUL — callers would otherwise corrupt
 // neighbouring key spaces (e.g., agg "user#admin" would alias with agg "user").
 //
-// Concurrency: Append reads the current version and compares it to the
-// caller's expectedVersion before writing. Two concurrent callers can both
-// pass the check and produce duplicate sequence numbers; strict optimistic
-// concurrency is not provided. Low-contention workloads are fine;
-// high-contention callers should serialize through an actor per aggregate.
+// Concurrency limitation (read this before adopting): Append performs a
+// non-atomic read-then-write version check (GetCurrentVersion followed by
+// ApplyBulk). Two concurrent writers passing the same expectedVersion can
+// both observe the pre-write state and both succeed, producing duplicate
+// sequence numbers. The store therefore does NOT provide strict optimistic
+// concurrency — implementing that on Bigtable requires CheckAndMutateRow
+// against a per-aggregate version marker, which this store deliberately
+// does not yet do. Acceptable for low-contention workloads (single-writer
+// per aggregate, idempotent producers, append-only feeds). High-contention
+// callers must serialize writes per aggregate (e.g., an actor mailbox) or
+// use a different EventStore.
 //
 // All reads apply a LatestNFilter(1): the column family is expected to retain
 // only the most recent version per cell. If duplicate appends (per the
