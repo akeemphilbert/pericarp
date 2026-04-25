@@ -700,12 +700,17 @@ func TestMastodonNilAppCache_FallsBackToMemory(t *testing.T) {
 func TestMastodonRegisterApp_SendsWebsite(t *testing.T) {
 	t.Parallel()
 
-	var capturedWebsite string
+	// captured is read in the test goroutine after AuthCodeURLForInstance
+	// returns; the registration happens on httptest's handler goroutine, so
+	// a plain string field would be a data race under -race. atomic.Value
+	// gives a happens-before edge from the handler's Store to the assertion's
+	// Load without dragging in a mutex.
+	var capturedWebsite atomic.Value
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/apps", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		form, _ := url.ParseQuery(string(body))
-		capturedWebsite = form.Get("website")
+		capturedWebsite.Store(form.Get("website"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"client_id":"cid","client_secret":"sec"}`)
 	})
@@ -724,8 +729,9 @@ func TestMastodonRegisterApp_SendsWebsite(t *testing.T) {
 	if _, err := m.AuthCodeURLForInstance(context.Background(), "mastodon.social", "s", application.GenerateCodeChallenge("v"), "", "https://app.example.com/cb"); err != nil {
 		t.Fatalf("AuthCodeURLForInstance: %v", err)
 	}
-	if capturedWebsite != "https://app.example.com" {
-		t.Errorf("captured website = %q, want https://app.example.com", capturedWebsite)
+	got, _ := capturedWebsite.Load().(string)
+	if got != "https://app.example.com" {
+		t.Errorf("captured website = %q, want https://app.example.com", got)
 	}
 }
 

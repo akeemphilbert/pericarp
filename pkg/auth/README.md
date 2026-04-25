@@ -74,6 +74,8 @@ Federated providers cannot satisfy `OAuthProvider.AuthCodeURL` because that inte
 - Mastodon: `mastodon.AuthCodeURLForInstance(ctx, host, state, codeChallenge, nonce, redirectURI)`
 - Bluesky: `bluesky.AuthCodeURLForHandle(ctx, handle, state, codeChallenge, nonce, redirectURI)`
 
+That also means `application.DefaultAuthenticationService.InitiateAuthFlow()` is **not** the right entry point for these providers: it delegates to the provider's standard `AuthCodeURL` and so will return an `AuthRequest` whose `AuthURL` is empty, with no error. Callers must either avoid `InitiateAuthFlow` entirely for federated providers, or fail closed on `AuthURL == ""` rather than emit it as a redirect. The provider-specific methods above are the only correct path.
+
 Both bind the per-flow context (host / PDS) internally, keyed by the codeChallenge (which Exchange recomputes from the codeVerifier). Bindings are TTL'd (10 min default) and single-use.
 
 Distinguishable PERMANENT sentinels — callers MUST `errors.Is`-route on these and not retry:
