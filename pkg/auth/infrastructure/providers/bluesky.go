@@ -45,6 +45,8 @@ var (
 	ErrBlueskyFlowExpired            = errors.New("bluesky: flow binding expired before code was exchanged")
 	ErrBlueskyFlowConsumed           = errors.New("bluesky: flow binding already consumed; start a fresh flow")
 	ErrBlueskyIDTokenUnsupported     = errors.New("bluesky: AT Protocol OAuth does not issue ID tokens; use Exchange to resolve user info")
+	ErrBlueskyRevokeUnsupported      = errors.New("bluesky: revocation through the OAuthProvider interface is not supported; revoke at the PDS directly")
+	ErrBlueskyIssuerMismatch         = errors.New("bluesky: authorization server metadata issuer does not match the PDS")
 )
 
 // BlueskyKeyStore stores the ECDSA P-256 key used to sign DPoP proofs.
@@ -123,9 +125,19 @@ type blueskyFlow struct {
 	authURL   string
 	tokenURL  string
 	parURL    string
+	issuer    string // canonical AS issuer URL (cache key for DPoP nonces)
 	did       string
 	handle    string
 	expiresAt time.Time
+}
+
+// canonicalIssuer normalises an AS issuer URL so it can be used as a cache
+// key consistently across PAR and token endpoints. RFC 9449 §8 says nonces
+// are scoped to the authorization server, not to a specific endpoint, so
+// using the issuer as the canonical key lets a nonce learned during PAR be
+// reused at the token endpoint and vice versa.
+func canonicalIssuer(issuer string) string {
+	return strings.TrimRight(issuer, "/")
 }
 
 // Bluesky implements application.OAuthProvider for the AT Protocol OAuth flow.
@@ -228,7 +240,16 @@ func (b *Bluesky) AuthCodeURLForHandle(ctx context.Context, handle, state, codeC
 		return "", fmt.Errorf("%w: %v", ErrBlueskyAuthServerDiscovery, err)
 	}
 
-	requestURI, err := b.pushAuthorizationRequest(ctx, asMeta, state, codeChallenge, handle, redirectURI)
+	// RFC 8414 §3.3 requires the issuer in the metadata response to match the
+	// authorization server identifier the client used to fetch the metadata.
+	// Without this check, a malicious DID document could route us to a PDS
+	// that pretends to be issued by a different host.
+	if canonicalIssuer(asMeta.Issuer) != canonicalIssuer(pdsURL) {
+		return "", fmt.Errorf("%w: metadata issuer %q != PDS %q", ErrBlueskyIssuerMismatch, asMeta.Issuer, pdsURL)
+	}
+
+	issuer := canonicalIssuer(asMeta.Issuer)
+	requestURI, err := b.pushAuthorizationRequest(ctx, asMeta, issuer, state, codeChallenge, handle, redirectURI)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrBlueskyPARFailed, err)
 	}
@@ -238,6 +259,7 @@ func (b *Bluesky) AuthCodeURLForHandle(ctx context.Context, handle, state, codeC
 		authURL:   asMeta.AuthorizationEndpoint,
 		tokenURL:  asMeta.TokenEndpoint,
 		parURL:    asMeta.PushedAuthorizationRequestEndpoint,
+		issuer:    issuer,
 		did:       did,
 		handle:    handle,
 		expiresAt: b.nowFn().Add(b.flowTTL),
@@ -275,16 +297,17 @@ func (b *Bluesky) Exchange(ctx context.Context, code, codeVerifier, redirectURI 
 		"client_id":     {b.clientMetadataURL},
 		"code_verifier": {codeVerifier},
 	}
-	tokenResp, err := b.tokenRequestWithDPoP(ctx, flow.tokenURL, form, "")
+	tokenResp, err := b.tokenRequestWithDPoP(ctx, flow.tokenURL, flow.issuer, form, "")
 	if err != nil {
 		return nil, fmt.Errorf("bluesky: token exchange: %w", err)
 	}
 
 	// Wrap the upstream refresh token with PDS context so RefreshToken can
-	// route subsequent calls back to the same authorization server.
+	// route subsequent calls back to the same authorization server. Encode
+	// issuer too so refresh proofs use the same nonce cache key.
 	wrappedRefresh := ""
 	if tokenResp.RefreshToken != "" {
-		wrappedRefresh = encodeBlueskyRefreshToken(flow.pdsURL, flow.tokenURL, tokenResp.RefreshToken)
+		wrappedRefresh = encodeBlueskyRefreshToken(flow.pdsURL, flow.tokenURL, flow.issuer, tokenResp.RefreshToken)
 	}
 
 	return &application.AuthResult{
@@ -315,39 +338,45 @@ func (b *Bluesky) RefreshToken(ctx context.Context, refreshToken string) (*appli
 	// require the caller to pass refreshToken in the format pdsURL|tokenURL|opaqueRefresh
 	// since the OAuthProvider.RefreshToken signature does not give us anywhere
 	// else to thread it. This is documented on the godoc.
-	pdsURL, tokenURL, opaque, err := decodeBlueskyRefreshToken(refreshToken)
+	pdsURL, tokenURL, issuer, opaque, err := decodeBlueskyRefreshToken(refreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("bluesky: refresh token format: %w (issued by Exchange)", err)
 	}
-	_ = pdsURL // currently unused; kept for future PDS-scoped behaviour
 
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {opaque},
 		"client_id":     {b.clientMetadataURL},
 	}
-	tokenResp, err := b.tokenRequestWithDPoP(ctx, tokenURL, form, "")
+	tokenResp, err := b.tokenRequestWithDPoP(ctx, tokenURL, issuer, form, "")
 	if err != nil {
 		return nil, fmt.Errorf("bluesky: token refresh: %w", err)
 	}
 
-	// Encode the refresh token back into the pdsURL|tokenURL prefix so the
-	// next refresh round-trips correctly.
-	encoded := encodeBlueskyRefreshToken(pdsURL, tokenURL, tokenResp.RefreshToken)
+	// Re-wrap so the next refresh round-trips correctly.
+	encoded := encodeBlueskyRefreshToken(pdsURL, tokenURL, issuer, tokenResp.RefreshToken)
 
 	return &application.AuthResult{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: encoded,
 		TokenType:    tokenResp.TokenType,
 		ExpiresIn:    tokenResp.ExpiresIn,
-		UserInfo:     application.UserInfo{Provider: "bluesky"},
+		UserInfo: application.UserInfo{
+			// Preserve identity fields across refresh — without this, the
+			// application layer cannot match a refreshed token to its
+			// originating credential.
+			ProviderUserID: tokenResp.Sub,
+			Provider:       "bluesky",
+		},
 	}, nil
 }
 
 // RevokeToken is not supported by the standard OAuth provider interface for
-// Bluesky because the PDS-specific revocation endpoint is not threaded through.
+// Bluesky because the PDS-specific revocation endpoint is not threaded
+// through. Returns ErrBlueskyRevokeUnsupported (errors.Is-friendly) so callers
+// can route around it programmatically rather than string-matching.
 func (b *Bluesky) RevokeToken(_ context.Context, _ string) error {
-	return errors.New("bluesky: revocation through the OAuthProvider interface is not supported; revoke at the PDS directly")
+	return ErrBlueskyRevokeUnsupported
 }
 
 // ValidateIDToken returns ErrBlueskyIDTokenUnsupported because AT Protocol
@@ -492,7 +521,7 @@ func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*
 
 // pushAuthorizationRequest performs PAR with a DPoP proof. The PAR endpoint
 // returns an opaque request_uri that the user is redirected to.
-func (b *Bluesky) pushAuthorizationRequest(ctx context.Context, asMeta *blueskyAuthServerMetadata, state, codeChallenge, handle, redirectURI string) (string, error) {
+func (b *Bluesky) pushAuthorizationRequest(ctx context.Context, asMeta *blueskyAuthServerMetadata, issuer, state, codeChallenge, handle, redirectURI string) (string, error) {
 	form := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {b.clientMetadataURL},
@@ -504,7 +533,7 @@ func (b *Bluesky) pushAuthorizationRequest(ctx context.Context, asMeta *blueskyA
 		"login_hint":            {handle},
 	}
 
-	dpop, err := b.makeDPoPProof(ctx, http.MethodPost, asMeta.PushedAuthorizationRequestEndpoint, "", b.dpopNonceFor(asMeta.Issuer))
+	dpop, err := b.makeDPoPProof(ctx, http.MethodPost, asMeta.PushedAuthorizationRequestEndpoint, "", b.dpopNonceFor(issuer))
 	if err != nil {
 		return "", fmt.Errorf("make DPoP proof: %w", err)
 	}
@@ -523,7 +552,7 @@ func (b *Bluesky) pushAuthorizationRequest(ctx context.Context, asMeta *blueskyA
 	defer func() { _ = resp.Body.Close() }()
 
 	if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
-		b.dpopNonceCacheM.Store(asMeta.Issuer, nonce)
+		b.dpopNonceCacheM.Store(issuer, nonce)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -558,9 +587,13 @@ type blueskyTokenResponse struct {
 
 // tokenRequestWithDPoP posts a token request carrying a DPoP proof, with one
 // retry on the use_dpop_nonce error path (the standard AT Proto handshake).
-func (b *Bluesky) tokenRequestWithDPoP(ctx context.Context, tokenURL string, form url.Values, accessTokenForAth string) (*blueskyTokenResponse, error) {
+//
+// The nonce cache is keyed by the canonical issuer (not the tokenURL) so
+// nonces learned during PAR are reused here, avoiding an unconditional
+// extra round-trip on every Exchange.
+func (b *Bluesky) tokenRequestWithDPoP(ctx context.Context, tokenURL, issuer string, form url.Values, accessTokenForAth string) (*blueskyTokenResponse, error) {
 	for attempt := range 2 {
-		dpop, err := b.makeDPoPProof(ctx, http.MethodPost, tokenURL, accessTokenForAth, b.dpopNonceFor(tokenURL))
+		dpop, err := b.makeDPoPProof(ctx, http.MethodPost, tokenURL, accessTokenForAth, b.dpopNonceFor(issuer))
 		if err != nil {
 			return nil, fmt.Errorf("make DPoP proof: %w", err)
 		}
@@ -576,16 +609,27 @@ func (b *Bluesky) tokenRequestWithDPoP(ctx context.Context, tokenURL string, for
 		if err != nil {
 			return nil, fmt.Errorf("send token request: %w", err)
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-
-		if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
-			b.dpopNonceCacheM.Store(tokenURL, nonce)
+		if readErr != nil {
+			return nil, fmt.Errorf("read token response body: %w", readErr)
 		}
 
-		if resp.StatusCode == http.StatusBadRequest && attempt == 0 && strings.Contains(string(body), "use_dpop_nonce") {
-			// Retry once with the nonce now in the cache.
-			continue
+		if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
+			b.dpopNonceCacheM.Store(issuer, nonce)
+		}
+
+		// Parse the OAuth error JSON to dispatch on the canonical `error`
+		// field rather than substring-matching the entire body. This rules
+		// out an unrelated 400 whose error_description happens to mention
+		// "use_dpop_nonce" from triggering a spurious retry.
+		if resp.StatusCode == http.StatusBadRequest && attempt == 0 {
+			var oauthErr struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(body, &oauthErr) == nil && oauthErr.Error == "use_dpop_nonce" {
+				continue
+			}
 		}
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
@@ -596,7 +640,10 @@ func (b *Bluesky) tokenRequestWithDPoP(ctx context.Context, tokenURL string, for
 			return nil, fmt.Errorf("parse token response: %w", err)
 		}
 		if out.AccessToken == "" {
-			return nil, fmt.Errorf("token response missing access_token: %s", string(body))
+			// Do not include `body` here — a 200 response that lacks
+			// access_token may still contain refresh_token / id_token, and
+			// dumping the body into wrapped errors leaks secrets to logs.
+			return nil, fmt.Errorf("token response missing access_token")
 		}
 		return &out, nil
 	}
@@ -620,6 +667,8 @@ func (b *Bluesky) dpopNonceFor(server string) string {
 //
 // Header: {typ:"dpop+jwt", alg:"ES256", jwk:<public_jwk>}
 // Claims: {jti, htm, htu, iat, optional nonce, optional ath}
+//
+// htu is normalized to drop query and fragment per RFC 9449 §4.2.
 func (b *Bluesky) makeDPoPProof(ctx context.Context, method, urlStr, accessToken, nonce string) (string, error) {
 	key, err := b.keyStore.GetSigningKey(ctx)
 	if err != nil {
@@ -630,7 +679,7 @@ func (b *Bluesky) makeDPoPProof(ctx context.Context, method, urlStr, accessToken
 	claims := gojwt.MapClaims{
 		"jti": b.jtiFn(),
 		"htm": method,
-		"htu": urlStr,
+		"htu": normalizeHTU(urlStr),
 		"iat": b.nowFn().Unix(),
 	}
 	if nonce != "" {
@@ -651,6 +700,22 @@ func (b *Bluesky) makeDPoPProof(ctx context.Context, method, urlStr, accessToken
 		return "", fmt.Errorf("sign DPoP proof: %w", err)
 	}
 	return signed, nil
+}
+
+// normalizeHTU strips query and fragment from a URL for the htu DPoP claim
+// per RFC 9449 §4.2. If parsing fails it falls back to a manual strip so a
+// malformed metadata URL still produces a usable (if imperfect) htu.
+func normalizeHTU(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		u.RawQuery = ""
+		u.Fragment = ""
+		u.RawFragment = ""
+		return u.String()
+	}
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		return raw[:i]
+	}
+	return raw
 }
 
 // publicJWKFromECDSA builds a JWK representation of an ECDSA P-256 public key.
@@ -684,29 +749,32 @@ func JWKThumbprintFromECDSA(pub *ecdsa.PublicKey) string {
 // ----- Refresh token wrapping -----
 //
 // AT Protocol refresh tokens are PDS-bound: the caller must remember which
-// PDS issued them. The OAuthProvider.RefreshToken signature gives us no
-// per-credential context, so we wrap the upstream refresh token with the
-// PDS + token URL, base64url-encoded.
+// PDS issued them, which token endpoint to call, and which AS issuer keys
+// the DPoP nonce cache. The OAuthProvider.RefreshToken signature gives us no
+// per-credential context, so we wrap the upstream refresh token with all
+// three URLs, base64url-encoded. Format version "btr.v2" is incompatible
+// with v1 — the v1 wrapping omitted issuer, which made cross-replica nonce
+// reuse impossible.
 
-func encodeBlueskyRefreshToken(pdsURL, tokenURL, opaque string) string {
-	raw := pdsURL + "|" + tokenURL + "|" + opaque
-	return "btr.v1." + base64.RawURLEncoding.EncodeToString([]byte(raw))
+func encodeBlueskyRefreshToken(pdsURL, tokenURL, issuer, opaque string) string {
+	raw := pdsURL + "|" + tokenURL + "|" + issuer + "|" + opaque
+	return "btr.v2." + base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
-func decodeBlueskyRefreshToken(token string) (pdsURL, tokenURL, opaque string, err error) {
-	const prefix = "btr.v1."
+func decodeBlueskyRefreshToken(token string) (pdsURL, tokenURL, issuer, opaque string, err error) {
+	const prefix = "btr.v2."
 	if !strings.HasPrefix(token, prefix) {
-		return "", "", "", fmt.Errorf("unrecognized refresh token format")
+		return "", "", "", "", fmt.Errorf("unrecognized refresh token format")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(token, prefix))
 	if err != nil {
-		return "", "", "", fmt.Errorf("decode refresh token: %w", err)
+		return "", "", "", "", fmt.Errorf("decode refresh token: %w", err)
 	}
-	parts := strings.SplitN(string(decoded), "|", 3)
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("malformed refresh token payload")
+	parts := strings.SplitN(string(decoded), "|", 4)
+	if len(parts) != 4 {
+		return "", "", "", "", fmt.Errorf("malformed refresh token payload")
 	}
-	return parts[0], parts[1], parts[2], nil
+	return parts[0], parts[1], parts[2], parts[3], nil
 }
 
 // ----- Flow binding -----

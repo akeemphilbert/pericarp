@@ -424,7 +424,7 @@ func TestBluesky_Exchange_ReturnsDPoPBoundTokens(t *testing.T) {
 	}
 
 	// Refresh token must be wrapped (PDS context preserved across calls).
-	pdsURL, tokenURL, opaque, err := decodeBlueskyRefreshToken(res.RefreshToken)
+	pdsURL, tokenURL, issuer, opaque, err := decodeBlueskyRefreshToken(res.RefreshToken)
 	if err != nil {
 		t.Fatalf("decodeBlueskyRefreshToken: %v", err)
 	}
@@ -433,6 +433,9 @@ func TestBluesky_Exchange_ReturnsDPoPBoundTokens(t *testing.T) {
 	}
 	if tokenURL != env.asSrv.URL+"/oauth/token" {
 		t.Errorf("encoded refresh tokenURL = %q, want %s/oauth/token", tokenURL, env.asSrv.URL)
+	}
+	if issuer != env.asSrv.URL {
+		t.Errorf("encoded refresh issuer = %q, want %q", issuer, env.asSrv.URL)
 	}
 	if opaque != env.refreshToken {
 		t.Errorf("encoded refresh opaque = %q, want %q", opaque, env.refreshToken)
@@ -486,12 +489,41 @@ func TestBluesky_RefreshToken_DPoPBound(t *testing.T) {
 
 	// And the refresh token returned from RefreshToken must be re-wrapped so
 	// the next refresh round-trip works.
-	pdsURL, _, _, err := decodeBlueskyRefreshToken(refreshed.RefreshToken)
+	pdsURL, _, _, _, err := decodeBlueskyRefreshToken(refreshed.RefreshToken)
 	if err != nil {
 		t.Fatalf("re-wrapped refresh token: %v", err)
 	}
 	if pdsURL != env.pdsURL {
 		t.Errorf("re-wrapped pdsURL = %q, want %q", pdsURL, env.pdsURL)
+	}
+
+	// jti uniqueness: RFC 9449 requires DPoP proofs to be single-use. The
+	// upstream PDS will reject a refresh whose jti collides with the prior
+	// exchange's jti.
+	exchangeClaims, err := parseDPoPClaims(exchangeProof)
+	if err != nil {
+		t.Fatalf("parse exchange DPoP: %v", err)
+	}
+	refreshClaims, err := parseDPoPClaims(refreshProof)
+	if err != nil {
+		t.Fatalf("parse refresh DPoP: %v", err)
+	}
+	exchangeJTI, _ := exchangeClaims["jti"].(string)
+	refreshJTI, _ := refreshClaims["jti"].(string)
+	if exchangeJTI == "" {
+		t.Error("exchange DPoP missing jti claim (RFC 9449 §4.2)")
+	}
+	if refreshJTI == "" {
+		t.Error("refresh DPoP missing jti claim")
+	}
+	if exchangeJTI == refreshJTI {
+		t.Errorf("exchange and refresh DPoP have identical jti %q; proofs must be single-use", exchangeJTI)
+	}
+
+	// And refresh preserves the DID across the call (so the application
+	// layer can match the refreshed token to the originating credential).
+	if refreshed.UserInfo.ProviderUserID != env.did {
+		t.Errorf("refreshed ProviderUserID = %q, want DID %q (must round-trip across refresh)", refreshed.UserInfo.ProviderUserID, env.did)
 	}
 }
 
@@ -644,6 +676,227 @@ func mustExtractJWKThumbprint(t *testing.T, dpop string) string {
 		t.Fatalf("reconstruct pub key: %v", err)
 	}
 	return JWKThumbprintFromECDSA(pub)
+}
+
+func TestBluesky_AuthServerMetadataIssuerMismatch(t *testing.T) {
+	t.Parallel()
+
+	env := newFakeBlueskyEnv(t)
+	// Override the AS metadata handler to claim a foreign issuer.
+	mux := http.NewServeMux()
+	mux.HandleFunc(blueskyAuthServerMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"issuer": "https://attacker.example",
+			"authorization_endpoint": "https://attacker.example/oauth/authorize",
+			"token_endpoint": "https://attacker.example/oauth/token",
+			"pushed_authorization_request_endpoint": "https://attacker.example/oauth/par"
+		}`)
+	})
+	env.asSrv.Close()
+	env.asSrv = httptest.NewServer(mux)
+	defer env.asSrv.Close()
+	// Update PLC to point at the new server (env.pdsURL changed).
+	env.pdsURL = env.asSrv.URL
+	env.plcSrv.Close()
+	plcMux := http.NewServeMux()
+	plcMux.HandleFunc("/did:plc:abc123fake", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"id": "did:plc:abc123fake",
+			"service": [
+				{"id": "#atproto_pds", "type": "AtprotoPersonalDataServer", "serviceEndpoint": "`+env.pdsURL+`"}
+			]
+		}`)
+	})
+	env.plcSrv = httptest.NewServer(plcMux)
+	defer env.plcSrv.Close()
+
+	b := newBlueskyForTest(env, BlueskyConfig{})
+	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge("v"), "", "")
+	if !errors.Is(err, ErrBlueskyIssuerMismatch) {
+		t.Errorf("err = %v, want ErrBlueskyIssuerMismatch (a malicious DID document must not redirect us through an unverified issuer)", err)
+	}
+}
+
+func TestBluesky_TokenEndpointDPoPNonceHandshake(t *testing.T) {
+	t.Parallel()
+
+	env := newFakeBlueskyEnv(t)
+
+	// Replace the token handler with a stateful one that demands the
+	// use_dpop_nonce handshake on the first hit.
+	asMux := http.NewServeMux()
+	asMux.HandleFunc(blueskyAuthServerMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(blueskyAuthServerMetadata{
+			Issuer:                             env.asSrv.URL,
+			AuthorizationEndpoint:              env.asSrv.URL + "/oauth/authorize",
+			TokenEndpoint:                      env.asSrv.URL + "/oauth/token",
+			PushedAuthorizationRequestEndpoint: env.asSrv.URL + "/oauth/par",
+		})
+	})
+	asMux.HandleFunc("/oauth/par", func(w http.ResponseWriter, r *http.Request) {
+		dpop := r.Header.Get("DPoP")
+		env.parDPoPHeader.Store(dpop)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"request_uri":"`+env.requestURI+`","expires_in":60}`)
+	})
+	var tokenAttempts atomic.Int32
+	asMux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		n := tokenAttempts.Add(1)
+		dpop := r.Header.Get("DPoP")
+		env.exchangeDPoPHeader.Store(dpop)
+
+		if n == 1 {
+			// Demand the use_dpop_nonce handshake on first hit.
+			w.Header().Set("DPoP-Nonce", "tok-nonce")
+			http.Error(w, `{"error":"use_dpop_nonce","error_description":"server requires DPoP nonce"}`, http.StatusBadRequest)
+			return
+		}
+		// On retry, verify the proof carries the nonce.
+		claims, _ := parseDPoPClaims(dpop)
+		if got := claims["nonce"]; got != "tok-nonce" {
+			t.Errorf("retry DPoP nonce = %v, want tok-nonce", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"`+env.accessToken+`","token_type":"DPoP","expires_in":1800,"refresh_token":"`+env.refreshToken+`","sub":"`+env.did+`"}`)
+	})
+	env.asSrv.Close()
+	env.asSrv = httptest.NewServer(asMux)
+	defer env.asSrv.Close()
+	env.pdsURL = env.asSrv.URL
+
+	plcMux := http.NewServeMux()
+	plcMux.HandleFunc("/did:plc:abc123fake", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"id": "did:plc:abc123fake",
+			"service": [
+				{"id": "#atproto_pds", "type": "AtprotoPersonalDataServer", "serviceEndpoint": "`+env.pdsURL+`"}
+			]
+		}`)
+	})
+	env.plcSrv.Close()
+	env.plcSrv = httptest.NewServer(plcMux)
+	defer env.plcSrv.Close()
+
+	b := newBlueskyForTest(env, BlueskyConfig{})
+	verifier := "v"
+	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge(verifier), "", ""); err != nil {
+		t.Fatalf("AuthCodeURLForHandle: %v", err)
+	}
+	res, err := b.Exchange(context.Background(), env.authCode, verifier, "")
+	if err != nil {
+		t.Fatalf("Exchange (should succeed after retry): %v", err)
+	}
+	if res.AccessToken != env.accessToken {
+		t.Errorf("AccessToken = %q, want %q", res.AccessToken, env.accessToken)
+	}
+	if got := tokenAttempts.Load(); got != 2 {
+		t.Errorf("token endpoint attempts = %d, want 2 (first should fail with use_dpop_nonce, second should succeed)", got)
+	}
+}
+
+func TestBluesky_TokenEndpoint_Non200WithoutNonce(t *testing.T) {
+	t.Parallel()
+
+	env := newFakeBlueskyEnv(t)
+	// Replace token handler to always 401.
+	asMux := http.NewServeMux()
+	asMux.HandleFunc(blueskyAuthServerMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(blueskyAuthServerMetadata{
+			Issuer:                             env.asSrv.URL,
+			AuthorizationEndpoint:              env.asSrv.URL + "/oauth/authorize",
+			TokenEndpoint:                      env.asSrv.URL + "/oauth/token",
+			PushedAuthorizationRequestEndpoint: env.asSrv.URL + "/oauth/par",
+		})
+	})
+	asMux.HandleFunc("/oauth/par", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"request_uri":"`+env.requestURI+`","expires_in":60}`)
+	})
+	asMux.HandleFunc("/oauth/token", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":"invalid_grant"}`, http.StatusUnauthorized)
+	})
+	env.asSrv.Close()
+	env.asSrv = httptest.NewServer(asMux)
+	defer env.asSrv.Close()
+	env.pdsURL = env.asSrv.URL
+
+	plcMux := http.NewServeMux()
+	plcMux.HandleFunc("/did:plc:abc123fake", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{
+			"id": "did:plc:abc123fake",
+			"service": [
+				{"id": "#atproto_pds", "type": "AtprotoPersonalDataServer", "serviceEndpoint": "`+env.pdsURL+`"}
+			]
+		}`)
+	})
+	env.plcSrv.Close()
+	env.plcSrv = httptest.NewServer(plcMux)
+	defer env.plcSrv.Close()
+
+	b := newBlueskyForTest(env, BlueskyConfig{})
+	verifier := "v"
+	if _, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", pkceChallenge(verifier), "", ""); err != nil {
+		t.Fatalf("AuthCodeURLForHandle: %v", err)
+	}
+	_, err := b.Exchange(context.Background(), env.authCode, verifier, "")
+	if err == nil {
+		t.Fatal("expected error for HTTP 401 from token endpoint")
+	}
+	if !strings.Contains(err.Error(), "status 401") {
+		t.Errorf("err = %q, want 'status 401'", err.Error())
+	}
+}
+
+func TestBluesky_RevokeToken_Sentinel(t *testing.T) {
+	t.Parallel()
+	b := NewBluesky(BlueskyConfig{})
+	if err := b.RevokeToken(context.Background(), "any"); !errors.Is(err, ErrBlueskyRevokeUnsupported) {
+		t.Errorf("err = %v, want ErrBlueskyRevokeUnsupported", err)
+	}
+}
+
+func TestBluesky_DecodeRefreshToken_BadVariants(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, input string
+	}{
+		{"empty", ""},
+		{"wrong prefix", "googletoken"},
+		{"v1 legacy prefix", "btr.v1.YWJj"},                  // base64url("abc") under old prefix
+		{"bad base64", "btr.v2.!!!"},                          // not base64url
+		{"too few parts", "btr.v2." + base64.RawURLEncoding.EncodeToString([]byte("only|two"))},
+		{"empty payload", "btr.v2." + base64.RawURLEncoding.EncodeToString([]byte(""))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, _, _, _, err := decodeBlueskyRefreshToken(tc.input)
+			if err == nil {
+				t.Errorf("expected error for %q, got nil", tc.input)
+			}
+		})
+	}
+}
+
+func TestBluesky_NormalizeHTU(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"https://pds/oauth/token":                       "https://pds/oauth/token",
+		"https://pds/oauth/token?foo=bar":               "https://pds/oauth/token",
+		"https://pds/oauth/token#frag":                  "https://pds/oauth/token",
+		"https://pds/oauth/token?foo=bar#frag":          "https://pds/oauth/token",
+		"https://pds:8443/oauth/token":                  "https://pds:8443/oauth/token",
+	}
+	for in, want := range cases {
+		if got := normalizeHTU(in); got != want {
+			t.Errorf("normalizeHTU(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 // Compile-time check that *Bluesky implements application.OAuthProvider.
