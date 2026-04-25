@@ -399,6 +399,20 @@ func TestBluesky_ValidateAuthServerEndpoints(t *testing.T) {
 				PushedAuthorizationRequestEndpoint: "http://127.0.0.1:9000/oauth/par",
 			},
 		},
+		{
+			// Userinfo rejection is unconditional — even in insecure mode
+			// it must still fire for any of the three endpoints.
+			name:       "userinfo in endpoint rejected even in insecure mode",
+			insecureOK: true,
+			pdsURL:     "http://127.0.0.1:9000",
+			meta: blueskyAuthServerMetadata{
+				AuthorizationEndpoint:              "http://user:pass@127.0.0.1:9000/oauth/authorize",
+				TokenEndpoint:                      "http://127.0.0.1:9000/oauth/token",
+				PushedAuthorizationRequestEndpoint: "http://127.0.0.1:9000/oauth/par",
+			},
+			wantErr:     true,
+			errContains: "userinfo",
+		},
 	}
 
 	for _, tc := range cases {
@@ -479,6 +493,27 @@ func TestBluesky_ValidateRefreshTokenURLs_SSRFGuard(t *testing.T) {
 			pdsURL:     "http://127.0.0.1:9000",
 			tokenURL:   "http://other-host:8080/oauth/token",
 			issuer:     "http://127.0.0.1:9000",
+		},
+		{
+			// Userinfo rejection is unconditional — must still fire for the
+			// pdsURL / tokenURL / issuer decoded from a wrapped refresh
+			// token even when AllowInsecurePDSURLs is true.
+			name:        "userinfo in tokenURL rejected even in insecure mode",
+			insecureOK:  true,
+			pdsURL:      "http://127.0.0.1:9000",
+			tokenURL:    "http://user:pass@127.0.0.1:9000/oauth/token",
+			issuer:      "http://127.0.0.1:9000",
+			wantErr:     true,
+			errContains: "userinfo",
+		},
+		{
+			name:        "userinfo in pdsURL rejected even in insecure mode",
+			insecureOK:  true,
+			pdsURL:      "http://user:pass@127.0.0.1:9000",
+			tokenURL:    "http://127.0.0.1:9000/oauth/token",
+			issuer:      "http://127.0.0.1:9000",
+			wantErr:     true,
+			errContains: "userinfo",
 		},
 	}
 

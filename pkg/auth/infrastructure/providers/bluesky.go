@@ -653,20 +653,20 @@ func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*
 // reachable-but-malicious PDS could return endpoints pointing at http:// or
 // internal hosts and we would happily POST PAR/token requests there.
 //
-// Each endpoint is run through validatePDSURL (https + non-internal host),
-// and additionally must share a host with the PDS — AT Protocol's design
-// makes the PDS the authorization server, so a different host on any
-// endpoint indicates either a mis-configured server or a redirect attempt.
-// AllowInsecurePDSURLs bypasses both layers.
+// Each endpoint is run through validatePDSURL, which parses the URL and
+// rejects userinfo unconditionally (so the no-credential-in-URL invariant
+// holds even with AllowInsecurePDSURLs=true). The remaining
+// scheme/internal-IP and same-host-as-PDS checks only fire when
+// AllowInsecurePDSURLs is false.
 func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, pdsURL string, meta *blueskyAuthServerMetadata) error {
-	if b.allowInsecurePDSURLs {
-		return nil
+	var pdsHost string
+	if !b.allowInsecurePDSURLs {
+		pdsParsed, err := url.Parse(pdsURL)
+		if err != nil {
+			return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
+		}
+		pdsHost = strings.ToLower(pdsParsed.Hostname())
 	}
-	pdsParsed, err := url.Parse(pdsURL)
-	if err != nil {
-		return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
-	}
-	pdsHost := strings.ToLower(pdsParsed.Hostname())
 	for _, ep := range []struct {
 		name string
 		raw  string
@@ -677,6 +677,9 @@ func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, pdsURL string
 	} {
 		if err := b.validatePDSURL(ctx, ep.raw); err != nil {
 			return fmt.Errorf("auth server %s: %w", ep.name, err)
+		}
+		if b.allowInsecurePDSURLs {
+			continue
 		}
 		u, err := url.Parse(ep.raw)
 		if err != nil {
@@ -694,21 +697,22 @@ func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, pdsURL string
 // application-layer state, so a malicious or compromised store could craft
 // a btr.v2 payload that points tokenURL at an internal host; without this
 // check, RefreshToken would happily POST at it. The rules mirror
-// validateAuthServerEndpoints: each URL goes through validatePDSURL, and
-// tokenURL / issuer must share a host with pdsURL. AllowInsecurePDSURLs
-// bypasses both layers for tests/dev.
+// validateAuthServerEndpoints: each URL is parsed and rejected if it
+// contains userinfo (always), and in non-insecure mode each URL also goes
+// through validatePDSURL's full SSRF guard plus a same-host check tying
+// tokenURL/issuer to pdsURL.
 func (b *Bluesky) validateRefreshTokenURLs(ctx context.Context, pdsURL, tokenURL, issuer string) error {
-	if b.allowInsecurePDSURLs {
-		return nil
-	}
 	if err := b.validatePDSURL(ctx, pdsURL); err != nil {
 		return fmt.Errorf("pdsURL: %w", err)
 	}
-	pdsParsed, err := url.Parse(pdsURL)
-	if err != nil {
-		return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
+	var pdsHost string
+	if !b.allowInsecurePDSURLs {
+		pdsParsed, err := url.Parse(pdsURL)
+		if err != nil {
+			return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
+		}
+		pdsHost = strings.ToLower(pdsParsed.Hostname())
 	}
-	pdsHost := strings.ToLower(pdsParsed.Hostname())
 	for _, ep := range []struct {
 		name string
 		raw  string
@@ -718,6 +722,9 @@ func (b *Bluesky) validateRefreshTokenURLs(ctx context.Context, pdsURL, tokenURL
 	} {
 		if err := b.validatePDSURL(ctx, ep.raw); err != nil {
 			return fmt.Errorf("%s: %w", ep.name, err)
+		}
+		if b.allowInsecurePDSURLs {
+			continue
 		}
 		u, err := url.Parse(ep.raw)
 		if err != nil {
