@@ -571,6 +571,11 @@ func TestMastodonConcurrentRegistration_Singleflight(t *testing.T) {
 		AppName:     "PericarpTest",
 		RedirectURI: "https://app.example.com/cb",
 		AppCache:    cache,
+		// "mastodon.social" is a real public hostname, but routing it at
+		// slowSrv via instanceBase means the test never actually talks to
+		// it; the SSRF guard's DNS lookup would still fire in strict mode
+		// and make this test non-hermetic / flaky on CI without DNS.
+		AllowInsecureInstanceHosts: true,
 	})
 	m.instanceBase = func(_ string) string { return slowSrv.URL }
 
@@ -680,6 +685,7 @@ func TestMastodonNilAppCache_FallsBackToMemory(t *testing.T) {
 		AppName:     "PericarpTest",
 		RedirectURI: "https://app.example.com/cb",
 		// AppCache intentionally nil
+		AllowInsecureInstanceHosts: true, // hermetic — host is routed at httptest, no DNS
 	})
 	m.instanceBase = func(_ string) string { return social.server.URL }
 
@@ -707,10 +713,11 @@ func TestMastodonRegisterApp_SendsWebsite(t *testing.T) {
 	defer srv.Close()
 
 	m := NewMastodon(MastodonConfig{
-		AppName:     "PericarpTest",
-		RedirectURI: "https://app.example.com/cb",
-		AppCache:    NewMemoryMastodonAppCache(),
-		Website:     "https://app.example.com",
+		AppName:                    "PericarpTest",
+		RedirectURI:                "https://app.example.com/cb",
+		AppCache:                   NewMemoryMastodonAppCache(),
+		Website:                    "https://app.example.com",
+		AllowInsecureInstanceHosts: true, // hermetic — host is routed at httptest, no DNS
 	})
 	m.instanceBase = func(_ string) string { return srv.URL }
 
@@ -726,8 +733,9 @@ func TestMastodonRevokeTokenAtInstance_NoCachedApp(t *testing.T) {
 	t.Parallel()
 
 	m := NewMastodon(MastodonConfig{
-		RedirectURI: "https://app.example.com/cb",
-		AppCache:    NewMemoryMastodonAppCache(),
+		RedirectURI:                "https://app.example.com/cb",
+		AppCache:                   NewMemoryMastodonAppCache(),
+		AllowInsecureInstanceHosts: true, // hermetic — RevokeTokenAtInstance bails before any HTTP, but the SSRF guard still runs first
 	})
 	err := m.RevokeTokenAtInstance(context.Background(), "mastodon.social", "tok")
 	if err == nil {
@@ -751,9 +759,10 @@ func TestMastodonRevokeTokenAtInstance_Non200(t *testing.T) {
 	cache := NewMemoryMastodonAppCache()
 	_ = cache.SetApp(context.Background(), "mastodon.social", &MastodonApp{ClientID: "cid", ClientSecret: "sec"})
 	m := NewMastodon(MastodonConfig{
-		AppName:     "PericarpTest",
-		RedirectURI: "https://app.example.com/cb",
-		AppCache:    cache,
+		AppName:                    "PericarpTest",
+		RedirectURI:                "https://app.example.com/cb",
+		AppCache:                   cache,
+		AllowInsecureInstanceHosts: true, // hermetic — host is routed at httptest, no DNS
 	})
 	m.instanceBase = func(_ string) string { return srv.URL }
 
