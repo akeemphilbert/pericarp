@@ -571,31 +571,31 @@ func TestBluesky_PAR_DPoPNonceHandshake(t *testing.T) {
 
 	b := newBlueskyForTest(env, BlueskyConfig{})
 
-	// First flow: PAR will reject the first attempt. Bluesky's makeDPoPProof
-	// reads the latest cached nonce, so AT-Proto's expected handshake is
-	// "first request fails with DPoP-Nonce header → caller retries with that
-	// nonce baked in." Today that retry happens for token requests via
-	// tokenRequestWithDPoP; PAR has no built-in retry, so the first flow
-	// should fail loud — the consumer issues a second AuthCodeURLForHandle
-	// call which should now succeed because the cache is warm.
+	// AT-Proto-required handshake: the AS rejects the first PAR with
+	// 400 {"error":"use_dpop_nonce"} + a DPoP-Nonce header, and the client
+	// retries the same request with that nonce baked into the proof.
+	// pushAuthorizationRequest now performs that retry internally (matching
+	// tokenRequestWithDPoP), so a single AuthCodeURLForHandle call should
+	// succeed even on a cold nonce cache.
 	verifier := "v"
-	_, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge(verifier), "", "")
-	if err == nil {
-		t.Fatal("first PAR with use_dpop_nonce should fail without a retry; nonce was learned from response")
-	}
-	// Second flow: nonce cache is now populated, request succeeds.
-	authURL, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s2", application.GenerateCodeChallenge(verifier+"x"), "", "")
+	authURL, err := b.AuthCodeURLForHandle(context.Background(), env.handle, "s", application.GenerateCodeChallenge(verifier), "", "")
 	if err != nil {
-		t.Fatalf("second AuthCodeURLForHandle (nonce primed): %v", err)
+		t.Fatalf("AuthCodeURLForHandle should succeed via internal use_dpop_nonce retry: %v", err)
 	}
 	parsed, err := url.Parse(authURL)
 	if err != nil {
-		t.Fatalf("parse second authURL: %v", err)
+		t.Fatalf("parse authURL: %v", err)
 	}
 	if got := parsed.Query().Get("request_uri"); got != env.requestURI {
-		t.Errorf("second authURL request_uri = %q, want %q", got, env.requestURI)
+		t.Errorf("authURL request_uri = %q, want %q", got, env.requestURI)
 	}
-	// And the nonce-primed PAR proof carries the nonce claim.
+	// Two PAR hits exactly: the rejected first attempt and the nonce-primed
+	// retry. A spurious extra retry would push this past 2.
+	if got := env.parCalls.Load(); got != 2 {
+		t.Errorf("PAR calls = %d, want 2 (one rejected + one retry)", got)
+	}
+	// The successful (second) PAR proof must carry the nonce learned from
+	// the first response.
 	if v := env.parGotNonce.Load(); v == nil || v.(string) != env.parIssuedNonce {
 		t.Errorf("PAR DPoP nonce after handshake = %v, want %q", v, env.parIssuedNonce)
 	}

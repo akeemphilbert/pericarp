@@ -732,6 +732,13 @@ func (b *Bluesky) validateRefreshTokenURLs(ctx context.Context, pdsURL, tokenURL
 
 // pushAuthorizationRequest performs PAR with a DPoP proof. The PAR endpoint
 // returns an opaque request_uri that the user is redirected to.
+//
+// Mirrors the use_dpop_nonce handshake from tokenRequestWithDPoP: when the
+// AS requires a server-issued nonce, the first attempt comes back as 400
+// {"error":"use_dpop_nonce"} with a DPoP-Nonce header, and the second
+// attempt regenerates the proof with that nonce. Without this, the very
+// first AuthCodeURLForHandle call against any nonce-requiring AS would fail
+// even though a single retry would succeed.
 func (b *Bluesky) pushAuthorizationRequest(ctx context.Context, asMeta *blueskyAuthServerMetadata, issuer, state, codeChallenge, handle, redirectURI string) (string, error) {
 	form := url.Values{
 		"response_type":         {"code"},
@@ -744,46 +751,63 @@ func (b *Bluesky) pushAuthorizationRequest(ctx context.Context, asMeta *blueskyA
 		"login_hint":            {handle},
 	}
 
-	dpop, err := b.makeDPoPProof(ctx, http.MethodPost, asMeta.PushedAuthorizationRequestEndpoint, "", b.dpopNonceFor(issuer))
-	if err != nil {
-		return "", fmt.Errorf("make DPoP proof: %w", err)
-	}
+	for attempt := range 2 {
+		dpop, err := b.makeDPoPProof(ctx, http.MethodPost, asMeta.PushedAuthorizationRequestEndpoint, "", b.dpopNonceFor(issuer))
+		if err != nil {
+			return "", fmt.Errorf("make DPoP proof: %w", err)
+		}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, asMeta.PushedAuthorizationRequestEndpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("create PAR request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("DPoP", dpop)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, asMeta.PushedAuthorizationRequestEndpoint, strings.NewReader(form.Encode()))
+		if err != nil {
+			return "", fmt.Errorf("create PAR request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("DPoP", dpop)
 
-	resp, err := b.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("send PAR request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+		resp, err := b.httpClient.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("send PAR request: %w", err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return "", fmt.Errorf("read PAR response: %w", readErr)
+		}
 
-	if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
-		b.dpopNonceCacheM.Store(issuer, nonce)
-	}
+		if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
+			b.dpopNonceCacheM.Store(issuer, nonce)
+		}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read PAR response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+			var out struct {
+				RequestURI string `json:"request_uri"`
+				ExpiresIn  int    `json:"expires_in"`
+			}
+			if err := json.Unmarshal(body, &out); err != nil {
+				return "", fmt.Errorf("parse PAR response: %w", err)
+			}
+			if out.RequestURI == "" {
+				return "", fmt.Errorf("PAR response missing request_uri: %s", string(body))
+			}
+			return out.RequestURI, nil
+		}
+
+		// Same dispatch shape as tokenRequestWithDPoP: only retry on the
+		// canonical `error` field, not on substrings of the body.
+		if resp.StatusCode == http.StatusBadRequest && attempt == 0 {
+			var oauthErr struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(body, &oauthErr) == nil && oauthErr.Error == "use_dpop_nonce" {
+				continue
+			}
+		}
 		return "", fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
-	var out struct {
-		RequestURI string `json:"request_uri"`
-		ExpiresIn  int    `json:"expires_in"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", fmt.Errorf("parse PAR response: %w", err)
-	}
-	if out.RequestURI == "" {
-		return "", fmt.Errorf("PAR response missing request_uri: %s", string(body))
-	}
-	return out.RequestURI, nil
+	// Unreachable: same reasoning as tokenRequestWithDPoP — every iteration
+	// either continues (only on attempt 0) or returns. Go's flow analysis
+	// can't prove `for range 2` returns inside, so a terminator is required.
+	panic("unreachable: pushAuthorizationRequest must return inside the loop")
 }
 
 // blueskyTokenResponse models the subset of the token-endpoint response we use.
