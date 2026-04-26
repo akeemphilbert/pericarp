@@ -138,7 +138,7 @@ func (m *mockAuthService) VerifyPassword(_ context.Context, _, _ string) (*entit
 	return nil, nil, nil, nil
 }
 
-func (m *mockAuthService) ImportPasswordCredential(_ context.Context, _, _, _, _, _ string) error {
+func (m *mockAuthService) ImportPasswordCredential(_ context.Context, _, _, _, _, _ string, _ ...application.ImportOption) error {
 	return nil
 }
 

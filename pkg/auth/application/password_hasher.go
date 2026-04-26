@@ -29,14 +29,20 @@ func hashPassword(plaintext string, cost int) (algorithm, hash string, err error
 }
 
 // verifyPassword compares plaintext against the stored hash for the named
-// algorithm. Returns ErrInvalidPassword on mismatch, and a wrapped error
-// for any other failure (corrupt hash, unsupported algorithm) so the
-// caller can log the detail internally while still reporting only
-// ErrInvalidPassword to the end user.
-func verifyPassword(algorithm, hash, plaintext string) error {
+// algorithm. The saltSuffix, when non-empty, is appended to plaintext
+// before comparison — supporting legacy imports where the original
+// system applied an extra application-layer salt suffix on top of
+// bcrypt. Pass an empty saltSuffix for credentials registered through
+// pericarp.
+//
+// Returns ErrInvalidPassword on mismatch, and a wrapped error for any
+// other failure (corrupt hash, unsupported algorithm) so the caller can
+// log the detail internally while still reporting only ErrInvalidPassword
+// to the end user.
+func verifyPassword(algorithm, hash, plaintext, saltSuffix string) error {
 	switch algorithm {
 	case entities.PasswordAlgorithmBcrypt:
-		err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext))
+		err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext+saltSuffix))
 		if err == nil {
 			return nil
 		}
