@@ -47,7 +47,7 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 - Primary `Append` is synchronous; each secondary gets a dedicated goroutine + buffered channel (default 1024) so secondary latency/failures never block the caller
 - All read methods forward to the primary — secondaries are write-only replicas in v1
 - Optional `WithErrorHandler` functional option receives failed secondary appends; no `Logger` interface added to pericarp per existing "callers decide logging strategy" convention
-- `Close()` is idempotent (`sync.Once`), drains each secondary's queue, then closes underlying stores; returns the first non-nil close error wrapped with which store failed
+- `Close()` is idempotent (`sync.Once`), drains each secondary's queue, then closes underlying stores; all close errors are joined via `errors.Join` so no failure is shadowed
 - Handler panics are recovered so a misbehaving handler can't stall replication
 - **Why:** Lets callers attach backup/replica stores (e.g., FileStore mirror of a primary memory/Postgres store) without the replica's latency showing up on the request path
 
@@ -55,7 +55,7 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ### 2026-04-20: Bigtable EventStore implementation
 
-- Added `BigtableEventStore` in `pkg/eventsourcing/infrastructure/bigtable_store.go` — 6th EventStore implementation (after Memory, File, GORM, BigQuery, Dynamo, Composite)
+- Added `BigtableEventStore` in `pkg/eventsourcing/infrastructure/bigtable_store.go` — 7th EventStore implementation (after Memory, File, GORM, BigQuery, Dynamo, Composite)
 - Single-table design with three row-key spaces: `e#<agg>#<seq:20>` (events), `id#<eventID>` (index for GetEventByID), `tx#<txID>#<agg>#<seq:20>` (index for GetEventsByTransactionID)
 - Zero-padded 20-digit sequence numbers so lexicographic row order equals numeric order — enables `bigtable.NewRange` scans for `GetEventsRange` / `GetEventsFromVersion`
 - `GetCurrentVersion` uses `ReverseScan()` + `LimitRows(1)` — O(1) regardless of history length, unlike BigQuery's MAX(seq) aggregation

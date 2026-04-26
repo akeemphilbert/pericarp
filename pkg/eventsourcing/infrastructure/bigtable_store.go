@@ -106,26 +106,30 @@ func eventPrefixRange(aggregateID string) bigtable.RowRange {
 }
 
 // eventPrefixEnd returns the exclusive upper bound for rows under the
-// aggregate's event prefix: "#" (0x23) is bumped to "$" (0x24), which is
-// safe because aggregate IDs are validated to contain neither.
+// aggregate's event prefix: "#" (0x23) is bumped to "$" (0x24). Aggregate
+// IDs are validated to contain neither "#" nor NUL, so this synthetic key
+// can never collide with a real event row key.
 func eventPrefixEnd(aggregateID string) string {
 	return btEventPrefix + aggregateID + "$"
 }
 
 // eventRangeFrom returns the half-open range [padSeq(fromVersion), end-of-prefix)
 // so Bigtable can seek directly to the requested seq rather than scanning the
-// full aggregate history.
+// full aggregate history. The contract sentinel fromVersion == -1 ("from the
+// beginning") is mapped to seq 1; other values pass through unchanged to match
+// MemoryStore/BigQueryStore semantics.
 func eventRangeFrom(aggregateID string, fromVersion int) bigtable.RowRange {
-	if fromVersion < 1 {
+	if fromVersion == -1 {
 		fromVersion = 1
 	}
 	return bigtable.NewRange(eventRowKey(aggregateID, fromVersion), eventPrefixEnd(aggregateID))
 }
 
 // eventRangeBetween returns [padSeq(fromVersion), padSeq(toVersion+1)), or
-// the unbounded-right variant when toVersion == -1.
+// the unbounded-right variant when toVersion == -1. Mirrors eventRangeFrom's
+// sentinel handling: only fromVersion == -1 is rewritten to 1.
 func eventRangeBetween(aggregateID string, fromVersion, toVersion int) bigtable.RowRange {
-	if fromVersion < 1 {
+	if fromVersion == -1 {
 		fromVersion = 1
 	}
 	if toVersion == -1 {
