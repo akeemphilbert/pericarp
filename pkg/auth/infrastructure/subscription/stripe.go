@@ -65,15 +65,28 @@ func WithStripeNow(now func() time.Time) StripeOption {
 	}
 }
 
+// WithStripeIncludeBillingIDs opts into stamping Stripe's customer_id and
+// subscription_id into the SubscriptionClaim.Metadata. They are omitted by
+// default so billing identifiers don't end up in JWTs and downstream
+// service logs by accident; turn this on only for consumers that
+// explicitly need to correlate JWTs with Stripe records (e.g., for
+// in-product split-brain debugging by an authenticated operator).
+func WithStripeIncludeBillingIDs(include bool) StripeOption {
+	return func(s *Stripe) {
+		s.includeBillingIDs = include
+	}
+}
+
 // Stripe resolves SubscriptionClaim values from the Stripe API by searching
 // customers on a configurable metadata field. It implements
 // application.SubscriptionService.
 type Stripe struct {
-	apiKey           string
-	baseURL          string
-	client           *http.Client
-	agentMetadataKey string
-	now              func() time.Time
+	apiKey            string
+	baseURL           string
+	client            *http.Client
+	agentMetadataKey  string
+	now               func() time.Time
+	includeBillingIDs bool
 }
 
 // NewStripe returns a Stripe adapter authenticated with apiKey (a Stripe
@@ -255,13 +268,13 @@ func (s *Stripe) toClaim(search stripeCustomerSearch) *auth.SubscriptionClaim {
 		}
 		claim.Metadata["cancel_at_period_end"] = true
 	}
-	if best.ID != "" {
+	if best.ID != "" && s.includeBillingIDs {
 		if claim.Metadata == nil {
 			claim.Metadata = map[string]any{}
 		}
 		claim.Metadata["subscription_id"] = best.ID
 	}
-	if bestCust != "" {
+	if bestCust != "" && s.includeBillingIDs {
 		if claim.Metadata == nil {
 			claim.Metadata = map[string]any{}
 		}

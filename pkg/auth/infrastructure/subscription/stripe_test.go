@@ -102,7 +102,10 @@ func TestStripe_ActiveSubscription(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	s := subscription.NewStripe("sk_test",
+		subscription.WithStripeBaseURL(srv.URL),
+		subscription.WithStripeIncludeBillingIDs(true),
+	)
 	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
 	if err != nil {
 		t.Fatalf("GetSubscription error: %v", err)
@@ -620,7 +623,10 @@ func TestStripe_MultipleCustomers_PicksBestAcrossAll(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	s := subscription.NewStripe("sk_test",
+		subscription.WithStripeBaseURL(srv.URL),
+		subscription.WithStripeIncludeBillingIDs(true),
+	)
 	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
 	if err != nil {
 		t.Fatalf("GetSubscription error: %v", err)
@@ -633,6 +639,40 @@ func TestStripe_MultipleCustomers_PicksBestAcrossAll(t *testing.T) {
 	}
 	if got := claim.Metadata["customer_match_count"]; got != 2 {
 		t.Errorf("Metadata[customer_match_count] = %v, want 2 (split-brain marker)", got)
+	}
+}
+
+func TestStripe_BillingIDsOmittedByDefault(t *testing.T) {
+	// customer_id and subscription_id are sensitive billing identifiers.
+	// They land in JWTs and downstream service logs if embedded, so the
+	// adapter omits them unless the caller explicitly opts in via
+	// WithStripeIncludeBillingIDs. customer_match_count is unaffected
+	// because it's a count, not an identifier.
+	t.Parallel()
+
+	periodEnd := time.Now().Add(30 * 24 * time.Hour).Unix()
+	body := `{"data":[
+		{"id":"cus_1","subscriptions":{"data":[` + stripeSub("sub_old", "canceled", 0, "old_plan", false) + `]}},
+		{"id":"cus_2","subscriptions":{"data":[` + stripeSub("sub_new", "active", periodEnd, "new_plan", false) + `]}}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	s := subscription.NewStripe("sk_test", subscription.WithStripeBaseURL(srv.URL))
+	claim, err := s.GetSubscription(context.Background(), "agent-1", "")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if _, ok := claim.Metadata["customer_id"]; ok {
+		t.Errorf("Metadata[customer_id] should be absent by default, got %v", claim.Metadata["customer_id"])
+	}
+	if _, ok := claim.Metadata["subscription_id"]; ok {
+		t.Errorf("Metadata[subscription_id] should be absent by default, got %v", claim.Metadata["subscription_id"])
+	}
+	if got := claim.Metadata["customer_match_count"]; got != 2 {
+		t.Errorf("Metadata[customer_match_count] = %v, want 2 (still surfaces split-brain without leaking IDs)", got)
 	}
 }
 
