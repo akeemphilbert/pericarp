@@ -117,6 +117,48 @@ func TestPasswordCredentialRepository_UpdateOverwrites(t *testing.T) {
 	}
 }
 
+func TestPasswordCredentialRepository_SaltRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	db := newTestDB(t)
+	repo := gorminfra.NewPasswordCredentialRepository(db)
+	ctx := context.Background()
+
+	pc, err := new(entities.PasswordCredential).WithSalt("pc-salt", "cred-salt", "bcrypt", "$2a$10$legacy", "abcde")
+	if err != nil {
+		t.Fatalf("WithSalt: %v", err)
+	}
+	if err := repo.Save(ctx, pc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	found, err := repo.FindByCredentialID(ctx, "cred-salt")
+	if err != nil {
+		t.Fatalf("FindByCredentialID: %v", err)
+	}
+	if found == nil {
+		t.Fatal("expected to find credential, got nil")
+	}
+	if found.Salt() != "abcde" {
+		t.Errorf("Salt() = %q, want abcde", found.Salt())
+	}
+
+	// Rotation persists with empty salt — Update() clears it.
+	if err := pc.Update("bcrypt", "$2a$12$rotated"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := repo.Save(ctx, pc); err != nil {
+		t.Fatalf("Save (rotated): %v", err)
+	}
+	rotated, err := repo.FindByCredentialID(ctx, "cred-salt")
+	if err != nil {
+		t.Fatalf("FindByCredentialID (rotated): %v", err)
+	}
+	if rotated.Salt() != "" {
+		t.Errorf("Salt() after rotation = %q, want empty", rotated.Salt())
+	}
+}
+
 func TestPasswordCredentialRepository_Delete(t *testing.T) {
 	t.Parallel()
 

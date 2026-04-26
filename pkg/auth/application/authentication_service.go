@@ -136,8 +136,10 @@ type AuthenticationService interface {
 	// ImportPasswordCredential imports an already-hashed legacy bcrypt blob
 	// against a caller-supplied agentID/accountID. Idempotent on
 	// (provider="password", lower(email)). Used for bulk migration where
-	// existing foreign keys must remain valid.
-	ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string) error
+	// existing foreign keys must remain valid. Pass ImportWithSalt(salt)
+	// for legacy systems that applied an extra application-layer salt
+	// suffix on top of bcrypt.
+	ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string, opts ...ImportOption) error
 
 	// UpdatePassword rotates the stored password for the given agent.
 	// Verifies oldPlaintext before applying the change.
@@ -670,7 +672,7 @@ func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email
 		return nil, nil, nil, ErrInvalidPassword
 	}
 
-	if err := verifyPassword(passwordCredential.Algorithm(), passwordCredential.Hash(), plaintext); err != nil {
+	if err := verifyPassword(passwordCredential.Algorithm(), passwordCredential.Hash(), plaintext, passwordCredential.Salt()); err != nil {
 		// Map any verify failure (mismatch OR corrupt hash / unsupported
 		// algorithm) to ErrInvalidPassword so timing and error-type do not
 		// distinguish the two cases. The internal log retains detail.
@@ -721,16 +723,25 @@ func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email
 // compare means the shield is degraded; we log at Error level so it
 // surfaces in operational telemetry instead of being silent.
 func (s *DefaultAuthenticationService) runTimingShield(ctx context.Context, plaintext string) {
-	if err := verifyPassword(entities.PasswordAlgorithmBcrypt, s.dummyBcryptHash(ctx), plaintext); err != nil && !errors.Is(err, ErrInvalidPassword) {
+	if err := verifyPassword(entities.PasswordAlgorithmBcrypt, s.dummyBcryptHash(ctx), plaintext, ""); err != nil && !errors.Is(err, ErrInvalidPassword) {
 		s.logger.Error(ctx, "auth: timing-shield bcrypt compare failed (shield degraded)", "error", err)
 	}
 }
 
 // ImportPasswordCredential imports a pre-hashed bcrypt blob against existing
 // agent/account IDs. Idempotent on (provider="password", lower(email)).
-func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string) error {
+// Pass ImportWithSalt(salt) for legacy hashes that bcrypted plaintext+salt
+// (an extra application-layer suffix on top of bcrypt's own per-hash salt).
+func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string, opts ...ImportOption) error {
 	if s.passwordCredentials == nil {
 		return ErrPasswordSupportNotConfigured
+	}
+	cfg := importConfig{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&cfg)
 	}
 	normalizedEmail := normalizeEmail(email)
 	if normalizedEmail == "" {
@@ -781,7 +792,7 @@ func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Cont
 	}
 
 	passwordCredentialID := ksuid.New().String()
-	passwordCredential, err := new(entities.PasswordCredential).With(passwordCredentialID, credentialID, entities.PasswordAlgorithmBcrypt, bcryptHash)
+	passwordCredential, err := new(entities.PasswordCredential).WithSalt(passwordCredentialID, credentialID, entities.PasswordAlgorithmBcrypt, bcryptHash, cfg.saltSuffix)
 	if err != nil {
 		return fmt.Errorf("authentication: create password credential: %w", err)
 	}
@@ -851,7 +862,7 @@ func (s *DefaultAuthenticationService) UpdatePassword(ctx context.Context, agent
 		return ErrPasswordCredentialMissing
 	}
 
-	if err := verifyPassword(pc.Algorithm(), pc.Hash(), oldPlaintext); err != nil {
+	if err := verifyPassword(pc.Algorithm(), pc.Hash(), oldPlaintext, pc.Salt()); err != nil {
 		if errors.Is(err, ErrInvalidPassword) {
 			return ErrInvalidPassword
 		}

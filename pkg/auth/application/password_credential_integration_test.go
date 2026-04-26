@@ -199,6 +199,146 @@ func TestImportPasswordCredential(t *testing.T) {
 	}
 }
 
+func TestImportPasswordCredential_WithSalt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newSQLiteAuthService(t)
+
+	owner, _, ownerAccount, err := svc.RegisterPassword(ctx, "owner@example.com", "Owner", "ownerpass")
+	if err != nil {
+		t.Fatalf("seed RegisterPassword: %v", err)
+	}
+
+	// Mimic the legacy IAM scheme: bcrypt(plaintext + salt).
+	const plain = "hunter2"
+	const salt = "abcde"
+	legacyHash, err := bcrypt.GenerateFromPassword([]byte(plain+salt), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+
+	if err := svc.ImportPasswordCredential(ctx,
+		"legacy@example.com", "Legacy", string(legacyHash),
+		owner.GetID(), ownerAccount.GetID(),
+		application.ImportWithSalt(salt),
+	); err != nil {
+		t.Fatalf("ImportPasswordCredential: %v", err)
+	}
+
+	// Right plaintext succeeds — the service appends the stored salt
+	// before bcrypt comparison.
+	if _, _, _, err := svc.VerifyPassword(ctx, "legacy@example.com", plain); err != nil {
+		t.Errorf("VerifyPassword (correct plaintext) = %v, want nil", err)
+	}
+
+	// Wrong plaintext fails with ErrInvalidPassword.
+	if _, _, _, err := svc.VerifyPassword(ctx, "legacy@example.com", "wrong"); !errors.Is(err, application.ErrInvalidPassword) {
+		t.Errorf("VerifyPassword (wrong plaintext) = %v, want ErrInvalidPassword", err)
+	}
+}
+
+func TestImportPasswordCredential_WithoutSaltRejectsSaltedHash(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newSQLiteAuthService(t)
+
+	owner, _, ownerAccount, err := svc.RegisterPassword(ctx, "owner@example.com", "Owner", "ownerpass")
+	if err != nil {
+		t.Fatalf("seed RegisterPassword: %v", err)
+	}
+
+	// Hash bcrypt(plaintext + salt) but import WITHOUT ImportWithSalt.
+	// Verification should fail because the service compares against the
+	// raw plaintext only — proving the salt is what makes verify succeed
+	// in the salted-import path.
+	const plain = "hunter2"
+	const salt = "abcde"
+	legacyHash, err := bcrypt.GenerateFromPassword([]byte(plain+salt), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+
+	if err := svc.ImportPasswordCredential(ctx,
+		"legacy@example.com", "Legacy", string(legacyHash),
+		owner.GetID(), ownerAccount.GetID(),
+		// no ImportWithSalt
+	); err != nil {
+		t.Fatalf("ImportPasswordCredential: %v", err)
+	}
+	if _, _, _, err := svc.VerifyPassword(ctx, "legacy@example.com", plain); !errors.Is(err, application.ErrInvalidPassword) {
+		t.Errorf("VerifyPassword without imported salt = %v, want ErrInvalidPassword", err)
+	}
+}
+
+func TestUpdatePassword_ClearsImportedSalt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc, db := newSQLiteDeps(t)
+
+	// Build a clean agent that has *only* the imported credential —
+	// otherwise UpdatePassword (which picks the agent's first active
+	// password credential) could rotate a different row. Insert via the
+	// agent repository to skip RegisterPassword's own credential
+	// creation.
+	agent, err := new(entities.Agent).With("agent-legacy", "Legacy", "")
+	if err != nil {
+		t.Fatalf("Agent.With: %v", err)
+	}
+	if err := gorminfra.NewAgentRepository(db).Save(ctx, agent); err != nil {
+		t.Fatalf("save agent: %v", err)
+	}
+
+	const email = "legacy@example.com"
+	const plain = "hunter2"
+	const salt = "abcde"
+	legacyHash, err := bcrypt.GenerateFromPassword([]byte(plain+salt), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt: %v", err)
+	}
+	if err := svc.ImportPasswordCredential(ctx,
+		email, "Legacy", string(legacyHash),
+		agent.GetID(), "",
+		application.ImportWithSalt(salt),
+	); err != nil {
+		t.Fatalf("ImportPasswordCredential: %v", err)
+	}
+
+	// Sanity: salted plaintext verifies before rotation.
+	if _, _, _, err := svc.VerifyPassword(ctx, email, plain); err != nil {
+		t.Fatalf("pre-rotation VerifyPassword: %v", err)
+	}
+
+	// Rotate.
+	if err := svc.UpdatePassword(ctx, agent.GetID(), plain, "newpass1"); err != nil {
+		t.Fatalf("UpdatePassword: %v", err)
+	}
+
+	// Salt cleared on the projection row.
+	credRepo := gorminfra.NewCredentialRepository(db)
+	pcRepo := gorminfra.NewPasswordCredentialRepository(db)
+	cred, err := credRepo.FindByProvider(ctx, entities.ProviderPassword, email)
+	if err != nil || cred == nil {
+		t.Fatalf("locate credential after rotation: %v %+v", err, cred)
+	}
+	rotated, err := pcRepo.FindByCredentialID(ctx, cred.GetID())
+	if err != nil || rotated == nil {
+		t.Fatalf("locate password credential after rotation: %v %+v", err, rotated)
+	}
+	if rotated.Salt() != "" {
+		t.Errorf("Salt() after rotation = %q, want empty (UpdatePassword must clear legacy salt)", rotated.Salt())
+	}
+
+	// New plaintext verifies without any salt suffix.
+	if _, _, _, err := svc.VerifyPassword(ctx, email, "newpass1"); err != nil {
+		t.Errorf("new password failed to verify: %v", err)
+	}
+	// Original salted plaintext no longer matches — both hash and salt
+	// changed.
+	if _, _, _, err := svc.VerifyPassword(ctx, email, plain); !errors.Is(err, application.ErrInvalidPassword) {
+		t.Errorf("legacy plaintext still verifies after rotation: %v", err)
+	}
+}
+
 func TestImportPasswordCredential_UnknownAgent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

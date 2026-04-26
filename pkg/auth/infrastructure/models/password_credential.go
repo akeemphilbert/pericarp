@@ -17,10 +17,15 @@ import (
 // RotatedAt, not UpdatedAt, so GORM's auto-update timestamp magic does not
 // touch it on Saves that only change LastVerifiedAt (i.e. successful logins).
 type PasswordCredentialModel struct {
-	ID             string `gorm:"primaryKey"`
-	CredentialID   string `gorm:"not null;uniqueIndex:idx_password_credential_id"`
-	Algorithm      string `gorm:"not null"`
-	Hash           string `gorm:"not null"`
+	ID           string `gorm:"primaryKey"`
+	CredentialID string `gorm:"not null;uniqueIndex:idx_password_credential_id"`
+	Algorithm    string `gorm:"not null"`
+	Hash         string `gorm:"not null"`
+	// Salt is a plaintext suffix appended to the user-supplied plaintext
+	// before bcrypt comparison. Empty for credentials registered through
+	// pericarp; non-empty only for legacy hashes imported via
+	// ImportPasswordCredential with ImportWithSalt.
+	Salt           string `gorm:"size:64"`
 	CreatedAt      time.Time
 	RotatedAt      time.Time `gorm:"column:updated_at"`
 	LastVerifiedAt time.Time
@@ -30,11 +35,18 @@ func (PasswordCredentialModel) TableName() string {
 	return "password_credentials"
 }
 
-// String redacts the Hash field so the model is safe to log via %v / %+v.
+// String redacts the Hash and Salt fields so the model is safe to log
+// via %v / %+v. Salt is redacted because, paired with the hash, it is
+// exactly what an offline attacker needs to brute-force the plaintext —
+// keep the two out of the same log line.
 func (m PasswordCredentialModel) String() string {
+	saltState := "[EMPTY]"
+	if m.Salt != "" {
+		saltState = "[REDACTED]"
+	}
 	return fmt.Sprintf(
-		"PasswordCredentialModel{ID:%s CredentialID:%s Algorithm:%s Hash:[REDACTED] CreatedAt:%s RotatedAt:%s LastVerifiedAt:%s}",
-		m.ID, m.CredentialID, m.Algorithm, m.CreatedAt, m.RotatedAt, m.LastVerifiedAt,
+		"PasswordCredentialModel{ID:%s CredentialID:%s Algorithm:%s Hash:[REDACTED] Salt:%s CreatedAt:%s RotatedAt:%s LastVerifiedAt:%s}",
+		m.ID, m.CredentialID, m.Algorithm, saltState, m.CreatedAt, m.RotatedAt, m.LastVerifiedAt,
 	)
 }
 
@@ -44,7 +56,7 @@ func (m PasswordCredentialModel) GoString() string { return m.String() }
 // ToEntity converts the GORM model to a PasswordCredential domain entity.
 func (m *PasswordCredentialModel) ToEntity() (*entities.PasswordCredential, error) {
 	e := &entities.PasswordCredential{}
-	if err := e.Restore(m.ID, m.CredentialID, m.Algorithm, m.Hash, m.CreatedAt, m.RotatedAt, m.LastVerifiedAt); err != nil {
+	if err := e.Restore(m.ID, m.CredentialID, m.Algorithm, m.Hash, m.Salt, m.CreatedAt, m.RotatedAt, m.LastVerifiedAt); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -58,6 +70,7 @@ func PasswordCredentialModelFromEntity(e *entities.PasswordCredential) *Password
 		CredentialID:   e.CredentialID(),
 		Algorithm:      e.Algorithm(),
 		Hash:           e.Hash(),
+		Salt:           e.Salt(),
 		CreatedAt:      e.CreatedAt(),
 		RotatedAt:      e.UpdatedAt(),
 		LastVerifiedAt: e.LastVerifiedAt(),

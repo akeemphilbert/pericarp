@@ -2,6 +2,8 @@ package entities_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +79,116 @@ func TestPasswordCredential_With(t *testing.T) {
 				t.Errorf("Algorithm = %q, want %q", payload.Algorithm, tt.algorithm)
 			}
 		})
+	}
+}
+
+func TestPasswordCredential_WithSalt(t *testing.T) {
+	t.Parallel()
+
+	pc, err := new(entities.PasswordCredential).WithSalt("pc-1", "cred-1", "bcrypt", "$2a$10$abc", "abcde")
+	if err != nil {
+		t.Fatalf("WithSalt() error: %v", err)
+	}
+	if pc.Salt() != "abcde" {
+		t.Errorf("Salt() = %q, want %q", pc.Salt(), "abcde")
+	}
+	if pc.Hash() != "$2a$10$abc" {
+		t.Errorf("Hash() = %q, want $2a$10$abc", pc.Hash())
+	}
+
+	// WithSalt is the canonical constructor (With delegates to it), so
+	// the event-emission contract has to live here, not just on
+	// TestPasswordCredential_With.
+	events := pc.GetUncommittedEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 uncommitted event, got %d", len(events))
+	}
+	if events[0].EventType != entities.EventTypePasswordCredentialCreated {
+		t.Errorf("event type = %q, want %q", events[0].EventType, entities.EventTypePasswordCredentialCreated)
+	}
+
+	pcNoSalt, err := new(entities.PasswordCredential).WithSalt("pc-2", "cred-2", "bcrypt", "$2a$10$xyz", "")
+	if err != nil {
+		t.Fatalf("WithSalt(empty) error: %v", err)
+	}
+	if pcNoSalt.Salt() != "" {
+		t.Errorf("Salt() = %q, want empty", pcNoSalt.Salt())
+	}
+}
+
+func TestPasswordCredential_WithSalt_Validation(t *testing.T) {
+	t.Parallel()
+
+	// Salt longer than the GORM column width must be rejected at
+	// construction so a domain-accepted aggregate can never fail to
+	// persist mid-flow (the partial-failure mode we explicitly avoid).
+	longSalt := strings.Repeat("a", entities.MaxSaltLength+1)
+	if _, err := new(entities.PasswordCredential).WithSalt("pc-1", "cred-1", "bcrypt", "$2a$10$abc", longSalt); err == nil {
+		t.Error("expected error for salt > MaxSaltLength")
+	}
+
+	// Salt + non-bcrypt algorithm must be rejected: verifyPassword only
+	// consumes salt for bcrypt, so any other algorithm with a non-empty
+	// salt would produce a record that always fails to verify.
+	if _, err := new(entities.PasswordCredential).WithSalt("pc-1", "cred-1", "argon2id", "$argon2id$v=19$m=65536$abc", "abcde"); err == nil {
+		t.Error("expected error for non-bcrypt algorithm with non-empty salt")
+	}
+
+	// Same algorithm with EMPTY salt must still be allowed — the
+	// suffix-rejection rule is keyed on the salt being non-empty, not on
+	// the algorithm field alone.
+	if _, err := new(entities.PasswordCredential).WithSalt("pc-1", "cred-1", "argon2id", "$argon2id$v=19$m=65536$abc", ""); err != nil {
+		t.Errorf("non-bcrypt algorithm with empty salt should be allowed, got %v", err)
+	}
+}
+
+func TestPasswordCredential_UpdateClearsSalt(t *testing.T) {
+	t.Parallel()
+
+	pc, err := new(entities.PasswordCredential).WithSalt("pc-1", "cred-1", "bcrypt", "$2a$10$legacy", "abcde")
+	if err != nil {
+		t.Fatalf("WithSalt() error: %v", err)
+	}
+	if pc.Salt() == "" {
+		t.Fatal("expected non-empty salt before Update")
+	}
+
+	if err := pc.Update("bcrypt", "$2a$12$rotated"); err != nil {
+		t.Fatalf("Update() error: %v", err)
+	}
+	if pc.Salt() != "" {
+		t.Errorf("Salt() after Update() = %q, want empty (rotation must clear legacy salt)", pc.Salt())
+	}
+}
+
+func TestPasswordCredential_EventsCarryNoSalt(t *testing.T) {
+	t.Parallel()
+
+	pc, err := new(entities.PasswordCredential).WithSalt("pc-1", "cred-1", "bcrypt", "$2a$10$h", "secret-salt")
+	if err != nil {
+		t.Fatalf("WithSalt() error: %v", err)
+	}
+	if err := pc.Update("bcrypt", "$2a$12$rotated"); err != nil {
+		t.Fatalf("Update() error: %v", err)
+	}
+
+	// Salt must not appear in any event payload — same convention as the
+	// hash. A read-model rebuild from events alone is intentionally
+	// incomplete for salted imports; the projection is the canonical
+	// hydration source.
+	for _, evt := range pc.GetUncommittedEvents() {
+		switch p := evt.Payload.(type) {
+		case entities.PasswordCredentialCreated:
+			if got := fmt.Sprintf("%+v", p); strings.Contains(got, "secret-salt") {
+				t.Errorf("PasswordCredentialCreated leaked salt: %s", got)
+			}
+		case entities.PasswordUpdated:
+			if got := fmt.Sprintf("%+v", p); strings.Contains(got, "secret-salt") {
+				t.Errorf("PasswordUpdated leaked salt: %s", got)
+			}
+		default:
+			t.Fatalf("unexpected event type: %T", evt.Payload)
+		}
 	}
 }
 
@@ -187,7 +299,7 @@ func TestPasswordCredential_Restore(t *testing.T) {
 
 	pc := &entities.PasswordCredential{}
 	now := time.Now()
-	if err := pc.Restore("pc-1", "cred-1", "bcrypt", "$2a$10$abc", now, now, time.Time{}); err != nil {
+	if err := pc.Restore("pc-1", "cred-1", "bcrypt", "$2a$10$abc", "", now, now, time.Time{}); err != nil {
 		t.Fatalf("Restore() error: %v", err)
 	}
 	if pc.GetID() != "pc-1" {
@@ -196,10 +308,10 @@ func TestPasswordCredential_Restore(t *testing.T) {
 	if got := len(pc.GetUncommittedEvents()); got != 0 {
 		t.Errorf("expected 0 uncommitted events after Restore, got %d", got)
 	}
-	if err := (&entities.PasswordCredential{}).Restore("", "cred-1", "bcrypt", "$2a$10$abc", now, now, time.Time{}); err == nil {
+	if err := (&entities.PasswordCredential{}).Restore("", "cred-1", "bcrypt", "$2a$10$abc", "", now, now, time.Time{}); err == nil {
 		t.Error("expected error for empty id")
 	}
-	if err := (&entities.PasswordCredential{}).Restore("pc-1", "", "bcrypt", "$2a$10$abc", now, now, time.Time{}); err == nil {
+	if err := (&entities.PasswordCredential{}).Restore("pc-1", "", "bcrypt", "$2a$10$abc", "", now, now, time.Time{}); err == nil {
 		t.Error("expected error for empty credential id")
 	}
 }
@@ -219,7 +331,7 @@ func TestPasswordCredential_ApplyEvent(t *testing.T) {
 	pc.ClearUncommittedEvents()
 
 	restored := &entities.PasswordCredential{}
-	if err := restored.Restore("pc-1", "placeholder", "", "", time.Time{}, time.Time{}, time.Time{}); err != nil {
+	if err := restored.Restore("pc-1", "placeholder", "", "", "", time.Time{}, time.Time{}, time.Time{}); err != nil {
 		t.Fatalf("Restore() error: %v", err)
 	}
 	for _, evt := range events {
