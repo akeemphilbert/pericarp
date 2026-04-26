@@ -9,7 +9,8 @@ type ImportOption func(*importConfig)
 
 // importConfig holds the parsed options for a single
 // ImportPasswordCredential call. Kept unexported so callers can only
-// build it through the documented With* constructors.
+// build it through the documented ImportOption constructors, such as
+// ImportWithSalt.
 type importConfig struct {
 	saltSuffix string
 }

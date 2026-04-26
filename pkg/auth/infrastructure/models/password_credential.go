@@ -25,7 +25,7 @@ type PasswordCredentialModel struct {
 	// before bcrypt comparison. Empty for credentials registered through
 	// pericarp; non-empty only for legacy hashes imported via
 	// ImportPasswordCredential with ImportWithSalt.
-	Salt           string `gorm:"size:64"`
+	Salt           string `gorm:"not null;default:'';size:64"`
 	CreatedAt      time.Time
 	RotatedAt      time.Time `gorm:"column:updated_at"`
 	LastVerifiedAt time.Time
