@@ -38,3 +38,15 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 - Field is `omitempty` in JSON so existing events without a transaction ID remain backward-compatible
 - Added tests: same-commit events share a transaction ID, different commits get different IDs, dispatched events carry the transaction ID
 - **Why:** Enables correlating events across multiple aggregates that were committed together, useful for auditing, debugging, and cross-aggregate consistency tracking
+
+---
+
+### 2026-04-25: Abstract resource projections
+
+- Added `pkg/projection/` package with type hierarchy registry and polymorphic repository
+- `Registry` tracks abstract/concrete resource types with single-level parent-child relationships
+- `PolymorphicRepository[T]` provides CRUD + paginated list on a shared projection table with a `resource_type` discriminator column
+- Concrete subtypes (e.g., Loan, DepositAccount) share the abstract parent's table; type-specific fields stored in a JSONB `data` column
+- `FindAllByParentType()` resolves all concrete subtypes via the registry, enabling unified lists across a class hierarchy
+- Reuses existing `JSONB` type from `pkg/eventsourcing/infrastructure` and follows the cursor-based pagination pattern from `pkg/auth`
+- **Why:** Enables abstract resource types whose concrete subclasses share a single projection table, so front-end lists can show all subtypes together while the discriminator preserves type identity
