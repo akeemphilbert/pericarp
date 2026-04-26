@@ -20,8 +20,8 @@ const (
 // WithGORMTable; for fully custom schemas use WithGORMResolver.
 type SubscriptionRecord struct {
 	ID        uint       `gorm:"primaryKey"`
-	AgentID   string     `gorm:"size:64;index:idx_sub_agent_account,priority:1;not null"`
-	AccountID string     `gorm:"size:64;index:idx_sub_agent_account,priority:2"`
+	AgentID   string     `gorm:"size:512;index:idx_sub_agent_account,priority:1;not null"`
+	AccountID string     `gorm:"size:512;index:idx_sub_agent_account,priority:2"`
 	Status    string     `gorm:"size:32;not null"`
 	Plan      string     `gorm:"size:128"`
 	Provider  string     `gorm:"size:64"`
