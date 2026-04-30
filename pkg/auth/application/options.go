@@ -46,6 +46,20 @@ func WithEventStore(store esDomain.EventStore) AuthServiceOption {
 	}
 }
 
+// WithEventDispatcher sets an in-process EventDispatcher that receives every
+// committed domain event after the UnitOfWork persists it. Consumers can
+// Subscribe[T] to react to events such as agent.created (e.g., to auto-assign
+// a default role). Dispatch is best-effort: handler errors are non-fatal and
+// do not roll back the auth operation, since the event is already durable.
+// Dispatch only fires when an EventStore is also configured via WithEventStore.
+func WithEventDispatcher(dispatcher *esDomain.EventDispatcher) AuthServiceOption {
+	return func(s *DefaultAuthenticationService) {
+		if dispatcher != nil {
+			s.dispatcher = dispatcher
+		}
+	}
+}
+
 // WithJWTService sets a JWTService for issuing identity tokens.
 // When configured, IssueIdentityToken will produce a signed JWT;
 // otherwise it returns an empty string (opaque-session-only mode).
