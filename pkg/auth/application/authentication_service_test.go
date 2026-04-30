@@ -3,6 +3,8 @@ package application_test
 import (
 	"context"
 	"errors"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +12,8 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
+	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+	esInfra "github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 )
 
 // --- Mock implementations ---
@@ -1242,5 +1246,166 @@ func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 	// With nil authorization checker, permissions should be nil/empty
 	if len(info.Permissions) != 0 {
 		t.Errorf("expected 0 permissions with nil authorization checker, got %d", len(info.Permissions))
+	}
+}
+
+// newServiceWithEventing builds the same mock-backed service as newTestService,
+// but additionally wires a real in-memory EventStore and (optionally) an
+// EventDispatcher so callers can assert dispatch behavior.
+func newServiceWithEventing(t *testing.T, dispatcher *esDomain.EventDispatcher) (*application.DefaultAuthenticationService, *testDeps, *esInfra.MemoryStore) {
+	t.Helper()
+	deps := &testDeps{
+		providers: application.OAuthProviderRegistry{
+			"google": &mockOAuthProvider{name: "google"},
+		},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+		tokens:      newMockTokenStore(),
+		authz:       &mockAuthorizationChecker{},
+	}
+	store := esInfra.NewMemoryStore()
+
+	opts := []application.AuthServiceOption{
+		application.WithTokenStore(deps.tokens),
+		application.WithAuthorizationChecker(deps.authz),
+		application.WithEventStore(store),
+	}
+	if dispatcher != nil {
+		opts = append(opts, application.WithEventDispatcher(dispatcher))
+	}
+
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers,
+		deps.agents,
+		deps.credentials,
+		deps.sessions,
+		deps.accounts,
+		opts...,
+	)
+	return svc, deps, store
+}
+
+// TestFindOrCreateAgent_DispatchesEventsWhenConfigured verifies that when an
+// EventDispatcher is wired via WithEventDispatcher, FindOrCreateAgent fans the
+// committed envelopes out to subscribed handlers.
+func TestFindOrCreateAgent_DispatchesEventsWhenConfigured(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	dispatcher := esDomain.NewEventDispatcher()
+
+	var mu sync.Mutex
+	var received []string
+	if err := dispatcher.SubscribeWildcard(func(_ context.Context, env esDomain.EventEnvelope[any]) error {
+		mu.Lock()
+		defer mu.Unlock()
+		received = append(received, env.EventType)
+		return nil
+	}); err != nil {
+		t.Fatalf("SubscribeWildcard() error: %v", err)
+	}
+
+	svc, _, _ := newServiceWithEventing(t, dispatcher)
+
+	if _, _, _, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
+		ProviderUserID: "google-user-dispatch",
+		Email:          "dispatch@example.com",
+		DisplayName:    "Dispatch User",
+		Provider:       "google",
+	}); err != nil {
+		t.Fatalf("FindOrCreateAgent() error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	wantTypes := map[string]bool{
+		entities.EventTypeAgentCreated:       false,
+		entities.EventTypeAccountCreated:     false,
+		entities.EventTypeAccountMemberAdded: false,
+		entities.EventTypeCredentialCreated:  false,
+	}
+	for _, et := range received {
+		if _, ok := wantTypes[et]; ok {
+			wantTypes[et] = true
+		}
+	}
+	for et, seen := range wantTypes {
+		if !seen {
+			sorted := append([]string(nil), received...)
+			sort.Strings(sorted)
+			t.Errorf("dispatcher did not receive event %q; got %v", et, sorted)
+		}
+	}
+}
+
+// TestFindOrCreateAgent_NoDispatcherIsDefault verifies that omitting
+// WithEventDispatcher is a true no-op: FindOrCreateAgent still succeeds, and
+// — critically — events still land in the EventStore. The store readback is
+// what makes this test meaningful (otherwise it would only assert "no panic"),
+// since the visible "events are durable independent of dispatcher" contract
+// is precisely what callers without subscribers depend on.
+func TestFindOrCreateAgent_NoDispatcherIsDefault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, _, store := newServiceWithEventing(t, nil)
+
+	agent, credential, account, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
+		ProviderUserID: "google-user-nodisp",
+		Email:          "nodisp@example.com",
+		DisplayName:    "No Dispatch",
+		Provider:       "google",
+	})
+	if err != nil {
+		t.Fatalf("FindOrCreateAgent() error: %v", err)
+	}
+	if agent == nil || credential == nil || account == nil {
+		t.Fatal("expected non-nil agent, credential, and account")
+	}
+
+	agentEvents, err := store.GetEvents(ctx, agent.GetID())
+	if err != nil {
+		t.Fatalf("store.GetEvents(agent) error: %v", err)
+	}
+	if len(agentEvents) == 0 {
+		t.Error("expected agent events to be durably appended even without a dispatcher")
+	}
+}
+
+// TestFindOrCreateAgent_DispatchHandlerErrorIsNonFatal verifies that handler
+// failures are swallowed by SimpleUnitOfWork.Commit (events are already
+// durable post-Append) and do not cause FindOrCreateAgent to fail. This
+// matches the eventually-consistent dispatch contract documented on
+// WithEventDispatcher.
+func TestFindOrCreateAgent_DispatchHandlerErrorIsNonFatal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	dispatcher := esDomain.NewEventDispatcher()
+	if err := dispatcher.SubscribeWildcard(func(_ context.Context, _ esDomain.EventEnvelope[any]) error {
+		return errors.New("handler intentionally failing")
+	}); err != nil {
+		t.Fatalf("SubscribeWildcard() error: %v", err)
+	}
+
+	svc, deps, _ := newServiceWithEventing(t, dispatcher)
+
+	agent, _, _, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
+		ProviderUserID: "google-user-handler-err",
+		Email:          "handler-err@example.com",
+		DisplayName:    "Handler Err",
+		Provider:       "google",
+	})
+	if err != nil {
+		t.Fatalf("FindOrCreateAgent() error despite non-fatal handler failure: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("expected non-nil agent even when handler errors")
+	}
+	if len(deps.agents.agents) != 1 {
+		t.Errorf("expected 1 saved agent, got %d", len(deps.agents.agents))
 	}
 }

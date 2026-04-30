@@ -178,6 +178,7 @@ type DefaultAuthenticationService struct {
 	accounts            repositories.AccountRepository
 	passwordCredentials repositories.PasswordCredentialRepository
 	eventStore          esDomain.EventStore
+	dispatcher          *esDomain.EventDispatcher
 	tokens              TokenStore
 	authorization       AuthorizationChecker
 	logger              Logger
@@ -359,7 +360,7 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 
 	// Commit events atomically to event store via UnitOfWork
 	if s.eventStore != nil {
-		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
 		if err = uow.Track(agent, account, credential); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to track entities: %w", err)
 		}
@@ -602,7 +603,7 @@ func (s *DefaultAuthenticationService) RegisterPassword(ctx context.Context, ema
 	}
 
 	if s.eventStore != nil {
-		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
 		if err := uow.Track(agent, account, credential, passwordCredential); err != nil {
 			return nil, nil, nil, fmt.Errorf("authentication: track entities: %w", err)
 		}
@@ -798,7 +799,7 @@ func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Cont
 	}
 
 	if s.eventStore != nil {
-		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
 		if err := uow.Track(credential, passwordCredential); err != nil {
 			return fmt.Errorf("authentication: track entities: %w", err)
 		}
@@ -894,7 +895,7 @@ func (s *DefaultAuthenticationService) UpdatePassword(ctx context.Context, agent
 	}
 
 	if s.eventStore != nil {
-		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
 		if err := uow.Track(pc); err != nil {
 			return fmt.Errorf("authentication: track password credential: %w", err)
 		}

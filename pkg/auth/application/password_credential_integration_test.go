@@ -7,7 +7,9 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
@@ -15,6 +17,7 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
 	gorminfra "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/database/gorm"
 	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
+	esdomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 	esinfra "github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 	"github.com/glebarez/sqlite"
 	"golang.org/x/crypto/bcrypt"
@@ -953,5 +956,66 @@ func TestImportPasswordCredential_DuplicateOnSaveIsIdempotent(t *testing.T) {
 		"$2a$04$abcdefghijklmnopqrstuuwOl4ZJN8xpZ/Hf1jZQp7m/0ePI1ZGGy",
 		owner.GetID(), ownerAccount.GetID()); err != nil {
 		t.Fatalf("ImportPasswordCredential after dup-key race must be idempotent (nil), got %v", err)
+	}
+}
+
+// TestRegisterPassword_DispatchesEventsWhenConfigured covers a second wired
+// commit site (RegisterPassword) so a future refactor reverting `s.dispatcher`
+// to `nil` at any of FindOrCreateAgent / RegisterPassword / Import / Update
+// can be caught by tests of qualitatively different aggregates rather than
+// only the OAuth flow. We assert the password-specific event lands at the
+// dispatcher; the generic Agent/Account/Credential events are already covered
+// by TestFindOrCreateAgent_DispatchesEventsWhenConfigured.
+func TestRegisterPassword_DispatchesEventsWhenConfigured(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := gorminfra.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	store, err := esinfra.NewGormEventStore(db)
+	if err != nil {
+		t.Fatalf("NewGormEventStore: %v", err)
+	}
+
+	dispatcher := esdomain.NewEventDispatcher()
+
+	var mu sync.Mutex
+	var received []string
+	if err := dispatcher.SubscribeWildcard(func(_ context.Context, env esdomain.EventEnvelope[any]) error {
+		mu.Lock()
+		defer mu.Unlock()
+		received = append(received, env.EventType)
+		return nil
+	}); err != nil {
+		t.Fatalf("SubscribeWildcard: %v", err)
+	}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		gorminfra.NewAgentRepository(db),
+		gorminfra.NewCredentialRepository(db),
+		gorminfra.NewAuthSessionRepository(db),
+		gorminfra.NewAccountRepository(db),
+		application.WithPasswordCredentialRepository(gorminfra.NewPasswordCredentialRepository(db)),
+		application.WithBcryptCost(bcrypt.MinCost),
+		application.WithEventStore(store),
+		application.WithEventDispatcher(dispatcher),
+	)
+
+	if _, _, _, err := svc.RegisterPassword(ctx, "alice@example.com", "Alice", "hunter2"); err != nil {
+		t.Fatalf("RegisterPassword: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(received, entities.EventTypePasswordCredentialCreated) {
+		t.Errorf("dispatcher did not receive %q; got %v", entities.EventTypePasswordCredentialCreated, received)
 	}
 }
