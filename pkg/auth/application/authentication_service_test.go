@@ -1341,15 +1341,17 @@ func TestFindOrCreateAgent_DispatchesEventsWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestFindOrCreateAgent_NoDispatcherIsDefault verifies that when no
-// EventDispatcher is configured, FindOrCreateAgent succeeds without panicking
-// and the projection writes still land — i.e., omitting WithEventDispatcher
-// is a true no-op for callers who don't need in-process subscribers.
+// TestFindOrCreateAgent_NoDispatcherIsDefault verifies that omitting
+// WithEventDispatcher is a true no-op: FindOrCreateAgent still succeeds, and
+// — critically — events still land in the EventStore. The store readback is
+// what makes this test meaningful (otherwise it would only assert "no panic"),
+// since the visible "events are durable independent of dispatcher" contract
+// is precisely what callers without subscribers depend on.
 func TestFindOrCreateAgent_NoDispatcherIsDefault(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	svc, deps, _ := newServiceWithEventing(t, nil)
+	svc, _, store := newServiceWithEventing(t, nil)
 
 	agent, credential, account, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
 		ProviderUserID: "google-user-nodisp",
@@ -1363,8 +1365,13 @@ func TestFindOrCreateAgent_NoDispatcherIsDefault(t *testing.T) {
 	if agent == nil || credential == nil || account == nil {
 		t.Fatal("expected non-nil agent, credential, and account")
 	}
-	if len(deps.agents.agents) != 1 {
-		t.Errorf("expected 1 saved agent, got %d", len(deps.agents.agents))
+
+	agentEvents, err := store.GetEvents(ctx, agent.GetID())
+	if err != nil {
+		t.Fatalf("store.GetEvents(agent) error: %v", err)
+	}
+	if len(agentEvents) == 0 {
+		t.Error("expected agent events to be durably appended even without a dispatcher")
 	}
 }
 
