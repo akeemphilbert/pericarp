@@ -1495,11 +1495,6 @@ func TestRefreshIdentityToken_RereadsEnricherAndSubscription(t *testing.T) {
 	role = "admin"
 	subSvc.claim = &auth.SubscriptionClaim{Status: auth.SubscriptionStatusActive, Plan: "pro"}
 
-	// Sleep just over 1s so JWT second-precision IssuedAt advances —
-	// the freshness assertion below is the load-bearing guard against
-	// a regression that returns the original cached token.
-	time.Sleep(1100 * time.Millisecond)
-
 	refreshedToken, err := svc.RefreshIdentityToken(ctx, "agent-9", "account-9")
 	if err != nil {
 		t.Fatalf("RefreshIdentityToken: %v", err)
@@ -1511,8 +1506,12 @@ func TestRefreshIdentityToken_RereadsEnricherAndSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateToken (refreshed): %v", err)
 	}
-	if !refreshedClaims.IssuedAt.After(originalClaims.IssuedAt.Time) {
-		t.Errorf("refreshed IssuedAt = %v, want strictly after original %v", refreshedClaims.IssuedAt, originalClaims.IssuedAt)
+	// jti is a fresh ksuid per token (RSAJWTService.IssueToken), so it
+	// always differs between calls regardless of timing — a stronger
+	// "this is not the same token" check than IssuedAt and with no
+	// wall-clock dependency.
+	if refreshedClaims.ID == originalClaims.ID {
+		t.Errorf("refreshed jti = %q (same as original); IssueToken must mint a fresh ksuid", refreshedClaims.ID)
 	}
 	if refreshedClaims.Extras["role"] != "admin" {
 		t.Errorf("refreshed Extras[role] = %v, want admin (enricher must re-run)", refreshedClaims.Extras["role"])
