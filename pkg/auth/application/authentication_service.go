@@ -539,7 +539,7 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 			}
 		}
 	}
-	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription)
+	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription, nil)
 }
 
 // normalizeEmail returns the canonical form of an email used as the

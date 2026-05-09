@@ -904,16 +904,20 @@ func TestDefaultAuthenticationService_RefreshTokens_ProviderFails(t *testing.T) 
 // --- Mock JWTService ---
 
 type mockJWTService struct {
-	issueFunc func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim) (string, error)
+	issueFunc func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim, extras map[string]any) (string, error)
 	// lastSubscription captures the subscription passed to IssueToken so
 	// SubscriptionService-driven tests can assert what was embedded.
 	lastSubscription *auth.SubscriptionClaim
+	// lastExtras captures the extras passed to IssueToken so
+	// ClaimsEnricher-driven tests can assert what was embedded.
+	lastExtras map[string]any
 }
 
-func (m *mockJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim) (string, error) {
+func (m *mockJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim, extras map[string]any) (string, error) {
 	m.lastSubscription = subscription
+	m.lastExtras = extras
 	if m.issueFunc != nil {
-		return m.issueFunc(ctx, agent, accounts, activeAccountID, subscription)
+		return m.issueFunc(ctx, agent, accounts, activeAccountID, subscription, extras)
 	}
 	return "mock-jwt-token", nil
 }

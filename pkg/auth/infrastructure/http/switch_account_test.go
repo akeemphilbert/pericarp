@@ -56,7 +56,7 @@ func issueMultiAccountToken(t *testing.T, svc *authjwt.RSAJWTService, activeAcco
 	if err != nil {
 		t.Fatalf("failed to create account: %v", err)
 	}
-	tokenString, err := svc.IssueToken(context.Background(), agent, []*entities.Account{acc1, acc2}, activeAccountID, nil)
+	tokenString, err := svc.IssueToken(context.Background(), agent, []*entities.Account{acc1, acc2}, activeAccountID, nil, nil)
 	if err != nil {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
