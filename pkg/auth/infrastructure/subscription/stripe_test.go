@@ -480,7 +480,11 @@ func TestStripe_CanceledButStillInPaidWindow_StaysActive(t *testing.T) {
 	// keep IsActive() = true and surface the cancellation in metadata.
 	t.Parallel()
 
-	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	// Anchor on wall-clock time. SubscriptionClaim.IsActive() reads
+	// time.Now() directly (not the injected clock), so a hardcoded date
+	// would silently drift and start failing once wall-clock advances
+	// past periodEnd.
+	now := time.Now().UTC()
 	periodEnd := now.Add(7 * 24 * time.Hour).Unix()
 	body := stripeFixture(stripeSub("sub_1", "canceled", periodEnd, "pro", false))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
