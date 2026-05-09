@@ -50,9 +50,11 @@ func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, a
 	if agent == nil {
 		return "", fmt.Errorf("authentication: agent must not be nil")
 	}
-	// Snapshot extras before validation + signing so a caller mutating
-	// the map from another goroutine cannot panic our iteration or slip
-	// a reserved key in between ValidateExtras and the marshal pass.
+	// Snapshot extras before validation + signing so the validated map
+	// is the same map that gets signed (no ValidateExtras→marshal TOCTOU
+	// window) and so post-call mutation by the caller cannot affect the
+	// issued token. Concurrent writes to the source map *during* this
+	// clone are still a caller-side Go race — see CloneExtras's doc.
 	extras = application.CloneExtras(extras)
 	if err := application.ValidateExtras(extras); err != nil {
 		return "", err
@@ -202,10 +204,10 @@ func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.Pe
 		return "", fmt.Errorf("authentication: claims must not be nil")
 	}
 	// Snapshot Extras up front so the validated map is the same map
-	// that gets signed: a concurrent mutation cannot slip a reserved
-	// key past ValidateExtras and into the re-signed token, and our
-	// iteration cannot panic mid-flight if the caller mutates from
-	// another goroutine.
+	// that gets signed (no ValidateExtras→marshal TOCTOU window) and
+	// so post-call mutation by the caller cannot affect the re-signed
+	// token. Concurrent writes to claims.Extras *during* this clone
+	// are still a caller-side Go race — see CloneExtras's doc.
 	extras := application.CloneExtras(claims.Extras)
 	if err := application.ValidateExtras(extras); err != nil {
 		return "", err
