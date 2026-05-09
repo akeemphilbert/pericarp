@@ -102,3 +102,22 @@ func WithBcryptCost(cost int) AuthServiceOption {
 		s.bcryptCost = cost
 	}
 }
+
+// WithClaimsEnricher wires a ClaimsEnricher whose return value is
+// passed as extras to JWTService.IssueToken on every IssueIdentityToken
+// call. An enricher error fails token issuance — unlike the
+// SubscriptionService snapshot path (which is fail-open for third-party
+// outages), an enricher returning an error means the developer-supplied
+// invariant could not be computed, so issuing a token without the claim
+// would be unsafe.
+//
+// A nil enricher is silently ignored (matching every other With* option
+// in this package); the enricher cannot be cleared after construction.
+// Build a new service if you need to remove a previously-wired enricher.
+func WithClaimsEnricher(enricher ClaimsEnricher) AuthServiceOption {
+	return func(s *DefaultAuthenticationService) {
+		if enricher != nil {
+			s.claimsEnricher = enricher
+		}
+	}
+}
