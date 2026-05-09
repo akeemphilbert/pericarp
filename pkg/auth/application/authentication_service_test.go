@@ -1431,9 +1431,9 @@ func TestRefreshIdentityToken_AgentLookupFails_ReturnsError(t *testing.T) {
 // alongside a SubscriptionService whose claim is also mutable. Issue a
 // token, flip both, refresh, validate — assert the new token reflects
 // both updates AND that it is genuinely a fresh token (not the cached
-// original) by checking IssuedAt strictly advances and the token
-// strings differ. The freshness check guards against a future caching
-// regression that returns an old token whose claims happen to match.
+// original) via a jti and token-string inequality check. The freshness
+// check guards against a future caching regression that returns an old
+// token whose claims happen to match.
 func TestRefreshIdentityToken_RereadsEnricherAndSubscription(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
