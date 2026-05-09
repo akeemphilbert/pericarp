@@ -32,6 +32,11 @@ var (
 	ErrEmailAlreadyTaken            = errors.New("authentication: email already registered with a password")
 	ErrPasswordSupportNotConfigured = errors.New("authentication: password support not configured")
 	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
+	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
+	// no JWTService is wired. Distinct from IssueIdentityToken's
+	// ("", nil) shape because refresh's sole purpose is to mint a token —
+	// a silent empty result on misconfiguration would be a foot-gun.
+	ErrJWTServiceNotConfigured = errors.New("authentication: JWTService not configured")
 )
 
 // AuthRequest represents the result of initiating an OAuth authorization flow.
@@ -149,6 +154,21 @@ type AuthenticationService interface {
 	// Returns ("", nil) if no JWTService is configured.
 	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
 
+	// RefreshIdentityToken re-snapshots claims for an existing agent and
+	// returns a freshly signed JWT. Re-runs the ClaimsEnricher and
+	// re-fetches subscription state — unlike TokenReissuer.ReissueToken,
+	// which copies existing extras + subscription verbatim. Takes an
+	// agent ID instead of doing an OAuth round-trip or password verify,
+	// so the caller owns the trust decision (typically: validated a
+	// still-valid session/JWT before calling). Use after a server-side
+	// change that affects authorization claims (subscription purchased,
+	// role granted, feature flag flipped). Returns ErrJWTServiceNotConfigured
+	// when no JWTService is wired (a misconfiguration if you reached
+	// this method) — distinct from IssueIdentityToken's ("", nil) shape,
+	// which exists to support opaque-session-only flows that refresh
+	// does not.
+	RefreshIdentityToken(ctx context.Context, agentID string, activeAccountID string) (string, error)
+
 	// CreateSession creates an authenticated session for an agent.
 	CreateSession(ctx context.Context, agentID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
 
@@ -168,6 +188,33 @@ type AuthenticationService interface {
 // OAuthProviderRegistry maps provider names to their OAuthProvider implementations.
 type OAuthProviderRegistry map[string]OAuthProvider
 
+// ClaimsEnricher computes app-specific JWT claims for a freshly
+// authenticated agent. Returned values are passed verbatim as the
+// extras map to JWTService.IssueToken — keys colliding with reserved
+// JWT or pericarp core claim names surface as ErrReservedClaim from
+// the configured JWTService (per the JWTService contract). An
+// enricher returning an error fails token issuance: a
+// developer-supplied invariant must surface, never be silently
+// dropped (contrast SubscriptionService, where a third-party outage
+// is logged and the token issues without the claim).
+//
+// The enricher is invoked on IssueIdentityToken (fresh authentication)
+// and on RefreshIdentityToken (server-side state change without
+// re-auth — see RefreshIdentityToken for the trust model).
+// TokenReissuer.ReissueToken (e.g. account-switch) snapshots the
+// existing extras verbatim onto the new token rather than re-running
+// the enricher; the same stale-but-stable rule applies as for the
+// subscription claim. A new enricher snapshot is taken on the next
+// IssueIdentityToken or RefreshIdentityToken call.
+//
+// Implementations MUST treat the accounts slice as read-only and MUST
+// NOT retain it past the call — IssueIdentityToken passes the same
+// slice to JWTService.IssueToken next, and a future caching refactor
+// could expose mutations to other request-scoped code. Panics from
+// the enricher are not recovered; they propagate to the caller of
+// IssueIdentityToken.
+type ClaimsEnricher func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (map[string]any, error)
+
 // DefaultAuthenticationService implements AuthenticationService using OAuth providers
 // and domain aggregates.
 type DefaultAuthenticationService struct {
@@ -184,6 +231,7 @@ type DefaultAuthenticationService struct {
 	logger              Logger
 	jwtService          JWTService
 	subscriptionService SubscriptionService
+	claimsEnricher      ClaimsEnricher
 	bcryptCost          int
 	dummyHashOnce       sync.Once
 	dummyHashValue      string
@@ -510,7 +558,9 @@ func (s *DefaultAuthenticationService) RevokeAllSessions(ctx context.Context, ag
 // if no JWTService is configured. When a SubscriptionService is wired the
 // current claim is snapshotted into the token; lookup failures are logged
 // but do not block issuance — billing-provider outages must not break
-// login.
+// login. When a ClaimsEnricher is wired its result is passed as extras
+// to JWTService.IssueToken; an enricher error fails token issuance
+// (contrast SubscriptionService, which is fail-open).
 func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
 	if s.jwtService == nil {
 		return "", nil
@@ -539,7 +589,36 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 			}
 		}
 	}
-	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription)
+	var extras map[string]any
+	if s.claimsEnricher != nil {
+		var err error
+		extras, err = s.claimsEnricher(ctx, agent, accounts, activeAccountID)
+		if err != nil {
+			return "", fmt.Errorf("authentication: claims enricher failed: %w", err)
+		}
+	}
+	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription, extras)
+}
+
+// RefreshIdentityToken loads the agent by ID and delegates to
+// IssueIdentityToken so every snapshot rule (fresh accounts, fresh
+// subscription, fresh enricher result, fail-closed on enricher error,
+// fail-open on subscription lookup) stays in one place.
+func (s *DefaultAuthenticationService) RefreshIdentityToken(ctx context.Context, agentID, activeAccountID string) (string, error) {
+	if s.jwtService == nil {
+		return "", ErrJWTServiceNotConfigured
+	}
+	if agentID == "" {
+		return "", fmt.Errorf("authentication: agent ID must not be empty")
+	}
+	agent, err := s.agents.FindByID(ctx, agentID)
+	if err != nil {
+		return "", fmt.Errorf("authentication: load agent for refresh: %w", err)
+	}
+	if agent == nil {
+		return "", fmt.Errorf("authentication: agent %s not found", agentID)
+	}
+	return s.IssueIdentityToken(ctx, agent, activeAccountID)
 }
 
 // normalizeEmail returns the canonical form of an email used as the

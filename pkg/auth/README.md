@@ -102,3 +102,53 @@ Run it:
 ```
 go run ./examples/authn/
 ```
+
+## Custom JWT claims (ClaimsEnricher)
+
+Attach app-specific claims to issued JWTs by registering a `ClaimsEnricher`. The enricher is invoked at every `IssueIdentityToken` call and its returned map flattens to top-level claims on the signed token, so downstream services can authorize directly from the token without recomputing the same facts on every request.
+
+```go
+enricher := func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (map[string]any, error) {
+    role, err := lookupRole(ctx, agent.GetID(), activeAccountID)
+    if err != nil {
+        return nil, err // fail-closed: no token is issued
+    }
+    return map[string]any{
+        "role":      role,
+        "tenant_id": activeAccountID,
+    }, nil
+}
+
+svc := application.NewDefaultAuthenticationService(
+    registry, agentRepo, credentialRepo, sessionRepo, accountRepo,
+    application.WithJWTService(jwtSvc),
+    application.WithClaimsEnricher(enricher),
+)
+
+// On the verifying side:
+claims, err := jwtSvc.ValidateToken(ctx, tokenString)
+if err != nil { /* ... */ }
+role, _ := claims.Extras["role"].(string) // app-specific claims live on Extras
+```
+
+Boundaries to know:
+
+<!-- The reserved-name list below mirrors reservedClaimNames in pkg/auth/application/jwt_service.go — keep in sync, or strip and point readers at application.ReservedClaimNames(). -->
+- **Reserved names cannot be overwritten.** Returning a map that contains any of `iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`, `agent_id`, `account_ids`, `active_account_id`, or `subscription` causes `IssueIdentityToken` to fail with `application.ErrReservedClaim` (listing every offender). Use `application.ReservedClaimNames()` / `application.IsReservedClaim(name)` to probe the set.
+- **Enricher errors fail token issuance.** Unlike the `SubscriptionService` snapshot path (fail-open for third-party billing outages), a `ClaimsEnricher` error short-circuits token issuance — a developer-supplied invariant that cannot be computed must not silently regress authorization downstream.
+- **Account-switch reissue snapshots the extras.** `TokenReissuer.ReissueToken` copies `claims.Extras` verbatim onto the new token rather than re-invoking the enricher. A fresh snapshot is taken on the next `IssueIdentityToken` (re-auth) or via `RefreshIdentityToken` (server-side state change without re-auth — see below).
+- **`Extras` value types follow encoding/json defaults.** Numeric values decode as `float64`; pass int64-precision values as strings if you need exact round-trip.
+
+Step `[10]` of `examples/authn/` registers a sample enricher that adds a `role` claim and asserts it round-trips through `ValidateToken`.
+
+### Refreshing claims after entitlement changes
+
+`TokenReissuer.ReissueToken` (account-switch) intentionally snapshots existing claims to avoid hitting Stripe / your enricher's DB on every UI click. When a server-side change should propagate into a user's JWT before its `exp` (subscription purchased, role granted, feature flag flipped), use `RefreshIdentityToken` to re-snapshot without forcing OAuth re-auth:
+
+```go
+token, err := svc.RefreshIdentityToken(ctx, agentID, activeAccountID)
+```
+
+The method looks up the agent, re-fetches accounts, re-runs the enricher, re-snapshots subscription, and returns a freshly signed JWT — same snapshot rules as `IssueIdentityToken`. Returns `application.ErrJWTServiceNotConfigured` when no `JWTService` is wired (refresh's only purpose is to mint a token, so a silent empty result on misconfiguration would be a foot-gun).
+
+The caller owns the trust decision: `RefreshIdentityToken` does NOT validate a session, verify a password, or run any OAuth round-trip. Typical wiring: a `POST /auth/refresh` handler validates the bearer JWT (or session cookie) is still active, then calls `RefreshIdentityToken(ctx, claims.AgentID, claims.ActiveAccountID)` and returns the new token. The previously-issued token remains valid until its own `exp` — pericarp does not maintain a revocation list.

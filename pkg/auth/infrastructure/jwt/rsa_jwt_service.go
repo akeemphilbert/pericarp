@@ -38,9 +38,9 @@ func NewRSAJWTService(opts ...RSAJWTServiceOption) *RSAJWTService {
 	return s
 }
 
-// IssueToken creates a signed JWT for the given agent and accounts.
-// A non-nil subscription is embedded as the "subscription" claim.
-func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim) (string, error) {
+// IssueToken implements [application.JWTService.IssueToken]. See the
+// interface doc for the extras / reserved-name contract.
+func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim, extras map[string]any) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -49,6 +49,15 @@ func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, a
 	}
 	if agent == nil {
 		return "", fmt.Errorf("authentication: agent must not be nil")
+	}
+	// Snapshot extras before validation + signing so the validated map
+	// is the same map that gets signed (no ValidateExtras→marshal TOCTOU
+	// window) and so post-call mutation by the caller cannot affect the
+	// issued token. Concurrent writes to the source map *during* this
+	// clone are still a caller-side Go race — see CloneExtras's doc.
+	extras = application.CloneExtras(extras)
+	if err := application.ValidateExtras(extras); err != nil {
+		return "", err
 	}
 
 	accountIDs := make([]string, len(accounts))
@@ -69,6 +78,7 @@ func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, a
 		AccountIDs:      accountIDs,
 		ActiveAccountID: activeAccountID,
 		Subscription:    subscription,
+		Extras:          extras,
 	}
 
 	token := gojwt.NewWithClaims(gojwt.SigningMethodRS256, claims)
@@ -172,11 +182,17 @@ func (s *RSAJWTService) ValidateInviteToken(ctx context.Context, tokenString str
 }
 
 // ReissueToken creates a new JWT with a different ActiveAccountID, copying
-// AgentID, Subject, AccountIDs, and Subscription from the existing claims.
-// The subscription claim is copied verbatim — account-switch reissuance
-// prefers a stale-but-stable snapshot over a per-switch billing call. A
-// fresh snapshot is only taken on the next IssueIdentityToken (e.g. when
-// the JWT expires and the user re-authenticates).
+// AgentID, Subject, AccountIDs, Subscription, and Extras from the existing
+// claims. Subscription and Extras are copied verbatim — account-switch
+// reissuance prefers a stale-but-stable snapshot over a per-switch billing
+// or enricher call. Fresh snapshots are only taken on the next
+// IssueIdentityToken (e.g. when the JWT expires and the user re-authenticates).
+//
+// Extras are re-validated even though the source token was already
+// validated when first parsed: the reserved-name set may have grown
+// since the token was issued, an alternate JWTService implementation
+// may not have enforced ValidateExtras, or the claims pointer may have
+// been mutated in memory between ValidateToken and ReissueToken.
 func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.PericarpClaims, activeAccountID string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -186,6 +202,15 @@ func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.Pe
 	}
 	if claims == nil {
 		return "", fmt.Errorf("authentication: claims must not be nil")
+	}
+	// Snapshot Extras up front so the validated map is the same map
+	// that gets signed (no ValidateExtras→marshal TOCTOU window) and
+	// so post-call mutation by the caller cannot affect the re-signed
+	// token. Concurrent writes to claims.Extras *during* this clone
+	// are still a caller-side Go race — see CloneExtras's doc.
+	extras := application.CloneExtras(claims.Extras)
+	if err := application.ValidateExtras(extras); err != nil {
+		return "", err
 	}
 
 	now := time.Now()
@@ -201,6 +226,7 @@ func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.Pe
 		AccountIDs:      claims.AccountIDs,
 		ActiveAccountID: activeAccountID,
 		Subscription:    claims.Subscription,
+		Extras:          extras,
 	}
 
 	token := gojwt.NewWithClaims(gojwt.SigningMethodRS256, newClaims)
