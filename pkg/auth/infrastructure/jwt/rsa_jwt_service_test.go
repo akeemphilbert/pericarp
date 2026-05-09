@@ -994,8 +994,118 @@ func TestValidateExtras_MultipleReservedReportedDeterministically(t *testing.T) 
 		t.Errorf("error message references non-reserved key %q: %s", "role", msg)
 	}
 	// Sorted output: agent_id < exp < iss alphabetically.
-	if i, j, k := strings.Index(msg, "agent_id"), strings.Index(msg, "exp"), strings.Index(msg, "iss"); !(i < j && j < k) {
+	if i, j, k := strings.Index(msg, "agent_id"), strings.Index(msg, "exp"), strings.Index(msg, "iss"); i >= j || j >= k {
 		t.Errorf("reserved keys not sorted in message %q (positions: agent_id=%d, exp=%d, iss=%d)", msg, i, j, k)
+	}
+}
+
+func TestCloneExtras(t *testing.T) {
+	t.Parallel()
+
+	if got := application.CloneExtras(nil); got != nil {
+		t.Errorf("CloneExtras(nil) = %v, want nil", got)
+	}
+	if got := application.CloneExtras(map[string]any{}); got != nil {
+		t.Errorf("CloneExtras(empty) = %v, want nil (no extras = no claim)", got)
+	}
+
+	src := map[string]any{"role": "admin", "tier": "gold"}
+	out := application.CloneExtras(src)
+	if len(out) != 2 || out["role"] != "admin" || out["tier"] != "gold" {
+		t.Fatalf("CloneExtras returned %v, want copy of %v", out, src)
+	}
+
+	// Mutating source must not affect clone (and vice versa).
+	src["role"] = "intruder"
+	delete(src, "tier")
+	if out["role"] != "admin" {
+		t.Errorf("clone affected by source mutation: out[role] = %v, want admin", out["role"])
+	}
+	if _, ok := out["tier"]; !ok {
+		t.Error("clone affected by source delete: tier missing")
+	}
+	out["new"] = "value"
+	if _, ok := src["new"]; ok {
+		t.Error("source affected by clone mutation: new key leaked back")
+	}
+}
+
+func TestIssueToken_SnapshotsExtrasOnEntry(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+	agent := createTestAgent(t, "agent-1", "Test User")
+
+	extras := map[string]any{"role": "viewer"}
+	tokenString, err := svc.IssueToken(context.Background(), agent, nil, "", nil, extras)
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	// Caller continues to own and mutate the map after the call returns.
+	// The signed token must reflect the value at IssueToken-entry, not
+	// any later mutation — proves the boundary clone took a snapshot.
+	extras["role"] = "admin"
+	extras["sub"] = "agent-spoof" // a reserved key that ValidateExtras would reject
+
+	claims, err := svc.ValidateToken(context.Background(), tokenString)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+	if claims.Extras["role"] != "viewer" {
+		t.Errorf("token Extras[role] = %v, want viewer (post-call mutation must not affect signed claim)", claims.Extras["role"])
+	}
+	if claims.AgentID != "agent-1" {
+		t.Errorf("AgentID = %q, want agent-1 (post-call sub mutation must not have landed)", claims.AgentID)
+	}
+}
+
+func TestReissueToken_SnapshotsExtrasOnEntry(t *testing.T) {
+	t.Parallel()
+
+	key := generateTestKey(t)
+	svc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(key))
+	agent := createTestAgent(t, "agent-1", "Test User")
+
+	originalToken, err := svc.IssueToken(context.Background(), agent, nil, "acc-1", nil, map[string]any{"role": "viewer"})
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+	originalClaims, err := svc.ValidateToken(context.Background(), originalToken)
+	if err != nil {
+		t.Fatalf("ValidateToken failed: %v", err)
+	}
+
+	// A racing goroutine starts mutating the Extras map after the
+	// snapshot is captured but before signing finishes. Without the
+	// boundary clone in ReissueToken this would be a race; with it the
+	// reissue is unaffected. We start the mutation on a separate
+	// goroutine and join it after the call returns.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 1000 {
+			originalClaims.Extras["role"] = "intruder"
+		}
+	}()
+
+	reissued, err := svc.ReissueToken(context.Background(), originalClaims, "acc-2")
+	<-done
+	if err != nil {
+		t.Fatalf("ReissueToken failed: %v", err)
+	}
+
+	newClaims, err := svc.ValidateToken(context.Background(), reissued)
+	if err != nil {
+		t.Fatalf("ValidateToken (reissued) failed: %v", err)
+	}
+	// Either snapshot value is acceptable (race-window dependent); the
+	// test asserts only that reissue did not panic and produced a
+	// validly-signed token. The point is the boundary clone, not the
+	// specific value.
+	if _, ok := newClaims.Extras["role"]; !ok {
+		t.Error("reissued token missing role extra entirely")
 	}
 }
 

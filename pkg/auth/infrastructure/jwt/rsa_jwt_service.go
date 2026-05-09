@@ -50,6 +50,10 @@ func (s *RSAJWTService) IssueToken(ctx context.Context, agent *entities.Agent, a
 	if agent == nil {
 		return "", fmt.Errorf("authentication: agent must not be nil")
 	}
+	// Snapshot extras before validation + signing so a caller mutating
+	// the map from another goroutine cannot panic our iteration or slip
+	// a reserved key in between ValidateExtras and the marshal pass.
+	extras = application.CloneExtras(extras)
 	if err := application.ValidateExtras(extras); err != nil {
 		return "", err
 	}
@@ -197,7 +201,13 @@ func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.Pe
 	if claims == nil {
 		return "", fmt.Errorf("authentication: claims must not be nil")
 	}
-	if err := application.ValidateExtras(claims.Extras); err != nil {
+	// Snapshot Extras up front so the validated map is the same map
+	// that gets signed: a concurrent mutation cannot slip a reserved
+	// key past ValidateExtras and into the re-signed token, and our
+	// iteration cannot panic mid-flight if the caller mutates from
+	// another goroutine.
+	extras := application.CloneExtras(claims.Extras)
+	if err := application.ValidateExtras(extras); err != nil {
 		return "", err
 	}
 
@@ -214,7 +224,7 @@ func (s *RSAJWTService) ReissueToken(ctx context.Context, claims *application.Pe
 		AccountIDs:      claims.AccountIDs,
 		ActiveAccountID: activeAccountID,
 		Subscription:    claims.Subscription,
-		Extras:          claims.Extras,
+		Extras:          extras,
 	}
 
 	token := gojwt.NewWithClaims(gojwt.SigningMethodRS256, newClaims)

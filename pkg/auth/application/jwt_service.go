@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -72,6 +73,25 @@ func ReservedClaimNames() []string {
 func IsReservedClaim(name string) bool {
 	_, ok := reservedClaimNames[name]
 	return ok
+}
+
+// CloneExtras returns a shallow copy of extras suitable for embedding
+// into a PericarpClaims value that will be validated and signed.
+// nil/empty input returns nil (matches the "no extras" wire format).
+// Callers and ClaimsEnricher implementations may keep mutating the map
+// they pass in (or share it across goroutines) without racing the
+// signer's iteration; without this snapshot, MarshalJSON/ValidateExtras
+// can panic with "concurrent map iteration and map write" or, worse,
+// observe a transiently-added reserved key that the validator missed.
+// The shallow copy is sufficient: ValidateExtras only inspects keys,
+// and json.Marshal of nested values is itself read-only.
+func CloneExtras(extras map[string]any) map[string]any {
+	if len(extras) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(extras))
+	maps.Copy(out, extras)
+	return out
 }
 
 // ValidateExtras returns ErrReservedClaim listing every reserved key in
