@@ -1077,35 +1077,25 @@ func TestReissueToken_SnapshotsExtrasOnEntry(t *testing.T) {
 		t.Fatalf("ValidateToken failed: %v", err)
 	}
 
-	// A racing goroutine starts mutating the Extras map after the
-	// snapshot is captured but before signing finishes. Without the
-	// boundary clone in ReissueToken this would be a race; with it the
-	// reissue is unaffected. We start the mutation on a separate
-	// goroutine and join it after the call returns.
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for range 1000 {
-			originalClaims.Extras["role"] = "intruder"
-		}
-	}()
-
 	reissued, err := svc.ReissueToken(context.Background(), originalClaims, "acc-2")
-	<-done
 	if err != nil {
 		t.Fatalf("ReissueToken failed: %v", err)
 	}
+
+	// Caller continues to own and mutate the Extras map after the call
+	// returns. The reissued token must reflect the value at
+	// ReissueToken-entry, not any later mutation — proves the boundary
+	// clone took a snapshot. (A concurrent writer DURING the clone is
+	// a Go-level race regardless of the clone, so the realistic
+	// contract is post-call safety, not concurrent-writer safety.)
+	originalClaims.Extras["role"] = "intruder"
 
 	newClaims, err := svc.ValidateToken(context.Background(), reissued)
 	if err != nil {
 		t.Fatalf("ValidateToken (reissued) failed: %v", err)
 	}
-	// Either snapshot value is acceptable (race-window dependent); the
-	// test asserts only that reissue did not panic and produced a
-	// validly-signed token. The point is the boundary clone, not the
-	// specific value.
-	if _, ok := newClaims.Extras["role"]; !ok {
-		t.Error("reissued token missing role extra entirely")
+	if newClaims.Extras["role"] != "viewer" {
+		t.Errorf("reissued Extras[role] = %v, want viewer (post-call mutation must not affect signed claim)", newClaims.Extras["role"])
 	}
 }
 

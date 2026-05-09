@@ -78,11 +78,16 @@ func IsReservedClaim(name string) bool {
 // CloneExtras returns a shallow copy of extras suitable for embedding
 // into a PericarpClaims value that will be validated and signed.
 // nil/empty input returns nil (matches the "no extras" wire format).
-// Callers and ClaimsEnricher implementations may keep mutating the map
-// they pass in (or share it across goroutines) without racing the
-// signer's iteration; without this snapshot, MarshalJSON/ValidateExtras
-// can panic with "concurrent map iteration and map write" or, worse,
-// observe a transiently-added reserved key that the validator missed.
+//
+// Callers (or a long-lived ClaimsEnricher reusing a map across requests)
+// may keep mutating the source map after IssueToken / ReissueToken
+// returns: the signed claims hold a snapshot, so post-call mutation
+// cannot affect the issued token, and a subsequent IssueToken call
+// cannot observe mid-mutation state from a prior call's signing.
+// Concurrent mutation of the source map *during* the clone itself is
+// still a Go-level race that this helper cannot fix — that's a caller
+// invariant: do not write a map while passing it to IssueToken.
+//
 // The shallow copy is sufficient: ValidateExtras only inspects keys,
 // and json.Marshal of nested values is itself read-only.
 func CloneExtras(extras map[string]any) map[string]any {
