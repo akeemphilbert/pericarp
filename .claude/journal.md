@@ -6,6 +6,18 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-05-09: Custom JWT claims via ClaimsEnricher (#35)
+
+- `PericarpClaims` (`pkg/auth/application/jwt_service.go`) gained `Extras map[string]any` with custom `MarshalJSON`/`UnmarshalJSON` that flatten extras to top-level JWT claims and re-collect them on parse. Reserved claim names — standard JWT registered (`iss sub aud exp nbf iat jti`) plus pericarp core (`agent_id account_ids active_account_id subscription`) — cannot be smuggled in: `ValidateExtras` rejects them at `IssueToken` time with a wrapped `ErrReservedClaim` listing every offender sorted, and `MarshalJSON` re-runs the same check as a defense-in-depth backstop. `UnmarshalJSON` silently excludes reserved siblings from `Extras` to keep validation tolerant of forged tokens that try to land spoofed core values in the map
+- `JWTService.IssueToken` interface signature gained a trailing `extras map[string]any` parameter (breaking — every caller in this repo updated; existing tests pass `nil`). `RSAJWTService.ReissueToken` re-validates extras before re-signing because the reserved set may grow over time, an alt-implementation may not enforce `ValidateExtras`, or the claims pointer may have been mutated in memory between Validate and Reissue
+- `claimsAlias` is the `type claimsAlias PericarpClaims` trick used inside `MarshalJSON`/`UnmarshalJSON` to avoid recursing into our own custom marshalers. Aliasing instead of duplicating the field list eliminates drift when new core claims are added; the alias type MUST stay private and MUST NOT regain a custom marshaler
+- New `application.ClaimsEnricher` callback type and `application.WithClaimsEnricher(...)` option on `DefaultAuthenticationService`. `IssueIdentityToken` invokes the enricher with `(ctx, agent, accounts, activeAccountID)` and passes its returned map verbatim as extras. Enricher errors are **fail-closed** — wrapped error returned, no token issued — explicitly contrasting `SubscriptionService` (fail-open for third-party billing outages). The contract docs spell out the distinction in three places (type, option, method) so the rationale is reachable from any direction
+- `TokenReissuer.ReissueToken` snapshots `Extras` verbatim onto the new token (mirroring the `Subscription` snapshot policy) — the enricher is not re-invoked on account switch; a fresh snapshot only happens on the next `IssueIdentityToken`
+- `pkg/auth/README.md` gained a "Custom JWT claims" section with a runnable snippet plus the boundary list (reserved names, fail-closed, snapshot-on-reissue, encoding/json numeric-type defaults). `examples/authn/main.go` step `[10]` now wires a sample enricher and `examples/authn/main_test.go` asserts the `role` claim round-trips through `ValidateToken`
+- **Why:** Closes epic #35. Pericarp consumers had two bad options for app-specific authorization claims: reimplement `JWTService` end-to-end (losing the RSA validate/reissue/invite implementations) or skip pericarp's token issuance entirely. The enricher closes that gap with a single typed callback while the reserved-name protection (developer-facing gate at `IssueToken`, defense-in-depth at `MarshalJSON`, and re-validation at `ReissueToken`) ensures the new surface cannot be used to forge core claims like `sub` or `agent_id`
+
+---
+
 ### 2026-03-17: Multi-tenant auth foundations
 
 - Added `pkg/auth` package with `Identity`, context helpers (`AgentFromCtx`, `ContextWithAgent`)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/akeemphilbert/pericarp/pkg/auth"
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
+	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
 	esInfra "github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 )
@@ -57,10 +58,18 @@ func RunAuthenticationFlow(ctx context.Context) (*FlowResult, error) {
 	accounts := NewMemoryAccountRepository()
 	eventStore := esInfra.NewMemoryStore()
 
+	// A ClaimsEnricher attaches app-specific claims to every issued JWT.
+	// Returning an error short-circuits IssueIdentityToken (fail-closed)
+	// so a missing developer invariant cannot silently produce a token.
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return map[string]any{"role": "owner"}, nil
+	}
+
 	svc := application.NewDefaultAuthenticationService(
 		providers, agents, credentials, sessions, accounts,
 		application.WithEventStore(eventStore),
 		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
 	)
 	fmt.Println("[3] DefaultAuthenticationService wired")
 
@@ -127,7 +136,11 @@ func RunAuthenticationFlow(ctx context.Context) (*FlowResult, error) {
 		return nil, fmt.Errorf("ValidateToken: %w", err)
 	}
 	result.Claims = claims
-	fmt.Printf("     JWT validated: AgentID=%s, ActiveAccount=%s\n", claims.AgentID, claims.ActiveAccountID)
+	role, _ := claims.Extras["role"].(string)
+	if role == "" {
+		return nil, fmt.Errorf("ValidateToken: enricher 'role' claim missing from JWT")
+	}
+	fmt.Printf("     JWT validated: AgentID=%s, ActiveAccount=%s, Extras[role]=%s\n", claims.AgentID, claims.ActiveAccountID, role)
 
 	// --- 11. ContextWithAgent / AgentFromCtx ---
 	identity := &auth.Identity{

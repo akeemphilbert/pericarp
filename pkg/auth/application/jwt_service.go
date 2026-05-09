@@ -25,6 +25,13 @@ var (
 	// keys are sorted and listed in the wrapped message so callers get a
 	// deterministic, single-pass diagnosis rather than a flaky
 	// one-key-at-a-time error driven by Go's map iteration order.
+	//
+	// This is the typed gate enforcing "extras cannot overwrite core
+	// claims" — a ClaimsEnricher returning a reserved key surfaces here
+	// (fail-closed on the IssueIdentityToken path), and TokenReissuer
+	// implementations re-validate snapshotted extras against this same
+	// gate so reserved-set growth in a future release cannot smuggle a
+	// once-valid claim onto a re-signed token.
 	ErrReservedClaim = errors.New("authentication: extras contain reserved claim names")
 )
 

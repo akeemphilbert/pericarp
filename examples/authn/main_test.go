@@ -114,6 +114,9 @@ func TestAuthenticationFlow_FullLifecycle(t *testing.T) {
 	if result.Claims.ActiveAccountID != result.AccountID {
 		t.Errorf("Claims.ActiveAccountID = %q, want %q", result.Claims.ActiveAccountID, result.AccountID)
 	}
+	if got := result.Claims.Extras["role"]; got != "owner" {
+		t.Errorf("Claims.Extras[role] = %v, want owner (ClaimsEnricher integration)", got)
+	}
 }
 
 func TestAuthenticationFlow_ExistingAgent(t *testing.T) {

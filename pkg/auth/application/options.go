@@ -105,11 +105,17 @@ func WithBcryptCost(cost int) AuthServiceOption {
 
 // WithClaimsEnricher wires a ClaimsEnricher whose return value is
 // passed as extras to JWTService.IssueToken on every IssueIdentityToken
-// call. An enricher error fails token issuance — unlike the
-// SubscriptionService snapshot path (which is fail-open for third-party
-// outages), an enricher returning an error means the developer-supplied
-// invariant could not be computed, so issuing a token without the claim
-// would be unsafe.
+// call. See [ClaimsEnricher] for the full contract; in summary:
+//
+//   - Reserved JWT/pericarp claim names cannot be overwritten —
+//     collisions surface as ErrReservedClaim from the JWTService.
+//   - Enricher errors fail token issuance (fail-closed), unlike the
+//     SubscriptionService snapshot path (fail-open for third-party
+//     outages): a developer-supplied invariant that cannot be computed
+//     must not silently produce a token.
+//   - Extras are snapshotted on TokenReissuer.ReissueToken — the
+//     enricher is not re-invoked on account switch; the next
+//     IssueIdentityToken takes a fresh snapshot.
 //
 // A nil enricher is silently ignored (matching every other With* option
 // in this package); the enricher cannot be cleared after construction.
