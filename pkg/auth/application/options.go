@@ -114,8 +114,9 @@ func WithBcryptCost(cost int) AuthServiceOption {
 //     outages): a developer-supplied invariant that cannot be computed
 //     must not silently produce a token.
 //   - Extras are snapshotted on TokenReissuer.ReissueToken — the
-//     enricher is not re-invoked on account switch; the next
-//     IssueIdentityToken takes a fresh snapshot.
+//     enricher is not re-invoked on account switch. A fresh snapshot
+//     is taken on the next IssueIdentityToken (re-auth) or
+//     RefreshIdentityToken (server-side state change without re-auth).
 //
 // A nil enricher is silently ignored (matching every other With* option
 // in this package); the enricher cannot be cleared after construction.

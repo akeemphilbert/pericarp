@@ -79,17 +79,25 @@ func IsReservedClaim(name string) bool {
 // into a PericarpClaims value that will be validated and signed.
 // nil/empty input returns nil (matches the "no extras" wire format).
 //
-// Callers (or a long-lived ClaimsEnricher reusing a map across requests)
-// may keep mutating the source map after IssueToken / ReissueToken
-// returns: the signed claims hold a snapshot, so post-call mutation
-// cannot affect the issued token, and a subsequent IssueToken call
-// cannot observe mid-mutation state from a prior call's signing.
-// Concurrent mutation of the source map *during* the clone itself is
-// still a Go-level race that this helper cannot fix — that's a caller
-// invariant: do not write a map while passing it to IssueToken.
+// Scope of the snapshot — the clone is shallow:
 //
-// The shallow copy is sufficient: ValidateExtras only inspects keys,
-// and json.Marshal of nested values is itself read-only.
+//   - The TOP-LEVEL map is decoupled from the caller's. After
+//     IssueToken / ReissueToken returns, the caller may add, remove,
+//     or replace top-level keys without affecting the issued token,
+//     and a subsequent call cannot observe partial state from a prior
+//     call's signing. This also closes the ValidateExtras→sign TOCTOU
+//     window inside a single call: the validated map and the signed
+//     map are the same map.
+//   - NESTED values (a map[string]any or []any inside an extras value)
+//     are still SHARED with the caller. A goroutine that mutates a
+//     nested map while json.Marshal is walking it will race regardless
+//     of this clone. Do not retain or mutate nested values after
+//     handing them to the auth service. A deep clone would close this
+//     gap but at a cost (reflection over arbitrary nested types) that
+//     is rarely justified — most enrichers return primitive-leaf maps.
+//   - Concurrent mutation of the source map's TOP-LEVEL keys *during*
+//     the clone itself is also a caller-side Go race: do not write a
+//     map while passing it to IssueToken.
 func CloneExtras(extras map[string]any) map[string]any {
 	if len(extras) == 0 {
 		return nil

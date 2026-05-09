@@ -136,7 +136,7 @@ Boundaries to know:
 <!-- The reserved-name list below mirrors reservedClaimNames in pkg/auth/application/jwt_service.go — keep in sync, or strip and point readers at application.ReservedClaimNames(). -->
 - **Reserved names cannot be overwritten.** Returning a map that contains any of `iss`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti`, `agent_id`, `account_ids`, `active_account_id`, or `subscription` causes `IssueIdentityToken` to fail with `application.ErrReservedClaim` (listing every offender). Use `application.ReservedClaimNames()` / `application.IsReservedClaim(name)` to probe the set.
 - **Enricher errors fail token issuance.** Unlike the `SubscriptionService` snapshot path (fail-open for third-party billing outages), a `ClaimsEnricher` error short-circuits token issuance — a developer-supplied invariant that cannot be computed must not silently regress authorization downstream.
-- **Account-switch reissue snapshots the extras.** `TokenReissuer.ReissueToken` copies `claims.Extras` verbatim onto the new token rather than re-invoking the enricher; a fresh snapshot is only taken on the next `IssueIdentityToken`.
+- **Account-switch reissue snapshots the extras.** `TokenReissuer.ReissueToken` copies `claims.Extras` verbatim onto the new token rather than re-invoking the enricher. A fresh snapshot is taken on the next `IssueIdentityToken` (re-auth) or via `RefreshIdentityToken` (server-side state change without re-auth — see below).
 - **`Extras` value types follow encoding/json defaults.** Numeric values decode as `float64`; pass int64-precision values as strings if you need exact round-trip.
 
 Step `[10]` of `examples/authn/` registers a sample enricher that adds a `role` claim and asserts it round-trips through `ValidateToken`.

@@ -198,13 +198,14 @@ type OAuthProviderRegistry map[string]OAuthProvider
 // dropped (contrast SubscriptionService, where a third-party outage
 // is logged and the token issues without the claim).
 //
-// The enricher is invoked only on IssueIdentityToken (i.e. fresh
-// authentication). TokenReissuer.ReissueToken (e.g. account-switch)
-// snapshots the existing extras verbatim onto the new token rather
-// than re-running the enricher; the same stale-but-stable rule applies
-// as for the subscription claim. A new enricher snapshot is taken on
-// the next IssueIdentityToken (e.g. when the JWT expires and the user
-// re-authenticates).
+// The enricher is invoked on IssueIdentityToken (fresh authentication)
+// and on RefreshIdentityToken (server-side state change without
+// re-auth — see RefreshIdentityToken for the trust model).
+// TokenReissuer.ReissueToken (e.g. account-switch) snapshots the
+// existing extras verbatim onto the new token rather than re-running
+// the enricher; the same stale-but-stable rule applies as for the
+// subscription claim. A new enricher snapshot is taken on the next
+// IssueIdentityToken or RefreshIdentityToken call.
 //
 // Implementations MUST treat the accounts slice as read-only and MUST
 // NOT retain it past the call — IssueIdentityToken passes the same
