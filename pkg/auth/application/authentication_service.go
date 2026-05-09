@@ -32,6 +32,11 @@ var (
 	ErrEmailAlreadyTaken            = errors.New("authentication: email already registered with a password")
 	ErrPasswordSupportNotConfigured = errors.New("authentication: password support not configured")
 	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
+	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
+	// no JWTService is wired. Distinct from IssueIdentityToken's
+	// ("", nil) shape because refresh's sole purpose is to mint a token —
+	// a silent empty result on misconfiguration would be a foot-gun.
+	ErrJWTServiceNotConfigured = errors.New("authentication: JWTService not configured")
 )
 
 // AuthRequest represents the result of initiating an OAuth authorization flow.
@@ -148,6 +153,21 @@ type AuthenticationService interface {
 	// IssueIdentityToken issues a signed JWT for the given agent.
 	// Returns ("", nil) if no JWTService is configured.
 	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
+
+	// RefreshIdentityToken re-snapshots claims for an existing agent and
+	// returns a freshly signed JWT. Re-runs the ClaimsEnricher and
+	// re-fetches subscription state — unlike TokenReissuer.ReissueToken,
+	// which copies existing extras + subscription verbatim. Takes an
+	// agent ID instead of doing an OAuth round-trip or password verify,
+	// so the caller owns the trust decision (typically: validated a
+	// still-valid session/JWT before calling). Use after a server-side
+	// change that affects authorization claims (subscription purchased,
+	// role granted, feature flag flipped). Returns ErrJWTServiceNotConfigured
+	// when no JWTService is wired (a misconfiguration if you reached
+	// this method) — distinct from IssueIdentityToken's ("", nil) shape,
+	// which exists to support opaque-session-only flows that refresh
+	// does not.
+	RefreshIdentityToken(ctx context.Context, agentID string, activeAccountID string) (string, error)
 
 	// CreateSession creates an authenticated session for an agent.
 	CreateSession(ctx context.Context, agentID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
@@ -577,6 +597,27 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 		}
 	}
 	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription, extras)
+}
+
+// RefreshIdentityToken loads the agent by ID and delegates to
+// IssueIdentityToken so every snapshot rule (fresh accounts, fresh
+// subscription, fresh enricher result, fail-closed on enricher error,
+// fail-open on subscription lookup) stays in one place.
+func (s *DefaultAuthenticationService) RefreshIdentityToken(ctx context.Context, agentID, activeAccountID string) (string, error) {
+	if s.jwtService == nil {
+		return "", ErrJWTServiceNotConfigured
+	}
+	if agentID == "" {
+		return "", fmt.Errorf("authentication: agent ID must not be empty")
+	}
+	agent, err := s.agents.FindByID(ctx, agentID)
+	if err != nil {
+		return "", fmt.Errorf("authentication: load agent for refresh: %w", err)
+	}
+	if agent == nil {
+		return "", fmt.Errorf("authentication: agent %s not found", agentID)
+	}
+	return s.IssueIdentityToken(ctx, agent, activeAccountID)
 }
 
 // normalizeEmail returns the canonical form of an email used as the

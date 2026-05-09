@@ -130,6 +130,10 @@ func (m *mockAuthService) IssueIdentityToken(ctx context.Context, agent *entitie
 	return "", nil
 }
 
+func (m *mockAuthService) RefreshIdentityToken(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
 func (m *mockAuthService) RegisterPassword(_ context.Context, _, _, _ string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
 	return nil, nil, nil, nil
 }
