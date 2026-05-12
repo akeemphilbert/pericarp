@@ -681,7 +681,6 @@ func (m *Mastodon) fetchUserInfo(ctx context.Context, host, accessToken string) 
 	}, nil
 }
 
-
 // bindFlow stashes a codeChallenge -> host binding with TTL for later retrieval
 // by Exchange. Every gcSweepEvery calls it sweeps expired bindings to bound
 // memory growth from abandoned flows.
@@ -753,4 +752,3 @@ func (m *Mastodon) sweepExpired(now time.Time) {
 		return true
 	})
 }
-

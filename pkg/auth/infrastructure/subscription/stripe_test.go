@@ -678,4 +678,3 @@ func TestStripe_WithHTTPClient_NilNoOp(t *testing.T) {
 		t.Fatalf("GetSubscription error: %v", err)
 	}
 }
-

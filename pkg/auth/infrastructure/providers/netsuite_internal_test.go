@@ -10,11 +10,11 @@ func TestNetSuiteURLBuilders_Derived(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		accountID      string
-		wantToken      string
-		wantRevoke     string
-		wantUserInfo   string
+		name         string
+		accountID    string
+		wantToken    string
+		wantRevoke   string
+		wantUserInfo string
 	}{
 		{
 			name:         "production account",
