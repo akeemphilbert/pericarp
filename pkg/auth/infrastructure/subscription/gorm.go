@@ -19,12 +19,12 @@ const (
 // AutoMigrate this struct into their schema or override the table name via
 // WithGORMTable; for fully custom schemas use WithGORMResolver.
 type SubscriptionRecord struct {
-	ID        uint       `gorm:"primaryKey"`
-	AgentID   string     `gorm:"size:512;index:idx_sub_agent_account,priority:1;not null"`
-	AccountID string     `gorm:"size:512;index:idx_sub_agent_account,priority:2"`
-	Status    string     `gorm:"size:32;not null"`
-	Plan      string     `gorm:"size:128"`
-	Provider  string     `gorm:"size:64"`
+	ID        uint   `gorm:"primaryKey"`
+	AgentID   string `gorm:"size:512;index:idx_sub_agent_account,priority:1;not null"`
+	AccountID string `gorm:"size:512;index:idx_sub_agent_account,priority:2"`
+	Status    string `gorm:"size:32;not null"`
+	Plan      string `gorm:"size:128"`
+	Provider  string `gorm:"size:64"`
 	ExpiresAt *time.Time
 	UpdatedAt time.Time
 }
@@ -79,6 +79,23 @@ func WithGORMProvider(name string) GORMOption {
 	}
 }
 
+// WithGORMAgentFallback enables the default lookup to retry an
+// account-scoped query against the agent-only row (account_id = ”
+// OR NULL) when the (agent_id, accountID) match returns no row.
+//
+// Off by default — see the doc on GORM for the cross-tenant leak this
+// guards against. Opt in only when entitlements follow the agent across
+// every tenant context they're enrolled in (the subscription belongs to
+// the human, not to a specific tenant they're a member of).
+//
+// When enabled, an account-scoped row still wins over the agent-only row
+// — the fallback only runs when the account-scoped query returns no row.
+func WithGORMAgentFallback() GORMOption {
+	return func(g *GORM) {
+		g.agentFallback = true
+	}
+}
+
 // GORM resolves SubscriptionClaim values from a relational projection
 // owned by the consumer service. Implements application.SubscriptionService.
 //
@@ -87,15 +104,20 @@ func WithGORMProvider(name string) GORMOption {
 // account_id) match — the agent-only row is NOT used as a fallback,
 // because a paid personal-account subscription must not silently grant
 // paid-tier access to a B2B account the same agent belongs to. When
-// accountID is empty, the agent-only row (account_id = '' or IS NULL)
+// accountID is empty, the agent-only row (account_id = ” or IS NULL)
 // is matched. Among matches, latest updated_at wins; ties break on the
 // row's primary key id so output is deterministic. For schemas that
 // don't fit that shape, supply WithGORMResolver.
+//
+// Consumers whose entitlements follow the human across every tenant they
+// belong to (rather than being scoped to a specific tenant they own) can
+// opt into an agent-only fallback via WithGORMAgentFallback.
 type GORM struct {
 	db               *gorm.DB
 	table            string
 	resolver         Resolver
 	providerFallback string
+	agentFallback    bool
 }
 
 // NewGORM returns a GORM adapter backed by db. The default lookup queries
@@ -145,24 +167,36 @@ func (g *GORM) GetSubscription(ctx context.Context, agentID, accountID string) (
 }
 
 func (g *GORM) defaultLookup(ctx context.Context, agentID, accountID string) (*auth.SubscriptionClaim, error) {
-	var rec SubscriptionRecord
-	base := g.db.WithContext(ctx).Table(g.table).Where("agent_id = ?", agentID)
-
 	if accountID != "" {
-		err := base.Where("account_id = ?", accountID).
+		var rec SubscriptionRecord
+		err := g.db.WithContext(ctx).Table(g.table).
+			Where("agent_id = ?", agentID).
+			Where("account_id = ?", accountID).
 			Order("updated_at DESC, id DESC").
 			Limit(1).
 			Take(&rec).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
+		if err == nil {
+			return g.toClaim(rec), nil
 		}
-		if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("gorm: query account-scoped subscription: %w", err)
 		}
-		return g.toClaim(rec), nil
+		if !g.agentFallback {
+			return nil, nil
+		}
+		// Fall through to the agent-only lookup. Only reached when the
+		// account-scoped query returned no row AND WithGORMAgentFallback
+		// was enabled, so the account-scoped row still wins on a hit.
 	}
 
-	err := base.Where("(account_id = ? OR account_id IS NULL)", "").
+	return g.agentOnlyLookup(ctx, agentID)
+}
+
+func (g *GORM) agentOnlyLookup(ctx context.Context, agentID string) (*auth.SubscriptionClaim, error) {
+	var rec SubscriptionRecord
+	err := g.db.WithContext(ctx).Table(g.table).
+		Where("agent_id = ?", agentID).
+		Where("(account_id = ? OR account_id IS NULL)", "").
 		Order("updated_at DESC, id DESC").
 		Limit(1).
 		Take(&rec).Error

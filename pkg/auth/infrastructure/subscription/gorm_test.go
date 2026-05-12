@@ -154,6 +154,103 @@ func TestGORM_NonEmptyAccountWithNoMatch_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestGORM_AgentFallback_AccountMissReturnsAgentOnlyRow(t *testing.T) {
+	// With WithGORMAgentFallback, an account-scoped miss falls back to
+	// the agent-only row — for consumers whose entitlement follows the
+	// human across every tenant they're enrolled in.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	row := &subscription.SubscriptionRecord{
+		AgentID: "agent-1", AccountID: "",
+		Status: string(auth.SubscriptionStatusActive), Plan: "personal",
+		UpdatedAt: time.Now(),
+	}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	g := subscription.NewGORM(db, subscription.WithGORMAgentFallback())
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "team-1")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim == nil {
+		t.Fatal("expected fallback claim, got nil")
+	}
+	if claim.Plan != "personal" {
+		t.Errorf("Plan = %q, want personal (agent-only fallback row)", claim.Plan)
+	}
+	if claim.Status != auth.SubscriptionStatusActive {
+		t.Errorf("Status = %q, want active", claim.Status)
+	}
+}
+
+func TestGORM_AgentFallback_AccountHitStillWins(t *testing.T) {
+	// The fallback only runs on miss — when an account-scoped row
+	// exists, it wins over the agent-only row. Otherwise enabling the
+	// option would silently demote a tenant-specific entitlement to the
+	// agent's personal row, which is the opposite of the intent.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	now := time.Now()
+	rows := []*subscription.SubscriptionRecord{
+		{
+			AgentID: "agent-1", AccountID: "",
+			Status: string(auth.SubscriptionStatusActive), Plan: "personal",
+			UpdatedAt: now,
+		},
+		{
+			AgentID: "agent-1", AccountID: "team-1",
+			Status: string(auth.SubscriptionStatusInactive), Plan: "team_free",
+			UpdatedAt: now.Add(-time.Hour),
+		},
+	}
+	for _, r := range rows {
+		if err := db.Create(r).Error; err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	g := subscription.NewGORM(db, subscription.WithGORMAgentFallback())
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "team-1")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim == nil {
+		t.Fatal("expected claim, got nil")
+	}
+	if claim.Plan != "team_free" {
+		t.Errorf("Plan = %q, want team_free (account-scoped row must win even with fallback enabled)", claim.Plan)
+	}
+}
+
+func TestGORM_AgentFallback_BothMissReturnsNil(t *testing.T) {
+	// Fallback enabled but neither the account-scoped row nor an
+	// agent-only row exists. Must return (nil, nil) — the option must
+	// not turn "no record" into a synthesized claim.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	row := &subscription.SubscriptionRecord{
+		AgentID: "agent-other", AccountID: "team-1",
+		Status: "active", Plan: "pro", UpdatedAt: time.Now(),
+	}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	g := subscription.NewGORM(db, subscription.WithGORMAgentFallback())
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "team-1")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim != nil {
+		t.Errorf("expected nil claim, got %+v", claim)
+	}
+}
+
 func TestGORM_LatestUpdatedAtWins(t *testing.T) {
 	t.Parallel()
 
