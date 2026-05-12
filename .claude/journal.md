@@ -6,6 +6,16 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-05-12: Opt-in agent-only fallback for GORM SubscriptionService (#41)
+
+- New `WithGORMAgentFallback() GORMOption` on the GORM subscription adapter. When enabled, an account-scoped lookup that returns `gorm.ErrRecordNotFound` retries against the existing agent-only branch (`account_id = '' OR NULL`). The account-scoped row still wins on a hit (the `err == nil` early-return is unconditional on the flag), and a real DB error on the first query short-circuits before the flag is consulted — the fallback does not mask errors
+- Default behavior is unchanged: the strict `(agent, account)` match documented in `defaultLookup`'s doc comment remains the load-bearing security invariant against the personal→B2B paid-tier leak. Existing `TestGORM_NonEmptyAccountWithNoMatch_ReturnsNil` still pins the strict default by exercising the new `if !g.agentFallback { return nil, nil }` short-circuit
+- Implementation factored the agent-only query into a separate `agentOnlyLookup` helper so the fall-through path and the original `accountID == ""` path share one query body. The `accountID == ""` path is byte-identical to before (same predicate, same NULL handling, same ordering, same error-wrap message)
+- **Why:** Some consumers' subscriptions belong to the human (agent), not to a specific tenant — the agent can be a member of multiple tenant accounts they don't own and the entitlement should follow them across all of them. Before this option, the only escape hatch was `WithGORMResolver`, which forced reimplementing the entire query path (status validation, ordering, NULL handling) just to add one fallback `WHERE`. Strict-by-default is preserved; opt-in shape is the right contract here
+- The same /pr-review hunter that originally caught the cross-tenant leak (see 2026-04-25 entry) signed off on this PR — the fallback can only reach the agent-only row when both the option is on and the account-scoped query returned `ErrRecordNotFound`
+
+---
+
 ### 2026-05-09: Custom JWT claims via ClaimsEnricher (#35)
 
 - `PericarpClaims` (`pkg/auth/application/jwt_service.go`) gained `Extras map[string]any` with custom `MarshalJSON`/`UnmarshalJSON` that flatten extras to top-level JWT claims and re-collect them on parse. Reserved claim names — standard JWT registered (`iss sub aud exp nbf iat jti`) plus pericarp core (`agent_id account_ids active_account_id subscription`) — cannot be smuggled in: `ValidateExtras` rejects them at `IssueToken` time with a wrapped `ErrReservedClaim` listing every offender sorted, and `MarshalJSON` re-runs the same check as a defense-in-depth backstop. `UnmarshalJSON` silently excludes reserved siblings from `Extras` to keep validation tolerant of forged tokens that try to land spoofed core values in the map
