@@ -226,6 +226,58 @@ func TestGORM_AgentFallback_AccountHitStillWins(t *testing.T) {
 	}
 }
 
+func TestGORM_AgentFallback_NullAccountIDRowMatched(t *testing.T) {
+	// Schemas that store the agent-only row with account_id = NULL
+	// (rather than '') must satisfy the fallback path — that schema
+	// shape is one of the motivating use cases for the option. Seed
+	// via raw SQL because the default *string SubscriptionRecord
+	// schema writes "" for the zero value.
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	if err := db.Exec(
+		"INSERT INTO subscriptions (agent_id, account_id, status, plan, updated_at) VALUES (?, NULL, ?, ?, ?)",
+		"agent-1", "active", "personal", time.Now(),
+	).Error; err != nil {
+		t.Fatalf("seed via raw SQL: %v", err)
+	}
+
+	g := subscription.NewGORM(db, subscription.WithGORMAgentFallback())
+	claim, err := g.GetSubscription(context.Background(), "agent-1", "team-1")
+	if err != nil {
+		t.Fatalf("GetSubscription error: %v", err)
+	}
+	if claim == nil {
+		t.Fatal("expected fallback claim for NULL account_id row, got nil")
+	}
+	if claim.Plan != "personal" {
+		t.Errorf("Plan = %q, want personal", claim.Plan)
+	}
+}
+
+func TestGORM_AgentFallback_DBErrorOnFallbackQuery_Propagates(t *testing.T) {
+	// With fallback enabled and the account-scoped query missing, the
+	// second (agent-only) query runs. A DB error there must propagate
+	// — silently swallowing it would mask connectivity / timeout
+	// failures and leave the caller unable to distinguish "no record"
+	// from "lookup failed."
+	t.Parallel()
+
+	db := newGormTestDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get *sql.DB: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close DB: %v", err)
+	}
+
+	g := subscription.NewGORM(db, subscription.WithGORMAgentFallback())
+	if _, err := g.GetSubscription(context.Background(), "agent-1", "team-1"); err == nil {
+		t.Fatal("expected error from closed DB, got nil")
+	}
+}
+
 func TestGORM_AgentFallback_BothMissReturnsNil(t *testing.T) {
 	// Fallback enabled but neither the account-scoped row nor an
 	// agent-only row exists. Must return (nil, nil) — the option must

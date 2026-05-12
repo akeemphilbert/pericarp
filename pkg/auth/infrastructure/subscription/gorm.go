@@ -80,7 +80,7 @@ func WithGORMProvider(name string) GORMOption {
 }
 
 // WithGORMAgentFallback enables the default lookup to retry an
-// account-scoped query against the agent-only row (account_id = ”
+// account-scoped query against the agent-only row (account_id = ''
 // OR NULL) when the (agent_id, accountID) match returns no row.
 //
 // Off by default — see the doc on GORM for the cross-tenant leak this
@@ -90,6 +90,8 @@ func WithGORMProvider(name string) GORMOption {
 //
 // When enabled, an account-scoped row still wins over the agent-only row
 // — the fallback only runs when the account-scoped query returns no row.
+// Database errors on the account-scoped query are propagated as-is; only
+// gorm.ErrRecordNotFound triggers the fallback.
 func WithGORMAgentFallback() GORMOption {
 	return func(g *GORM) {
 		g.agentFallback = true
@@ -104,7 +106,7 @@ func WithGORMAgentFallback() GORMOption {
 // account_id) match — the agent-only row is NOT used as a fallback,
 // because a paid personal-account subscription must not silently grant
 // paid-tier access to a B2B account the same agent belongs to. When
-// accountID is empty, the agent-only row (account_id = ” or IS NULL)
+// accountID is empty, the agent-only row (account_id = '' or IS NULL)
 // is matched. Among matches, latest updated_at wins; ties break on the
 // row's primary key id so output is deterministic. For schemas that
 // don't fit that shape, supply WithGORMResolver.
