@@ -204,9 +204,9 @@ func (s *Stripe) GetSubscription(ctx context.Context, agentID, accountID string)
 // further ties broken by subscription ID for stable output.
 func (s *Stripe) toClaim(search stripeCustomerSearch) *auth.SubscriptionClaim {
 	var (
-		best        *stripeSubscription
-		bestCust    string
-		matchCount  int
+		best       *stripeSubscription
+		bestCust   string
+		matchCount int
 	)
 	for i := range search.Data {
 		for j := range search.Data[i].Subscriptions.Data {
