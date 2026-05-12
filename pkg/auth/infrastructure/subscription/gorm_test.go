@@ -155,9 +155,10 @@ func TestGORM_NonEmptyAccountWithNoMatch_ReturnsNil(t *testing.T) {
 }
 
 func TestGORM_AgentFallback_AccountMissReturnsAgentOnlyRow(t *testing.T) {
-	// With WithGORMAgentFallback, an account-scoped miss falls back to
-	// the agent-only row — for consumers whose entitlement follows the
-	// human across every tenant they're enrolled in.
+	// When the WithGORMAgentFallback option is enabled, an account-scoped
+	// miss falls back to the agent-only row — for consumers whose
+	// entitlement follows the human across every tenant they're enrolled
+	// in.
 	t.Parallel()
 
 	db := newGormTestDB(t)
@@ -261,6 +262,12 @@ func TestGORM_AgentFallback_DBErrorOnFallbackQuery_Propagates(t *testing.T) {
 	// — silently swallowing it would mask connectivity / timeout
 	// failures and leave the caller unable to distinguish "no record"
 	// from "lookup failed."
+	//
+	// Setup: register an After("gorm:query") callback that drops the
+	// subscriptions table once the first SELECT (account-scoped, will
+	// return ErrRecordNotFound on the empty table) completes. The
+	// fallback's agent-only SELECT then runs against a now-missing
+	// table and surfaces a SQL error from the driver.
 	t.Parallel()
 
 	db := newGormTestDB(t)
@@ -268,13 +275,26 @@ func TestGORM_AgentFallback_DBErrorOnFallbackQuery_Propagates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get *sql.DB: %v", err)
 	}
-	if err := sqlDB.Close(); err != nil {
-		t.Fatalf("close DB: %v", err)
+
+	queryCount := 0
+	if err := db.Callback().Query().After("gorm:query").Register("test:drop_table_after_first_select", func(tx *gorm.DB) {
+		queryCount++
+		if queryCount == 1 {
+			if _, err := sqlDB.Exec("DROP TABLE subscriptions"); err != nil {
+				t.Errorf("drop subscriptions table: %v", err)
+			}
+		}
+	}); err != nil {
+		t.Fatalf("register callback: %v", err)
 	}
 
 	g := subscription.NewGORM(db, subscription.WithGORMAgentFallback())
-	if _, err := g.GetSubscription(context.Background(), "agent-1", "team-1"); err == nil {
-		t.Fatal("expected error from closed DB, got nil")
+	_, err = g.GetSubscription(context.Background(), "agent-1", "team-1")
+	if err == nil {
+		t.Fatal("expected error from agent-only fallback query failure, got nil")
+	}
+	if queryCount != 2 {
+		t.Errorf("queryCount = %d, want 2 (account-scoped + agent-only fallback)", queryCount)
 	}
 }
 
