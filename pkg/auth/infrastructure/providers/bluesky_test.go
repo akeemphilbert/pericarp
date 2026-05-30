@@ -1145,6 +1145,45 @@ func TestBluesky_TwoHopDiscovery_SeparateAuthServer(t *testing.T) {
 	if got := tokenHit.Load(); got != 1 {
 		t.Errorf("token endpoint hit %d times on the AS, want 1", got)
 	}
+
+	// The wrapped refresh token must persist the PDS≠AS topology: pdsURL is the
+	// PDS, while tokenURL/issuer live on the AS host. This is what makes the
+	// re-anchored validateRefreshTokenURLs (tokenURL tied to issuer host, not
+	// PDS host) correct against real Exchange output rather than only against
+	// hand-built literal URLs.
+	gotPDS, gotToken, gotIssuer, _, err := decodeBlueskyRefreshToken(res.RefreshToken)
+	if err != nil {
+		t.Fatalf("decode wrapped refresh token: %v", err)
+	}
+	if gotPDS != pdsSrv.URL {
+		t.Errorf("wrapped pdsURL = %q, want PDS %q", gotPDS, pdsSrv.URL)
+	}
+	if gotToken != asURL+"/oauth/token" {
+		t.Errorf("wrapped tokenURL = %q, want AS token endpoint %q", gotToken, asURL+"/oauth/token")
+	}
+	if gotIssuer != asURL {
+		t.Errorf("wrapped issuer = %q, want AS %q", gotIssuer, asURL)
+	}
+
+	// Full round-trip: RefreshToken must route to the AS token endpoint and
+	// re-wrap while preserving the PDS≠AS topology.
+	refreshed, err := b.RefreshToken(context.Background(), res.RefreshToken)
+	if err != nil {
+		t.Fatalf("RefreshToken (AS != PDS host): %v", err)
+	}
+	if refreshed.AccessToken != "at" {
+		t.Errorf("refreshed AccessToken = %q, want at", refreshed.AccessToken)
+	}
+	if got := tokenHit.Load(); got != 2 {
+		t.Errorf("token endpoint hit %d times after refresh, want 2 (refresh must target the AS)", got)
+	}
+	rePDS, reToken, reIssuer, _, err := decodeBlueskyRefreshToken(refreshed.RefreshToken)
+	if err != nil {
+		t.Fatalf("decode re-wrapped refresh token: %v", err)
+	}
+	if rePDS != pdsSrv.URL || reToken != asURL+"/oauth/token" || reIssuer != asURL {
+		t.Errorf("re-wrapped tuple = (%q,%q,%q), want (%q,%q,%q)", rePDS, reToken, reIssuer, pdsSrv.URL, asURL+"/oauth/token", asURL)
+	}
 }
 
 // TestBluesky_DiscoverAuthServer covers discoverAuthServer's branches directly:
@@ -1189,6 +1228,43 @@ func TestBluesky_DiscoverAuthServer(t *testing.T) {
 		}
 		if got != pds {
 			t.Errorf("authServer = %q, want fallback to PDS %q", got, pds)
+		}
+	})
+
+	t.Run("falls back to PDS when first AS entry is blank", func(t *testing.T) {
+		t.Parallel()
+		pds := newPDS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == blueskyProtectedResourceMetadataPath {
+				_, _ = io.WriteString(w, `{"authorization_servers":["   "]}`)
+			}
+		})
+		b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: true})
+		got, err := b.discoverAuthServer(context.Background(), pds)
+		if err != nil {
+			t.Fatalf("discoverAuthServer: %v", err)
+		}
+		if got != pds {
+			t.Errorf("authServer = %q, want fallback to PDS %q for a whitespace-only entry", got, pds)
+		}
+	})
+
+	t.Run("AS equal to PDS modulo trailing slash returns PDS", func(t *testing.T) {
+		t.Parallel()
+		var pds string
+		pds = newPDS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == blueskyProtectedResourceMetadataPath {
+				// Same host as the PDS but with a trailing slash: must
+				// canonicalise to the PDS, not be treated as a distinct AS.
+				_, _ = io.WriteString(w, `{"authorization_servers":["`+pds+`/"]}`)
+			}
+		})
+		b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: true})
+		got, err := b.discoverAuthServer(context.Background(), pds)
+		if err != nil {
+			t.Fatalf("discoverAuthServer: %v", err)
+		}
+		if got != pds {
+			t.Errorf("authServer = %q, want PDS %q (trailing-slash difference must canonicalise)", got, pds)
 		}
 	})
 

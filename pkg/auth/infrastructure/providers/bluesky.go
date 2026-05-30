@@ -383,7 +383,8 @@ func (b *Bluesky) RefreshToken(ctx context.Context, refreshToken string) (*appli
 	if refreshToken == "" {
 		return nil, application.ErrTokenRefreshFailed
 	}
-	// Refresh requires the original PDS's token endpoint and AS issuer.
+	// Refresh requires the original PDS URL, the AS token endpoint, and the AS
+	// issuer (the pdsURL|tokenURL|issuer tuple decoded below).
 	// OAuthProvider.RefreshToken has only a single refreshToken parameter, so
 	// we require callers to pass the wrapped Bluesky refresh token format
 	// emitted by Exchange via encodeBlueskyRefreshToken: a `btr.v2.`-prefixed
@@ -395,10 +396,12 @@ func (b *Bluesky) RefreshToken(ctx context.Context, refreshToken string) (*appli
 	}
 	// The wrapped refresh token is application-layer state and may have been
 	// tampered with in storage. Re-validate the decoded URLs against the
-	// same SSRF rules `fetchAuthServerMetadata` enforces during Exchange:
-	// scheme/host/non-internal checks plus a same-host check tying
-	// tokenURL/issuer to pdsURL. Without this, a poisoned `btr.v2.` payload
-	// could redirect refresh POSTs at internal services.
+	// same SSRF rules Exchange enforced: scheme/host/non-internal checks on
+	// all three URLs, plus a same-host check tying tokenURL to the issuer
+	// (AS) host. pdsURL is SSRF-validated but, since the PDS and AS are
+	// routinely different hosts, is not required to share the issuer's host.
+	// Without this, a poisoned `btr.v2.` payload could redirect refresh POSTs
+	// at internal services.
 	if err := b.validateRefreshTokenURLs(ctx, pdsURL, tokenURL, issuer); err != nil {
 		return nil, fmt.Errorf("bluesky: refresh token URLs: %w", err)
 	}
