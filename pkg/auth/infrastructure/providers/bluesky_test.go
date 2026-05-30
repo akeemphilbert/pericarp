@@ -80,6 +80,16 @@ func newFakeBlueskyEnv(t *testing.T) *fakeBlueskyEnv {
 	t.Cleanup(env.asSrv.Close)
 	env.pdsURL = env.asSrv.URL
 
+	// RFC 9728 protected-resource document: the PDS names its authorization
+	// server. In this fake the PDS and AS are the same host, so it points at
+	// asSrv itself — but the discovery path (not the fallback) is exercised.
+	asMux.HandleFunc(blueskyProtectedResourceMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(blueskyProtectedResourceMetadata{
+			AuthorizationServers: []string{env.asSrv.URL},
+		})
+	})
+
 	asMux.HandleFunc(blueskyAuthServerMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		meta := blueskyAuthServerMetadata{
@@ -454,6 +464,16 @@ func TestBluesky_ValidateRefreshTokenURLs_SSRFGuard(t *testing.T) {
 			pdsURL:   "https://pds.example.com",
 			tokenURL: "https://pds.example.com/oauth/token",
 			issuer:   "https://pds.example.com",
+		},
+		{
+			// AT Protocol discovery routinely yields a PDS and an
+			// authorization server on different hosts. tokenURL/issuer live on
+			// the AS host; pdsURL points elsewhere — and that must be allowed,
+			// since tokenURL is anchored to the issuer, not the PDS.
+			name:     "pds and AS on different hosts allowed",
+			pdsURL:   "https://pds.example.com",
+			tokenURL: "https://auth.example.net/oauth/token",
+			issuer:   "https://auth.example.net",
 		},
 		{
 			name:        "tokenURL on different host rejected",
@@ -1013,6 +1033,278 @@ func TestBluesky_AuthServerMetadataIssuerMismatch(t *testing.T) {
 	if !errors.Is(err, ErrBlueskyIssuerMismatch) {
 		t.Errorf("err = %v, want ErrBlueskyIssuerMismatch (a malicious DID document must not redirect us through an unverified issuer)", err)
 	}
+}
+
+// TestBluesky_TwoHopDiscovery_SeparateAuthServer is the regression test for
+// issue #43: auth-server discovery must follow the RFC 9728 protected-resource
+// hop and query the *authorization server* for oauth-authorization-server
+// metadata, not the PDS. The PDS here behaves like a real Bluesky PDS — it
+// serves the protected-resource document pointing at a separate AS host and
+// returns an Express-style 404 for oauth-authorization-server. If discovery
+// regresses to querying the PDS, the flow fails and pdsAuthServerPathHit fires.
+func TestBluesky_TwoHopDiscovery_SeparateAuthServer(t *testing.T) {
+	t.Parallel()
+
+	const (
+		did      = "did:plc:abc123fake"
+		handle   = "alice.test"
+		authCode = "auth-code-xyz"
+		reqURI   = "urn:ietf:params:oauth:request_uri:sep"
+	)
+
+	var asURL string
+	var asMetaHit, parHit, tokenHit atomic.Int32
+	asMux := http.NewServeMux()
+	asMux.HandleFunc(blueskyAuthServerMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		asMetaHit.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(blueskyAuthServerMetadata{
+			Issuer:                             asURL,
+			AuthorizationEndpoint:              asURL + "/oauth/authorize",
+			TokenEndpoint:                      asURL + "/oauth/token",
+			PushedAuthorizationRequestEndpoint: asURL + "/oauth/par",
+		})
+	})
+	asMux.HandleFunc("/oauth/par", func(w http.ResponseWriter, _ *http.Request) {
+		parHit.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"request_uri":"`+reqURI+`","expires_in":60}`)
+	})
+	asMux.HandleFunc("/oauth/token", func(w http.ResponseWriter, _ *http.Request) {
+		tokenHit.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"access_token":"at","token_type":"DPoP","expires_in":1800,"refresh_token":"rt","sub":"`+did+`"}`)
+	})
+	asSrv := httptest.NewServer(asMux)
+	defer asSrv.Close()
+	asURL = asSrv.URL
+
+	var pdsAuthServerPathHit atomic.Int32
+	pdsMux := http.NewServeMux()
+	pdsMux.HandleFunc(blueskyProtectedResourceMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(blueskyProtectedResourceMetadata{
+			AuthorizationServers: []string{asURL},
+		})
+	})
+	pdsMux.HandleFunc(blueskyAuthServerMetadataPath, func(w http.ResponseWriter, _ *http.Request) {
+		pdsAuthServerPathHit.Add(1)
+		http.Error(w, "<!DOCTYPE html><pre>Cannot GET /.well-known/oauth-authorization-server</pre>", http.StatusNotFound)
+	})
+	pdsSrv := httptest.NewServer(pdsMux)
+	defer pdsSrv.Close()
+
+	resolveMux := http.NewServeMux()
+	resolveMux.HandleFunc(blueskyResolveHandlePath, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"did":"`+did+`"}`)
+	})
+	resolveSrv := httptest.NewServer(resolveMux)
+	defer resolveSrv.Close()
+
+	plcMux := http.NewServeMux()
+	plcMux.HandleFunc("/"+did, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id":"`+did+`","service":[{"id":"#atproto_pds","type":"AtprotoPersonalDataServer","serviceEndpoint":"`+pdsSrv.URL+`"}]}`)
+	})
+	plcSrv := httptest.NewServer(plcMux)
+	defer plcSrv.Close()
+
+	b := NewBluesky(BlueskyConfig{
+		ClientMetadataURL:    "https://app.example.com/client-metadata.json",
+		RedirectURI:          "https://app.example.com/cb",
+		AllowInsecurePDSURLs: true,
+	})
+	b.handleResolveBase = resolveSrv.URL
+	b.plcDirectoryBase = plcSrv.URL
+
+	verifier := "v"
+	authURL, err := b.AuthCodeURLForHandle(context.Background(), handle, "s", application.GenerateCodeChallenge(verifier), "", "")
+	if err != nil {
+		t.Fatalf("AuthCodeURLForHandle: %v", err)
+	}
+	if !strings.HasPrefix(authURL, asURL+"/oauth/authorize") {
+		t.Errorf("authorize URL = %q, want it to target the discovered AS host %q", authURL, asURL)
+	}
+	if got := asMetaHit.Load(); got != 1 {
+		t.Errorf("AS oauth-authorization-server hit %d times, want 1 (discovery must query the AS)", got)
+	}
+	if got := parHit.Load(); got != 1 {
+		t.Errorf("PAR hit %d times on the AS, want 1", got)
+	}
+	if got := pdsAuthServerPathHit.Load(); got != 0 {
+		t.Errorf("PDS oauth-authorization-server path hit %d times, want 0 (the #43 bug queried the PDS here)", got)
+	}
+
+	res, err := b.Exchange(context.Background(), authCode, verifier, "")
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if res.AccessToken != "at" {
+		t.Errorf("AccessToken = %q, want at", res.AccessToken)
+	}
+	if got := tokenHit.Load(); got != 1 {
+		t.Errorf("token endpoint hit %d times on the AS, want 1", got)
+	}
+
+	// The wrapped refresh token must persist the PDS≠AS topology: pdsURL is the
+	// PDS, while tokenURL/issuer live on the AS host. This is what makes the
+	// re-anchored validateRefreshTokenURLs (tokenURL tied to issuer host, not
+	// PDS host) correct against real Exchange output rather than only against
+	// hand-built literal URLs.
+	gotPDS, gotToken, gotIssuer, _, err := decodeBlueskyRefreshToken(res.RefreshToken)
+	if err != nil {
+		t.Fatalf("decode wrapped refresh token: %v", err)
+	}
+	if gotPDS != pdsSrv.URL {
+		t.Errorf("wrapped pdsURL = %q, want PDS %q", gotPDS, pdsSrv.URL)
+	}
+	if gotToken != asURL+"/oauth/token" {
+		t.Errorf("wrapped tokenURL = %q, want AS token endpoint %q", gotToken, asURL+"/oauth/token")
+	}
+	if gotIssuer != asURL {
+		t.Errorf("wrapped issuer = %q, want AS %q", gotIssuer, asURL)
+	}
+
+	// Full round-trip: RefreshToken must route to the AS token endpoint and
+	// re-wrap while preserving the PDS≠AS topology.
+	refreshed, err := b.RefreshToken(context.Background(), res.RefreshToken)
+	if err != nil {
+		t.Fatalf("RefreshToken (AS != PDS host): %v", err)
+	}
+	if refreshed.AccessToken != "at" {
+		t.Errorf("refreshed AccessToken = %q, want at", refreshed.AccessToken)
+	}
+	if got := tokenHit.Load(); got != 2 {
+		t.Errorf("token endpoint hit %d times after refresh, want 2 (refresh must target the AS)", got)
+	}
+	rePDS, reToken, reIssuer, _, err := decodeBlueskyRefreshToken(refreshed.RefreshToken)
+	if err != nil {
+		t.Fatalf("decode re-wrapped refresh token: %v", err)
+	}
+	if rePDS != pdsSrv.URL || reToken != asURL+"/oauth/token" || reIssuer != asURL {
+		t.Errorf("re-wrapped tuple = (%q,%q,%q), want (%q,%q,%q)", rePDS, reToken, reIssuer, pdsSrv.URL, asURL+"/oauth/token", asURL)
+	}
+}
+
+// TestBluesky_DiscoverAuthServer covers discoverAuthServer's branches directly:
+// the fallback paths (the PDS keeps backward-compat as its own AS) and the
+// hard-fail on a present-but-SSRF-invalid authorization server.
+func TestBluesky_DiscoverAuthServer(t *testing.T) {
+	t.Parallel()
+
+	newPDS := func(t *testing.T, h http.HandlerFunc) string {
+		t.Helper()
+		srv := httptest.NewServer(h)
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+
+	t.Run("falls back to PDS when protected-resource is 404", func(t *testing.T) {
+		t.Parallel()
+		pds := newPDS(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "nope", http.StatusNotFound)
+		})
+		b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: true})
+		got, err := b.discoverAuthServer(context.Background(), pds)
+		if err != nil {
+			t.Fatalf("discoverAuthServer: %v", err)
+		}
+		if got != pds {
+			t.Errorf("authServer = %q, want fallback to PDS %q", got, pds)
+		}
+	})
+
+	t.Run("falls back to PDS when authorization_servers is empty", func(t *testing.T) {
+		t.Parallel()
+		pds := newPDS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == blueskyProtectedResourceMetadataPath {
+				_, _ = io.WriteString(w, `{"authorization_servers":[]}`)
+			}
+		})
+		b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: true})
+		got, err := b.discoverAuthServer(context.Background(), pds)
+		if err != nil {
+			t.Fatalf("discoverAuthServer: %v", err)
+		}
+		if got != pds {
+			t.Errorf("authServer = %q, want fallback to PDS %q", got, pds)
+		}
+	})
+
+	t.Run("falls back to PDS when first AS entry is blank", func(t *testing.T) {
+		t.Parallel()
+		pds := newPDS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == blueskyProtectedResourceMetadataPath {
+				_, _ = io.WriteString(w, `{"authorization_servers":["   "]}`)
+			}
+		})
+		b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: true})
+		got, err := b.discoverAuthServer(context.Background(), pds)
+		if err != nil {
+			t.Fatalf("discoverAuthServer: %v", err)
+		}
+		if got != pds {
+			t.Errorf("authServer = %q, want fallback to PDS %q for a whitespace-only entry", got, pds)
+		}
+	})
+
+	t.Run("AS equal to PDS modulo trailing slash returns PDS", func(t *testing.T) {
+		t.Parallel()
+		var pds string
+		pds = newPDS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == blueskyProtectedResourceMetadataPath {
+				// Same host as the PDS but with a trailing slash: must
+				// canonicalise to the PDS, not be treated as a distinct AS.
+				_, _ = io.WriteString(w, `{"authorization_servers":["`+pds+`/"]}`)
+			}
+		})
+		b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: true})
+		got, err := b.discoverAuthServer(context.Background(), pds)
+		if err != nil {
+			t.Fatalf("discoverAuthServer: %v", err)
+		}
+		if got != pds {
+			t.Errorf("authServer = %q, want PDS %q (trailing-slash difference must canonicalise)", got, pds)
+		}
+	})
+
+	t.Run("returns discovered AS host", func(t *testing.T) {
+		t.Parallel()
+		pds := newPDS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == blueskyProtectedResourceMetadataPath {
+				_, _ = io.WriteString(w, `{"authorization_servers":["https://bsky.social/"]}`)
+			}
+		})
+		b := NewBluesky(BlueskyConfig{AllowInsecurePDSURLs: true})
+		got, err := b.discoverAuthServer(context.Background(), pds)
+		if err != nil {
+			t.Fatalf("discoverAuthServer: %v", err)
+		}
+		// Trailing slash is trimmed so it canonicalises consistently.
+		if got != "https://bsky.social" {
+			t.Errorf("authServer = %q, want https://bsky.social", got)
+		}
+	})
+
+	t.Run("hard-fails on SSRF-invalid AS in strict mode", func(t *testing.T) {
+		t.Parallel()
+		pds := newPDS(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == blueskyProtectedResourceMetadataPath {
+				// http scheme is rejected by validatePDSURL in strict mode.
+				_, _ = io.WriteString(w, `{"authorization_servers":["http://internal.evil"]}`)
+			}
+		})
+		// Strict mode: AllowInsecurePDSURLs defaults to false.
+		b := NewBluesky(BlueskyConfig{})
+		b.lookupHostFn = func(context.Context, string) ([]string, error) { return []string{"93.184.216.34"}, nil }
+		_, err := b.discoverAuthServer(context.Background(), pds)
+		if err == nil {
+			t.Fatal("discoverAuthServer = nil, want error for a present-but-invalid AS (must not silently fall back)")
+		}
+		if !strings.Contains(err.Error(), "discovered authorization server") {
+			t.Errorf("err = %q, want it to mention the discovered authorization server", err.Error())
+		}
+	})
 }
 
 func TestBluesky_TokenEndpointDPoPNonceHandshake(t *testing.T) {

@@ -52,7 +52,15 @@ func TestRevenueCat_NoEntitlements_ReturnsNil(t *testing.T) {
 func TestRevenueCat_ActiveEntitlement(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	// This test asserts claim.IsActive(), which consults the real wall clock
+	// (time.Now()) by design — it is the production "is this still valid right
+	// now?" predicate. So the expiry must be anchored to real time, not a
+	// frozen date: a hardcoded past date made the test a time-bomb that
+	// silently started failing once wall-clock now passed the fixed expiry.
+	// Truncating to whole seconds keeps the RFC3339 round-trip exact for the
+	// ExpiresAt.Equal assertion below. The injected adapter clock is set to the
+	// same now so status computation stays consistent with IsActive.
+	now := time.Now().UTC().Truncate(time.Second)
 	expires := now.Add(30 * 24 * time.Hour)
 	body := `{
 		"subscriber": {
