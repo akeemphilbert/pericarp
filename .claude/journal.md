@@ -6,6 +6,15 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-05-30: Removed the BigQuery EventStore
+
+- Deleted `BigQueryEventStore` (`pkg/eventsourcing/infrastructure/bigquery_store.go`) and all its tests, including the `bigquery:` cases and `setupBigQueryStore*` helpers woven through the shared `eventstore_test.go` / `eventstore_range_test.go` table-driven suites. Reverses the 2026-03-21 addition below.
+- **Why:** the integration tests (added 2026-03-21, "skip gracefully without Docker") spun up the `ghcr.io/goccy/bigquery-emulator` testcontainer unconditionally when Docker *was* present, and the emulator flaked under CI with TCP `i/o timeout`s — each subtest stalling 30–48s and reds the whole `Test` job. The store had no in-repo consumers and was not used by downstream services, so it was removed rather than gated.
+- `go mod tidy` dropped the BigQuery-only dependency tree: `cloud.google.com/go/bigquery`, `google.golang.org/api`, and ~20 transitive deps (arrow, flatbuffers, gax-go, genproto, …). `testcontainers-go` stays — still used by other integration tests. Surviving EventStore implementations: Memory, File, GORM, Postgres.
+- Done on the #43 auth branch at the maintainer's request rather than a separate PR.
+
+---
+
 ### 2026-05-30: Bluesky auth-server discovery follows the RFC 9728 protected-resource hop (#43)
 
 - Fixed `Bluesky.AuthCodeURLForHandle`, which queried the **PDS** for `/.well-known/oauth-authorization-server` and got an Express 404 (a Bluesky PDS does not serve that document — only the auth server, e.g. `bsky.social`, does). Discovery is two hops: resolve handle→DID→PDS, then `GET PDS/.well-known/oauth-protected-resource` → `authorization_servers[0]` → fetch AS metadata from *that* host.
