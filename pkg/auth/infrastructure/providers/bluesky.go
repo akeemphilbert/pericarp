@@ -24,14 +24,18 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
-// AT Protocol OAuth (proposal 0004) endpoints relative to the PDS host. The
-// PDS exposes its authorization server metadata via .well-known.
+// AT Protocol OAuth (proposal 0004) endpoints. Per the RFC 9728 + RFC 8414
+// discovery chain, auth-server discovery is two hops: the PDS exposes a
+// protected-resource document naming its authorization server(s), and that
+// authorization server (not the PDS) exposes the authorization-server
+// metadata. A Bluesky PDS does not serve oauth-authorization-server itself.
 const (
-	blueskyResolveHandlePath        = "/xrpc/com.atproto.identity.resolveHandle"
-	blueskyAuthServerMetadataPath   = "/.well-known/oauth-authorization-server"
-	blueskyDefaultHandleResolveBase = "https://bsky.social"
-	blueskyDefaultPLCDirectoryBase  = "https://plc.directory"
-	blueskyFlowTTL                  = 10 * time.Minute
+	blueskyResolveHandlePath             = "/xrpc/com.atproto.identity.resolveHandle"
+	blueskyProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
+	blueskyAuthServerMetadataPath        = "/.well-known/oauth-authorization-server"
+	blueskyDefaultHandleResolveBase      = "https://bsky.social"
+	blueskyDefaultPLCDirectoryBase       = "https://plc.directory"
+	blueskyFlowTTL                       = 10 * time.Minute
 	// blueskyDPoPNonceTTL bounds how long a cached DPoP-Nonce stays usable.
 	// AT-Proto auth servers rotate nonces on the order of minutes; an hour
 	// is a comfortable upper bound that also caps memory growth in
@@ -53,7 +57,7 @@ var (
 	ErrBlueskyFlowConsumed           = errors.New("bluesky: flow binding already consumed; start a fresh flow")
 	ErrBlueskyIDTokenUnsupported     = errors.New("bluesky: AT Protocol OAuth does not issue ID tokens; use Exchange to resolve user info")
 	ErrBlueskyRevokeUnsupported      = errors.New("bluesky: revocation through the OAuthProvider interface is not supported; revoke at the PDS directly")
-	ErrBlueskyIssuerMismatch         = errors.New("bluesky: authorization server metadata issuer does not match the PDS")
+	ErrBlueskyIssuerMismatch         = errors.New("bluesky: authorization server metadata issuer does not match the discovered authorization server")
 )
 
 // BlueskyKeyStore stores the ECDSA P-256 key used to sign DPoP proofs.
@@ -166,7 +170,9 @@ func canonicalIssuer(issuer string) string {
 //
 //  1. Caller invokes AuthCodeURLForHandle(handle) — this resolves the handle
 //     through com.atproto.identity.resolveHandle to a DID, fetches the DID
-//     document to find the user's PDS, fetches that PDS's
+//     document to find the user's PDS, asks the PDS's
+//     .well-known/oauth-protected-resource which authorization server protects
+//     it, fetches that authorization server's
 //     .well-known/oauth-authorization-server metadata, performs a Pushed
 //     Authorization Request (PAR) at the metadata's pushed_authorization_request_endpoint
 //     with a DPoP proof, and returns the authorize URL.
@@ -267,17 +273,25 @@ func (b *Bluesky) AuthCodeURLForHandle(ctx context.Context, handle, state, codeC
 		return "", fmt.Errorf("%w: %v", ErrBlueskyDIDResolutionFailed, err)
 	}
 
-	asMeta, err := b.fetchAuthServerMetadata(ctx, pdsURL)
+	// RFC 9728 hop: ask the PDS which authorization server protects it. A real
+	// Bluesky PDS does not serve oauth-authorization-server itself, so we must
+	// resolve the AS host here before fetching AS metadata.
+	authServerURL, err := b.discoverAuthServer(ctx, pdsURL)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrBlueskyAuthServerDiscovery, err)
+	}
+
+	asMeta, err := b.fetchAuthServerMetadata(ctx, authServerURL)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrBlueskyAuthServerDiscovery, err)
 	}
 
 	// RFC 8414 §3.3 requires the issuer in the metadata response to match the
 	// authorization server identifier the client used to fetch the metadata.
-	// Without this check, a malicious DID document could route us to a PDS
-	// that pretends to be issued by a different host.
-	if canonicalIssuer(asMeta.Issuer) != canonicalIssuer(pdsURL) {
-		return "", fmt.Errorf("%w: metadata issuer %q != PDS %q", ErrBlueskyIssuerMismatch, asMeta.Issuer, pdsURL)
+	// Without this check, a malicious protected-resource document could route
+	// us to an auth server that pretends to be issued by a different host.
+	if canonicalIssuer(asMeta.Issuer) != canonicalIssuer(authServerURL) {
+		return "", fmt.Errorf("%w: metadata issuer %q != authorization server %q", ErrBlueskyIssuerMismatch, asMeta.Issuer, authServerURL)
 	}
 
 	issuer := canonicalIssuer(asMeta.Issuer)
@@ -610,6 +624,68 @@ func (b *Bluesky) didDocumentURL(did string) (string, error) {
 	}
 }
 
+// blueskyProtectedResourceMetadata models the subset of the OAuth 2.0
+// protected-resource metadata (RFC 9728) we consume. The PDS serves this at
+// /.well-known/oauth-protected-resource and names the authorization server(s)
+// that protect it.
+type blueskyProtectedResourceMetadata struct {
+	AuthorizationServers []string `json:"authorization_servers"`
+}
+
+// discoverAuthServer performs the RFC 9728 hop: it asks the PDS for its
+// protected-resource document and returns the first listed authorization
+// server. Under AT Protocol discovery the PDS (e.g.
+// morel.us-east.host.bsky.network) and the authorization server (e.g.
+// bsky.social) are routinely different hosts, and the PDS does not serve
+// oauth-authorization-server metadata at all — only the AS named here does.
+//
+// If the protected-resource document is missing, unreachable, malformed, or
+// carries no authorization_servers, discovery falls back to treating the PDS
+// as its own authorization server. That preserves backward compatibility for
+// non-standard / self-hosted deployments where the PDS and AS coincide. By
+// contrast, a document that *does* name an authorization server which fails
+// the SSRF guard is a hard error rather than a fallback: silently ignoring a
+// present-but-dangerous AS would defeat the guard.
+func (b *Bluesky) discoverAuthServer(ctx context.Context, pdsURL string) (string, error) {
+	endpoint := pdsURL + blueskyProtectedResourceMetadataPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return pdsURL, nil
+	}
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return pdsURL, nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return pdsURL, nil
+	}
+	var meta blueskyProtectedResourceMetadata
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return pdsURL, nil
+	}
+	if len(meta.AuthorizationServers) == 0 {
+		return pdsURL, nil
+	}
+	asURL := strings.TrimRight(strings.TrimSpace(meta.AuthorizationServers[0]), "/")
+	if asURL == "" {
+		return pdsURL, nil
+	}
+	// When the AS is the PDS itself, pdsURL was already vetted by
+	// resolveDIDToPDS → validatePDSURL; no extra check needed.
+	if canonicalIssuer(asURL) == canonicalIssuer(pdsURL) {
+		return pdsURL, nil
+	}
+	// A distinct AS host comes from the protected-resource document, which is
+	// only as trustworthy as the PDS that served it. Run it through the same
+	// SSRF guard as the PDS before we make any request to it.
+	if err := b.validatePDSURL(ctx, asURL); err != nil {
+		return "", fmt.Errorf("discovered authorization server %q: %w", asURL, err)
+	}
+	return asURL, nil
+}
+
 // blueskyAuthServerMetadata models the subset of OAuth 2.0 authorization
 // server metadata (RFC 8414) we consume.
 type blueskyAuthServerMetadata struct {
@@ -622,9 +698,10 @@ type blueskyAuthServerMetadata struct {
 }
 
 // fetchAuthServerMetadata fetches /.well-known/oauth-authorization-server from
-// the PDS and returns the parsed metadata.
-func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*blueskyAuthServerMetadata, error) {
-	endpoint := pdsURL + blueskyAuthServerMetadataPath
+// the authorization server (discovered via discoverAuthServer, not the PDS)
+// and returns the parsed metadata.
+func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, authServerURL string) (*blueskyAuthServerMetadata, error) {
+	endpoint := authServerURL + blueskyAuthServerMetadataPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create metadata request: %w", err)
@@ -648,7 +725,7 @@ func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*
 	if meta.AuthorizationEndpoint == "" || meta.TokenEndpoint == "" || meta.PushedAuthorizationRequestEndpoint == "" {
 		return nil, fmt.Errorf("auth server metadata missing required endpoints: %s", string(body))
 	}
-	if err := b.validateAuthServerEndpoints(ctx, pdsURL, &meta); err != nil {
+	if err := b.validateAuthServerEndpoints(ctx, authServerURL, &meta); err != nil {
 		return nil, err
 	}
 	return &meta, nil
@@ -657,22 +734,25 @@ func (b *Bluesky) fetchAuthServerMetadata(ctx context.Context, pdsURL string) (*
 // validateAuthServerEndpoints checks that the AS metadata's authorization /
 // token / PAR endpoints are safe to call. The earlier validatePDSURL guard
 // only protects the metadata-fetch URL itself; without this check a
-// reachable-but-malicious PDS could return endpoints pointing at http:// or
-// internal hosts and we would happily POST PAR/token requests there.
+// reachable-but-malicious auth server could return endpoints pointing at
+// http:// or internal hosts and we would happily POST PAR/token requests
+// there.
 //
 // Each endpoint is run through validatePDSURL, which parses the URL and
 // rejects userinfo unconditionally (so the no-credential-in-URL invariant
 // holds even with AllowInsecurePDSURLs=true). The remaining
-// scheme/internal-IP and same-host-as-PDS checks only fire when
-// AllowInsecurePDSURLs is false.
-func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, pdsURL string, meta *blueskyAuthServerMetadata) error {
-	var pdsHost string
+// scheme/internal-IP and same-host-as-AS checks only fire when
+// AllowInsecurePDSURLs is false. The endpoints are tied to the authorization
+// server host (not the PDS), because under AT Protocol discovery the AS and
+// PDS are routinely different hosts.
+func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, authServerURL string, meta *blueskyAuthServerMetadata) error {
+	var asHost string
 	if !b.allowInsecurePDSURLs {
-		pdsParsed, err := url.Parse(pdsURL)
+		asParsed, err := url.Parse(authServerURL)
 		if err != nil {
-			return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
+			return fmt.Errorf("parse authServerURL %q: %w", authServerURL, err)
 		}
-		pdsHost = strings.ToLower(pdsParsed.Hostname())
+		asHost = strings.ToLower(asParsed.Hostname())
 	}
 	for _, ep := range []struct {
 		name string
@@ -692,8 +772,8 @@ func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, pdsURL string
 		if err != nil {
 			return fmt.Errorf("auth server %s parse %q: %w", ep.name, ep.raw, err)
 		}
-		if strings.ToLower(u.Hostname()) != pdsHost {
-			return fmt.Errorf("auth server %s host %q does not match PDS host %q", ep.name, u.Hostname(), pdsHost)
+		if strings.ToLower(u.Hostname()) != asHost {
+			return fmt.Errorf("auth server %s host %q does not match authorization server host %q", ep.name, u.Hostname(), asHost)
 		}
 	}
 	return nil
@@ -703,43 +783,42 @@ func (b *Bluesky) validateAuthServerEndpoints(ctx context.Context, pdsURL string
 // refresh token against tampering. Persisted refresh tokens are
 // application-layer state, so a malicious or compromised store could craft
 // a btr.v2 payload that points tokenURL at an internal host; without this
-// check, RefreshToken would happily POST at it. The rules mirror
-// validateAuthServerEndpoints: each URL is parsed and rejected if it
-// contains userinfo (always), and in non-insecure mode each URL also goes
-// through validatePDSURL's full SSRF guard plus a same-host check tying
-// tokenURL/issuer to pdsURL.
+// check, RefreshToken would happily POST at it.
+//
+// All three URLs go through validatePDSURL's full SSRF guard (userinfo
+// rejected always; scheme/internal-IP checks when not insecure). The
+// host-consistency check ties tokenURL to the issuer (authorization server)
+// host — NOT to the PDS host: under AT Protocol discovery the PDS and the AS
+// are routinely different hosts, so the token endpoint legitimately lives on
+// the issuer's host while pdsURL points elsewhere. pdsURL is still
+// SSRF-validated, but is not required to share the issuer's host.
 func (b *Bluesky) validateRefreshTokenURLs(ctx context.Context, pdsURL, tokenURL, issuer string) error {
-	if err := b.validatePDSURL(ctx, pdsURL); err != nil {
-		return fmt.Errorf("pdsURL: %w", err)
-	}
-	var pdsHost string
-	if !b.allowInsecurePDSURLs {
-		pdsParsed, err := url.Parse(pdsURL)
-		if err != nil {
-			return fmt.Errorf("parse pdsURL %q: %w", pdsURL, err)
-		}
-		pdsHost = strings.ToLower(pdsParsed.Hostname())
-	}
 	for _, ep := range []struct {
 		name string
 		raw  string
 	}{
-		{"tokenURL", tokenURL},
+		{"pdsURL", pdsURL},
 		{"issuer", issuer},
+		{"tokenURL", tokenURL},
 	} {
 		if err := b.validatePDSURL(ctx, ep.raw); err != nil {
 			return fmt.Errorf("%s: %w", ep.name, err)
 		}
-		if b.allowInsecurePDSURLs {
-			continue
-		}
-		u, err := url.Parse(ep.raw)
-		if err != nil {
-			return fmt.Errorf("parse %s %q: %w", ep.name, ep.raw, err)
-		}
-		if strings.ToLower(u.Hostname()) != pdsHost {
-			return fmt.Errorf("%s host %q does not match pdsURL host %q", ep.name, u.Hostname(), pdsHost)
-		}
+	}
+	if b.allowInsecurePDSURLs {
+		return nil
+	}
+	issuerParsed, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("parse issuer %q: %w", issuer, err)
+	}
+	issuerHost := strings.ToLower(issuerParsed.Hostname())
+	tokenParsed, err := url.Parse(tokenURL)
+	if err != nil {
+		return fmt.Errorf("parse tokenURL %q: %w", tokenURL, err)
+	}
+	if strings.ToLower(tokenParsed.Hostname()) != issuerHost {
+		return fmt.Errorf("tokenURL host %q does not match issuer host %q", tokenParsed.Hostname(), issuerHost)
 	}
 	return nil
 }

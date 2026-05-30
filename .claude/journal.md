@@ -6,6 +6,16 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-05-30: Bluesky auth-server discovery follows the RFC 9728 protected-resource hop (#43)
+
+- Fixed `Bluesky.AuthCodeURLForHandle`, which queried the **PDS** for `/.well-known/oauth-authorization-server` and got an Express 404 (a Bluesky PDS does not serve that document — only the auth server, e.g. `bsky.social`, does). Discovery is two hops: resolve handle→DID→PDS, then `GET PDS/.well-known/oauth-protected-resource` → `authorization_servers[0]` → fetch AS metadata from *that* host.
+- New `discoverAuthServer(ctx, pdsURL)` performs the protected-resource hop. **Falls back** to treating the PDS as its own AS when the document is missing/unreachable/empty (backward-compat for self-hosted PDS==AS deployments, chosen over a hard fail). A document that *names* an AS which fails the SSRF guard is a hard error, not a fallback. The RFC 9728 `resource` field is intentionally not validated.
+- Re-anchored host checks on the **AS host**, not the PDS — since PDS and AS are routinely different hosts: the issuer-match now compares `asMeta.Issuer` to the discovered AS URL; `validateAuthServerEndpoints` ties authorize/token/PAR endpoints to the AS host; `validateRefreshTokenURLs` ties `tokenURL` to the **issuer** host (pdsURL is still SSRF-validated but no longer required to share the token host). `ErrBlueskyIssuerMismatch` text updated accordingly.
+- The shared test fake now serves the protected-resource document so existing tests exercise the real discovery path; `TestBluesky_TwoHopDiscovery_SeparateAuthServer` is the regression test (separate PDS/AS hosts, PDS 404s on oauth-authorization-server).
+- Follow-up still open (not this issue): provider hardcodes `clientMetadataURL` as `client_id`, blocking the AT Protocol localhost dev-client form.
+
+---
+
 ### 2026-05-12: Opt-in agent-only fallback for GORM SubscriptionService (#41)
 
 - New `WithGORMAgentFallback() GORMOption` on the GORM subscription adapter. When enabled, an account-scoped lookup that returns `gorm.ErrRecordNotFound` retries against the existing agent-only branch (`account_id = '' OR NULL`). The account-scoped row still wins on a hit (the `err == nil` early-return is unconditional on the flag), and a real DB error on the first query short-circuits before the flag is consulted — the fallback does not mask errors
