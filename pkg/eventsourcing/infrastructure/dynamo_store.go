@@ -47,6 +47,9 @@ func NewDynamoEventStore(client *dynamodb.Client, tableName string) *DynamoEvent
 
 // Append appends events to the store for the given aggregate.
 // If expectedVersion is not -1, optimistic concurrency control is enforced.
+// expectedVersion == -1 skips the version check but still refuses to
+// overwrite: appending an event whose (aggregate_id, sequence_no) is
+// already stored fails with ErrConcurrencyConflict.
 func (s *DynamoEventStore) Append(ctx context.Context, aggregateID string, expectedVersion int, events ...domain.EventEnvelope[any]) error {
 	if len(events) == 0 {
 		return nil
@@ -66,7 +69,7 @@ func (s *DynamoEventStore) Append(ctx context.Context, aggregateID string, expec
 			return fmt.Errorf("%w: batch size %d exceeds DynamoDB limit of %d",
 				domain.ErrInvalidEvent, len(events), dynamoMaxTransactItems)
 		}
-		return s.appendWithoutVersionCheck(ctx, events)
+		return s.appendWithoutVersionCheck(ctx, aggregateID, events)
 	}
 
 	// Reserve 1 slot for the ConditionCheck item used in version verification
@@ -79,42 +82,27 @@ func (s *DynamoEventStore) Append(ctx context.Context, aggregateID string, expec
 	return s.appendWithVersionCheck(ctx, aggregateID, expectedVersion, events)
 }
 
-func (s *DynamoEventStore) appendWithoutVersionCheck(ctx context.Context, events []domain.EventEnvelope[any]) error {
-	// Use BatchWriteItem for batches of up to 25 items
-	const batchLimit = 25
-	for i := 0; i < len(events); i += batchLimit {
-		end := min(i+batchLimit, len(events))
-		batch := events[i:end]
-
-		writeRequests := make([]types.WriteRequest, len(batch))
-		for j, event := range batch {
-			item, err := envelopeToDynamoItem(event)
-			if err != nil {
-				return fmt.Errorf("%w: %v", domain.ErrInvalidEvent, err)
-			}
-			writeRequests[j] = types.WriteRequest{
-				PutRequest: &types.PutRequest{Item: item},
-			}
-		}
-
-		result, err := s.client.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
-			RequestItems: map[string][]types.WriteRequest{
-				s.tableName: writeRequests,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("failed to batch write events: %w", err)
-		}
-		if len(result.UnprocessedItems) > 0 {
-			return fmt.Errorf("failed to write all events: %d items were not processed by DynamoDB",
-				len(result.UnprocessedItems[s.tableName]))
-		}
+// appendWithoutVersionCheck writes events without verifying the aggregate's
+// current version, but still refuses to overwrite: every Put carries
+// attribute_not_exists, so an event whose (aggregate_id, sequence_no)
+// already exists fails the whole transaction with ErrConcurrencyConflict.
+// A previous implementation used BatchWriteItem, whose PutRequests silently
+// REPLACE existing items — appending a duplicate sequence number destroyed
+// the stored event with no error — and which could partially persist
+// earlier batches before reporting unprocessed items. TransactWriteItems is
+// all-or-nothing, and the -1 path is capped at dynamoMaxTransactItems in
+// Append, so a single transaction always suffices.
+func (s *DynamoEventStore) appendWithoutVersionCheck(ctx context.Context, aggregateID string, events []domain.EventEnvelope[any]) error {
+	transactItems, err := s.eventPutItems(events)
+	if err != nil {
+		return err
 	}
-	return nil
+
+	// putOffset 0: every transact item is an event Put.
+	return s.transactWriteEvents(ctx, aggregateID, transactItems, events, 0, "")
 }
 
 func (s *DynamoEventStore) appendWithVersionCheck(ctx context.Context, aggregateID string, expectedVersion int, events []domain.EventEnvelope[any]) error {
-	// Build Put items for each event with attribute_not_exists to prevent duplicate (aggregate_id, sequence_no)
 	transactItems := make([]types.TransactWriteItem, 0, len(events)+1)
 
 	// Add an atomic ConditionCheck to verify the expected version exists.
@@ -133,10 +121,31 @@ func (s *DynamoEventStore) appendWithVersionCheck(ctx context.Context, aggregate
 		})
 	}
 
+	putItems, err := s.eventPutItems(events)
+	if err != nil {
+		return err
+	}
+	transactItems = append(transactItems, putItems...)
+
+	// putOffset 1 when a ConditionCheck item precedes the event Puts, so a
+	// cancellation reason index maps back to the right event.
+	putOffset := 0
+	if expectedVersion > 0 {
+		putOffset = 1
+	}
+	return s.transactWriteEvents(ctx, aggregateID, transactItems, events, putOffset,
+		fmt.Sprintf("expected version %d", expectedVersion))
+}
+
+// eventPutItems converts events to transactional Put items, each guarded by
+// attribute_not_exists to prevent overwriting a stored (aggregate_id,
+// sequence_no) item.
+func (s *DynamoEventStore) eventPutItems(events []domain.EventEnvelope[any]) ([]types.TransactWriteItem, error) {
+	transactItems := make([]types.TransactWriteItem, 0, len(events))
 	for _, event := range events {
 		item, err := envelopeToDynamoItem(event)
 		if err != nil {
-			return fmt.Errorf("%w: %v", domain.ErrInvalidEvent, err)
+			return nil, fmt.Errorf("%w: %v", domain.ErrInvalidEvent, err)
 		}
 		transactItems = append(transactItems, types.TransactWriteItem{
 			Put: &types.Put{
@@ -146,17 +155,47 @@ func (s *DynamoEventStore) appendWithVersionCheck(ctx context.Context, aggregate
 			},
 		})
 	}
+	return transactItems, nil
+}
 
+// transactWriteEvents executes the transaction and maps conflict-class
+// cancellations to ErrConcurrencyConflict. CancellationReasons map
+// index-for-index onto transactItems, and event Puts start at putOffset
+// (1 when a version ConditionCheck precedes them, else 0), so a failed
+// condition can name the exact cause: versionDetail when the version
+// ConditionCheck itself failed, or the colliding event's sequence number
+// when a Put hit an already-stored (aggregate_id, sequence_no) item.
+// A TransactionConflict reason (another in-flight transaction touched the
+// same items) is also mapped to ErrConcurrencyConflict: it is a transient
+// concurrency failure and retrying — the standard caller response to the
+// sentinel — is the correct treatment.
+func (s *DynamoEventStore) transactWriteEvents(ctx context.Context, aggregateID string, transactItems []types.TransactWriteItem, events []domain.EventEnvelope[any], putOffset int, versionDetail string) error {
 	_, err := s.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: transactItems,
 	})
 	if err != nil {
 		var txCancelled *types.TransactionCanceledException
 		if errors.As(err, &txCancelled) {
+			for i, reason := range txCancelled.CancellationReasons {
+				if reason.Code == nil || *reason.Code != "ConditionalCheckFailed" {
+					continue
+				}
+				if i < putOffset {
+					// The version ConditionCheck item failed.
+					return fmt.Errorf("%w: %s for aggregate %s",
+						domain.ErrConcurrencyConflict, versionDetail, aggregateID)
+				}
+				if evIdx := i - putOffset; evIdx < len(events) {
+					return fmt.Errorf("%w: sequence number %d already stored for aggregate %s",
+						domain.ErrConcurrencyConflict, events[evIdx].SequenceNo, aggregateID)
+				}
+				return fmt.Errorf("%w: conditional check failed for aggregate %s",
+					domain.ErrConcurrencyConflict, aggregateID)
+			}
 			for _, reason := range txCancelled.CancellationReasons {
-				if reason.Code != nil && *reason.Code == "ConditionalCheckFailed" {
-					return fmt.Errorf("%w: expected version %d",
-						domain.ErrConcurrencyConflict, expectedVersion)
+				if reason.Code != nil && *reason.Code == "TransactionConflict" {
+					return fmt.Errorf("%w: concurrent transaction in flight for aggregate %s (transient, safe to retry)",
+						domain.ErrConcurrencyConflict, aggregateID)
 				}
 			}
 			// Not a concurrency conflict — surface the actual transaction cancellation

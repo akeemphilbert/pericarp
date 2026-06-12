@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -156,6 +157,12 @@ func setupDynamoStore(t *testing.T) domain.EventStore {
 
 	endpoint, err := startDynamoContainer(t)
 	if err != nil {
+		// In CI the DynamoDB tests are load-bearing (they pin the
+		// no-overwrite contract), so a container hiccup must fail loudly
+		// instead of turning the whole suite into a green skip.
+		if os.Getenv("PERICARP_REQUIRE_DOCKER_TESTS") != "" {
+			t.Fatalf("PERICARP_REQUIRE_DOCKER_TESTS is set but the DynamoDB container failed to start: %v", err)
+		}
 		t.Skipf("skipping DynamoDB test: %v (Docker may not be available)", err)
 	}
 
@@ -585,6 +592,92 @@ func TestDynamoStore_GetEventsRange(t *testing.T) {
 		}
 		if len(allFromVersion2) != 3 {
 			t.Fatalf("expected 3 events from version 2 onwards, got %d", len(allFromVersion2))
+		}
+	})
+}
+
+// TestDynamoStore_NoVersionCheck_NeverOverwrites pins the contract that the
+// expectedVersion == -1 path refuses to overwrite a stored event. The
+// previous BatchWriteItem implementation silently REPLACED items with the
+// same (aggregate_id, sequence_no) — destroying the stored event with no
+// error — and could leave earlier batches persisted when a later batch
+// failed. The conditional TransactWriteItems implementation must reject the
+// whole append with ErrConcurrencyConflict and leave the stored events
+// untouched.
+func TestDynamoStore_NoVersionCheck_NeverOverwrites(t *testing.T) {
+	t.Parallel()
+
+	t.Run("duplicate sequence is rejected and original survives", func(t *testing.T) {
+		t.Parallel()
+
+		store := setupDynamoStore(t)
+		defer func() { _ = store.Close() }()
+
+		ctx := context.Background()
+		aggregateID := "no-overwrite-aggregate"
+
+		original := createTestEvent(aggregateID, "original-event", "test.created", 1)
+		if err := store.Append(ctx, aggregateID, -1, original); err != nil {
+			t.Fatalf("failed to append original event: %v", err)
+		}
+
+		imposter := createTestEvent(aggregateID, "imposter-event", "test.overwritten", 1)
+		err := store.Append(ctx, aggregateID, -1, imposter)
+		if err == nil {
+			t.Fatal("expected error appending duplicate sequence number, got nil")
+		}
+		if !errors.Is(err, domain.ErrConcurrencyConflict) {
+			t.Fatalf("error = %v, want errors.Is(err, ErrConcurrencyConflict)", err)
+		}
+
+		events, err := store.GetEvents(ctx, aggregateID)
+		if err != nil {
+			t.Fatalf("failed to get events: %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("expected 1 event, got %d", len(events))
+		}
+		if events[0].ID != "original-event" {
+			t.Errorf("stored event ID = %q, want original-event (original was overwritten)", events[0].ID)
+		}
+		if events[0].EventType != "test.created" {
+			t.Errorf("stored event type = %q, want test.created", events[0].EventType)
+		}
+	})
+
+	t.Run("partial overlap persists nothing", func(t *testing.T) {
+		t.Parallel()
+
+		store := setupDynamoStore(t)
+		defer func() { _ = store.Close() }()
+
+		ctx := context.Background()
+		aggregateID := "atomic-aggregate"
+
+		if err := store.Append(ctx, aggregateID, -1,
+			createTestEvent(aggregateID, "event-1", "test.created", 1)); err != nil {
+			t.Fatalf("failed to append seed event: %v", err)
+		}
+
+		// Batch where one event collides (seq 1) and one is new (seq 2):
+		// the transaction must be all-or-nothing, so seq 2 must NOT land.
+		err := store.Append(ctx, aggregateID, -1,
+			createTestEvent(aggregateID, "colliding-event", "test.updated", 1),
+			createTestEvent(aggregateID, "new-event", "test.updated", 2),
+		)
+		if !errors.Is(err, domain.ErrConcurrencyConflict) {
+			t.Fatalf("error = %v, want errors.Is(err, ErrConcurrencyConflict)", err)
+		}
+
+		events, err := store.GetEvents(ctx, aggregateID)
+		if err != nil {
+			t.Fatalf("failed to get events: %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("expected only the seed event after rejected batch, got %d events", len(events))
+		}
+		if events[0].ID != "event-1" {
+			t.Errorf("surviving event ID = %q, want event-1", events[0].ID)
 		}
 	})
 }
