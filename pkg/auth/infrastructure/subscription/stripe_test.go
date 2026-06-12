@@ -476,15 +476,16 @@ func TestStripe_WithHTTPClient_UsesProvidedClient(t *testing.T) {
 func TestStripe_CanceledButStillInPaidWindow_StaysActive(t *testing.T) {
 	// Stripe flips status to "canceled" the moment the merchant cancels
 	// even though current_period_end is still in the future and the
-	// customer is entitled to access through that date. Adapter must
-	// keep IsActive() = true and surface the cancellation in metadata.
+	// customer is entitled to access through that date. Adapter must keep
+	// the claim active within the paid window (asserted via IsActiveAt
+	// below) and surface the cancellation in metadata.
 	t.Parallel()
 
-	// Anchor on wall-clock time. SubscriptionClaim.IsActive() reads
-	// time.Now() directly (not the injected clock), so a hardcoded date
-	// would silently drift and start failing once wall-clock advances
-	// past periodEnd.
-	now := time.Now().UTC()
+	// Activity is asserted via IsActiveAt(now) against the same frozen
+	// instant injected into the adapter — IsActive() reads the real wall
+	// clock, and pairing it with a fixed date would silently start failing
+	// once wall-clock now passed periodEnd.
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
 	periodEnd := now.Add(7 * 24 * time.Hour).Unix()
 	body := stripeFixture(stripeSub("sub_1", "canceled", periodEnd, "pro", false))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -503,8 +504,8 @@ func TestStripe_CanceledButStillInPaidWindow_StaysActive(t *testing.T) {
 	if claim.Status != auth.SubscriptionStatusActive {
 		t.Errorf("Status = %q, want Active while still in paid window", claim.Status)
 	}
-	if !claim.IsActive() {
-		t.Error("IsActive() = false, want true")
+	if !claim.IsActiveAt(now) {
+		t.Error("IsActiveAt(now) = false, want true")
 	}
 	if got := claim.Metadata["cancel_at_period_end"]; got != true {
 		t.Errorf("cancel_at_period_end metadata = %v, want true", got)

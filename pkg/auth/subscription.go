@@ -51,17 +51,27 @@ type SubscriptionClaim struct {
 	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
-// IsActive reports whether the subscription should grant paid-tier access.
-// Returns false for a nil receiver, for any non-active/trialing status, and
-// for an explicit ExpiresAt in the past — that last guard means a stale
-// snapshot held across an account-switch (which preserves the claim
-// verbatim) cannot grant access beyond the provider-attested expiry. A
-// zero ExpiresAt is treated as "no expiry expressed" and ignored.
+// IsActive reports whether the subscription should grant paid-tier access
+// right now. It is IsActiveAt evaluated at time.Now(); see IsActiveAt for
+// the actual rules.
 func (s *SubscriptionClaim) IsActive() bool {
+	return s.IsActiveAt(time.Now())
+}
+
+// IsActiveAt reports whether the subscription should grant paid-tier access
+// at the given instant. Returns false for a nil receiver, for any
+// non-active/trialing status, and for an explicit ExpiresAt strictly before
+// now — that last guard means a stale snapshot held across an
+// account-switch (which preserves the claim verbatim) cannot grant access
+// beyond the provider-attested expiry. A zero ExpiresAt is treated as "no
+// expiry expressed" and ignored. Tests and any caller with an injected
+// clock should use this instead of IsActive so the result does not depend
+// on the wall clock.
+func (s *SubscriptionClaim) IsActiveAt(now time.Time) bool {
 	if s == nil {
 		return false
 	}
-	if !s.ExpiresAt.IsZero() && time.Now().After(s.ExpiresAt) {
+	if !s.ExpiresAt.IsZero() && now.After(s.ExpiresAt) {
 		return false
 	}
 	switch s.Status {
