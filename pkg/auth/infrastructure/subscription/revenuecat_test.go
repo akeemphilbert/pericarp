@@ -52,15 +52,17 @@ func TestRevenueCat_NoEntitlements_ReturnsNil(t *testing.T) {
 func TestRevenueCat_ActiveEntitlement(t *testing.T) {
 	t.Parallel()
 
-	// This test asserts claim.IsActive(), which consults the real wall clock
-	// (time.Now()) by design — it is the production "is this still valid right
-	// now?" predicate. So the expiry must be anchored to real time, not a
-	// frozen date: a hardcoded past date made the test a time-bomb that
-	// silently started failing once wall-clock now passed the fixed expiry.
-	// Truncating to whole seconds keeps the RFC3339 round-trip exact for the
-	// ExpiresAt.Equal assertion below. The injected adapter clock is set to the
-	// same now so status computation stays consistent with IsActive.
-	now := time.Now().UTC().Truncate(time.Second)
+	// Activity is asserted via IsActiveAt(now) against the same frozen
+	// instant injected into the adapter — never via IsActive(), which reads
+	// the real wall clock. Pairing IsActive() with a frozen fixture date
+	// once made this test a time-bomb that started failing when wall-clock
+	// now passed the fixed expiry; anchoring the fixture on time.Now()
+	// avoided that but left the assertion wall-clock-dependent. A frozen
+	// date plus IsActiveAt keeps every input deterministic. Keep the
+	// fixture on whole seconds: expires round-trips through RFC3339, which
+	// drops sub-second precision, and the ExpiresAt.Equal assertion below
+	// requires an exact match.
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
 	expires := now.Add(30 * 24 * time.Hour)
 	body := `{
 		"subscriber": {
@@ -114,8 +116,8 @@ func TestRevenueCat_ActiveEntitlement(t *testing.T) {
 	if got := claim.Metadata["store"]; got != "app_store" {
 		t.Errorf("Metadata[store] = %v, want app_store", got)
 	}
-	if !claim.IsActive() {
-		t.Error("IsActive() = false, want true")
+	if !claim.IsActiveAt(now) {
+		t.Error("IsActiveAt(now) = false, want true")
 	}
 }
 
@@ -205,8 +207,8 @@ func TestRevenueCat_ExpiredEntitlement_MarkedInactive(t *testing.T) {
 	if claim.Status != auth.SubscriptionStatusInactive {
 		t.Errorf("Status = %q, want %q", claim.Status, auth.SubscriptionStatusInactive)
 	}
-	if claim.IsActive() {
-		t.Error("IsActive() = true, want false for expired entitlement")
+	if claim.IsActiveAt(now) {
+		t.Error("IsActiveAt(now) = true, want false for expired entitlement")
 	}
 }
 
@@ -376,8 +378,8 @@ func TestRevenueCat_LifetimeRevoked_MarkedInactive(t *testing.T) {
 	if claim.Status != auth.SubscriptionStatusInactive {
 		t.Errorf("Status = %q, want %q for revoked lifetime", claim.Status, auth.SubscriptionStatusInactive)
 	}
-	if claim.IsActive() {
-		t.Error("IsActive() = true, want false for revoked lifetime")
+	if claim.IsActiveAt(now) {
+		t.Error("IsActiveAt(now) = true, want false for revoked lifetime")
 	}
 }
 

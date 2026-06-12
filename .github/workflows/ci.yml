@@ -35,6 +35,10 @@ jobs:
       
       - name: Run tests
         run: make test
+        env:
+          # Docker is available on ubuntu-latest; refuse to silently skip
+          # the container-backed DynamoDB regression tests.
+          PERICARP_REQUIRE_DOCKER_TESTS: "1"
       
       - name: Run linter
         uses: golangci/golangci-lint-action@v7

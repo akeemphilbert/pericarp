@@ -3,8 +3,10 @@ package infrastructure_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
@@ -245,6 +247,173 @@ func TestFileStore_NewFileStore(t *testing.T) {
 		_, err := infrastructure.NewFileStore("")
 		if err == nil {
 			t.Fatal("expected error for empty directory, got nil")
+		}
+	})
+}
+
+// TestFileStore_ConcurrentAccess hammers a cold-cache store from many
+// goroutines. Reading an uncached aggregate populates the cache, so
+// concurrent reads exercise the read-path cache write that previously
+// happened under RLock and crashed with "concurrent map writes" (caught
+// only under -race with concurrent callers, which no test had).
+// GetEventsFromVersion, GetEventsRange, and GetCurrentVersion all funnel
+// through GetEvents, so they are exercised alongside it.
+func TestFileStore_ConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
+	t.Run("concurrent reads on uncached aggregates", func(t *testing.T) {
+		t.Parallel()
+
+		baseDir := setupTestDir(t)
+		defer cleanupTestDir(t, baseDir)
+
+		// NewFileStore pre-loads every existing file into the cache, so the
+		// only reliable cache misses are aggregates with no file at all.
+		// Every goroutine's first read of each ID below races through the
+		// miss path, which loads from disk and writes the cache entry.
+		store, err := infrastructure.NewFileStore(baseDir)
+		if err != nil {
+			t.Fatalf("failed to create file store: %v", err)
+		}
+		defer func() { _ = store.Close() }()
+
+		ctx := context.Background()
+
+		const goroutines = 16
+		const aggregates = 8
+
+		var wg sync.WaitGroup
+		errCh := make(chan error, goroutines*aggregates*4)
+
+		for range goroutines {
+			wg.Go(func() {
+				for a := range aggregates {
+					id := fmt.Sprintf("cold-aggregate-%d", a)
+					if _, err := store.GetEvents(ctx, id); err != nil {
+						errCh <- fmt.Errorf("GetEvents(%s): %w", id, err)
+					}
+					if _, err := store.GetEventsFromVersion(ctx, id, 1); err != nil {
+						errCh <- fmt.Errorf("GetEventsFromVersion(%s): %w", id, err)
+					}
+					if _, err := store.GetEventsRange(ctx, id, 1, 10); err != nil {
+						errCh <- fmt.Errorf("GetEventsRange(%s): %w", id, err)
+					}
+					if _, err := store.GetCurrentVersion(ctx, id); err != nil {
+						errCh <- fmt.Errorf("GetCurrentVersion(%s): %w", id, err)
+					}
+				}
+			})
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Error(err)
+		}
+	})
+
+	t.Run("concurrent appends and reads", func(t *testing.T) {
+		t.Parallel()
+
+		baseDir := setupTestDir(t)
+		defer cleanupTestDir(t, baseDir)
+
+		store, err := infrastructure.NewFileStore(baseDir)
+		if err != nil {
+			t.Fatalf("failed to create file store: %v", err)
+		}
+		defer func() { _ = store.Close() }()
+
+		ctx := context.Background()
+		const writers = 8
+
+		var wg sync.WaitGroup
+		// Worst case per writer: 1 append error + `writers` read errors.
+		// Sends block (never drop) on a full buffer and nothing drains until
+		// after wg.Wait(), so an undersized buffer would deadlock the test
+		// in exactly the failure case it exists to report.
+		errCh := make(chan error, writers*(writers+1))
+
+		// Each writer appends to its own aggregate while concurrently
+		// reading every other writer's (mostly uncached) aggregate.
+		for w := range writers {
+			wg.Go(func() {
+				id := fmt.Sprintf("writer-aggregate-%d", w)
+				ev := createTestEvent(id, fmt.Sprintf("event-%d", w), "test.created", 1)
+				if err := store.Append(ctx, id, 0, ev); err != nil {
+					errCh <- fmt.Errorf("Append(%s): %w", id, err)
+				}
+				for other := range writers {
+					otherID := fmt.Sprintf("writer-aggregate-%d", other)
+					if _, err := store.GetEvents(ctx, otherID); err != nil {
+						errCh <- fmt.Errorf("GetEvents(%s): %w", otherID, err)
+					}
+				}
+			})
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			t.Error(err)
+		}
+
+		// Every writer's event must have survived.
+		for w := range writers {
+			id := fmt.Sprintf("writer-aggregate-%d", w)
+			version, err := store.GetCurrentVersion(ctx, id)
+			if err != nil {
+				t.Errorf("GetCurrentVersion(%s): %v", id, err)
+				continue
+			}
+			if version != 1 {
+				t.Errorf("GetCurrentVersion(%s) = %d, want 1", id, version)
+			}
+		}
+	})
+
+	t.Run("optimistic append has exactly one winner", func(t *testing.T) {
+		t.Parallel()
+
+		baseDir := setupTestDir(t)
+		defer cleanupTestDir(t, baseDir)
+
+		store, err := infrastructure.NewFileStore(baseDir)
+		if err != nil {
+			t.Fatalf("failed to create file store: %v", err)
+		}
+		defer func() { _ = store.Close() }()
+
+		ctx := context.Background()
+		const contenders = 8
+		aggregateID := "contended-aggregate"
+
+		var wg sync.WaitGroup
+		results := make(chan error, contenders)
+
+		for c := range contenders {
+			wg.Go(func() {
+				ev := createTestEvent(aggregateID, fmt.Sprintf("contender-%d", c), "test.created", 1)
+				results <- store.Append(ctx, aggregateID, 0, ev)
+			})
+		}
+		wg.Wait()
+		close(results)
+
+		winners, conflicts := 0, 0
+		for err := range results {
+			switch {
+			case err == nil:
+				winners++
+			case errors.Is(err, domain.ErrConcurrencyConflict):
+				conflicts++
+			default:
+				t.Errorf("unexpected append error: %v", err)
+			}
+		}
+		if winners != 1 {
+			t.Errorf("winners = %d, want exactly 1", winners)
+		}
+		if conflicts != contenders-1 {
+			t.Errorf("conflicts = %d, want %d", conflicts, contenders-1)
 		}
 	})
 }

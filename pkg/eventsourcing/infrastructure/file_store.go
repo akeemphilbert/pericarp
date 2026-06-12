@@ -193,22 +193,30 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 
 // GetEvents retrieves all events for the given aggregate ID.
 func (f *FileStore) GetEvents(ctx context.Context, aggregateID string) ([]domain.EventEnvelope[any], error) {
+	// Fast path: cache hit under the read lock.
 	f.mu.RLock()
-	defer f.mu.RUnlock()
+	events, exists := f.cache[aggregateID]
+	f.mu.RUnlock()
+	if exists {
+		return events, nil
+	}
 
-	// Check cache first
+	// Cache miss: caching the loaded events is a map write, so it needs the
+	// write lock. Re-check after acquiring it — another goroutine may have
+	// populated the entry between the two locks.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if events, exists := f.cache[aggregateID]; exists {
 		return events, nil
 	}
 
-	// Load from disk
 	filePath := f.getFilePath(aggregateID)
 	events, err := f.loadFromFile(filePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load events for aggregate %s: %w", aggregateID, err)
 	}
 
-	// Cache the result
 	f.cache[aggregateID] = events
 
 	return events, nil
