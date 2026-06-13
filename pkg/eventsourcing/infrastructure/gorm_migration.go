@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"gorm.io/gorm"
+
+	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 )
 
 // eventPositionsAdvisoryLockID serializes concurrent position migrations
@@ -26,8 +28,17 @@ const eventPositionsAdvisoryLockID int64 = 0x7065726963617270 // "pericarp"
 // migration is idempotent and safe to run on every store construction.
 //
 // Postgres 13+ is required (xid8, pg_current_xact_id, pg_current_snapshot).
+// Only Postgres and SQLite are supported: position assignment relies on
+// either the sequence default (Postgres) or serialized writers (SQLite), and
+// running the MAX(position)+1 path on a multi-writer engine would silently
+// corrupt the feed.
 func migrateEventPositions(db *gorm.DB) error {
-	isPostgres := db.Name() == "postgres"
+	dialect := db.Name()
+	isPostgres := dialect == "postgres"
+	if !isPostgres && dialect != "sqlite" {
+		return fmt.Errorf("%w: the global event feed supports postgres and sqlite, got dialect %q",
+			domain.ErrGlobalOrderingNotSupported, dialect)
+	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
 		if isPostgres {
@@ -60,9 +71,11 @@ func migrateEventPositions(db *gorm.DB) error {
 			return nil
 		}
 
-		// Point the sequence past the backfilled maximum — but only if it has
-		// never been used. Rewinding a live sequence would hand out duplicate
-		// positions to in-flight writers.
+		// Point the sequence past the backfilled maximum. Never rewind a live
+		// sequence (that would hand out duplicate positions to in-flight
+		// writers), but always advance it: backfilled rows can land above
+		// last_value when NULL-position rows appear on a live table, e.g.
+		// restored from a pre-position backup.
 		var isCalled bool
 		if err := tx.Raw("SELECT is_called FROM events_position_seq").Scan(&isCalled).Error; err != nil {
 			return fmt.Errorf("failed to inspect position sequence: %w", err)
@@ -70,6 +83,10 @@ func migrateEventPositions(db *gorm.DB) error {
 		if !isCalled {
 			if err := tx.Exec("SELECT setval('events_position_seq', COALESCE((SELECT MAX(position) FROM events), 0) + 1, false)").Error; err != nil {
 				return fmt.Errorf("failed to initialize position sequence: %w", err)
+			}
+		} else {
+			if err := tx.Exec("SELECT setval('events_position_seq', GREATEST((SELECT last_value FROM events_position_seq), COALESCE((SELECT MAX(position) FROM events), 1)), true)").Error; err != nil {
+				return fmt.Errorf("failed to advance position sequence: %w", err)
 			}
 		}
 

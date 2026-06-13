@@ -217,12 +217,13 @@ func (m *MemoryStore) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Clear all data
+	// Clear all data. lastPos deliberately survives so positions stay
+	// monotonic if the store is reused after Close — a feed reader holding a
+	// cursor must never see a position reused for a different event.
 	m.events = make(map[string][]domain.EventEnvelope[any])
 	m.eventsByID = make(map[string]domain.EventEnvelope[any])
 	m.versions = make(map[string]int)
 	m.log = nil
-	m.lastPos = 0
 
 	return nil
 }

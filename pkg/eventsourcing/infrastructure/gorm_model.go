@@ -53,7 +53,7 @@ type GormEventModel struct {
 	EventType     string    `gorm:"column:event_type"`
 	SequenceNo    int       `gorm:"column:sequence_no;uniqueIndex:idx_aggregate_sequence"`
 	TransactionID string    `gorm:"column:transaction_id;index"`
-	Position      int64     `gorm:"column:position;index:idx_events_position"`
+	Position      int64     `gorm:"column:position;uniqueIndex:idx_events_position"`
 	Payload       JSONB     `gorm:"column:payload;type:jsonb"`
 	Metadata      JSONB     `gorm:"column:metadata;type:jsonb"`
 	CreatedAt     time.Time `gorm:"column:created_at"`

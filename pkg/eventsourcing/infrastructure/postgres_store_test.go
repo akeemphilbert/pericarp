@@ -3,6 +3,7 @@ package infrastructure_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 )
 
@@ -219,6 +221,12 @@ func TestPostgresStore_ReadAfter_CommitVisibilityGuard(t *testing.T) {
 		t.Fatalf("failed to get sql.DB: %v", err)
 	}
 
+	// Seed one committed event: the guard must withhold in-flight writes
+	// without hiding already-committed ones (liveness, not just safety).
+	if err := store.Append(ctx, "agg-seed", -1, createTestEvent("agg-seed", "ev-0", "test.created", 1)); err != nil {
+		t.Fatalf("failed to append seed event: %v", err)
+	}
+
 	// Writer A: insert an event (claiming the earliest position via the
 	// sequence default) but do not commit yet.
 	connA, err := sqlDB.Conn(ctx)
@@ -242,20 +250,14 @@ func TestPostgresStore_ReadAfter_CommitVisibilityGuard(t *testing.T) {
 	}
 
 	// The earlier-position transaction is still open: the committed later
-	// event must be withheld, otherwise a feed reader would advance past the
-	// earlier event and lose it forever.
+	// event must be withheld (a feed reader advancing past it would lose
+	// ev-early forever), while the previously committed seed event must
+	// remain visible.
 	events, err := store.ReadAfter(ctx, 0, 0)
 	if err != nil {
 		t.Fatalf("ReadAfter failed: %v", err)
 	}
-	if len(events) != 0 {
-		ids := make([]string, len(events))
-		for i, e := range events {
-			ids[i] = e.ID
-		}
-		t.Fatalf("expected no events while earlier-position transaction is in flight, got %d (%v)",
-			len(events), ids)
-	}
+	assertEventIDs(t, events, []string{"ev-0"})
 
 	if _, err := connA.ExecContext(ctx, "COMMIT"); err != nil {
 		t.Fatalf("failed to commit writer A: %v", err)
@@ -265,10 +267,89 @@ func TestPostgresStore_ReadAfter_CommitVisibilityGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAfter failed: %v", err)
 	}
-	assertEventIDs(t, events, []string{"ev-early", "ev-late"})
+	assertEventIDs(t, events, []string{"ev-0", "ev-early", "ev-late"})
+	for i := 1; i < len(events); i++ {
+		if events[i-1].Position >= events[i].Position {
+			t.Errorf("expected strictly increasing positions, got %d then %d",
+				events[i-1].Position, events[i].Position)
+		}
+	}
+}
+
+// TestPostgresStore_MigrationRerun_SequenceContinues pins the migration's
+// idempotency: constructing the store again on a live database (the normal
+// every-startup path) must not rewind the position sequence or fail on the
+// already-applied DDL.
+func TestPostgresStore_MigrationRerun_SequenceContinues(t *testing.T) {
+	db := setupPostgresDB(t)
+	ctx := context.Background()
+
+	store1, err := infrastructure.NewGormEventStore(db)
+	if err != nil {
+		t.Fatalf("failed to create first store: %v", err)
+	}
+	if err := store1.Append(ctx, "agg-a", -1, createTestEvent("agg-a", "ev-1", "test.created", 1)); err != nil {
+		t.Fatalf("failed to append via first store: %v", err)
+	}
+
+	store2, err := infrastructure.NewGormEventStore(db)
+	if err != nil {
+		t.Fatalf("failed to re-create store on live database: %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+	if err := store2.Append(ctx, "agg-b", -1, createTestEvent("agg-b", "ev-2", "test.created", 1)); err != nil {
+		t.Fatalf("failed to append via second store: %v", err)
+	}
+
+	events, err := store2.ReadAfter(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("ReadAfter failed: %v", err)
+	}
+	assertEventIDs(t, events, []string{"ev-1", "ev-2"})
 	if events[0].Position >= events[1].Position {
-		t.Errorf("expected ev-early before ev-late by position, got %d then %d",
+		t.Errorf("expected positions to continue across constructions, got %d then %d",
 			events[0].Position, events[1].Position)
+	}
+}
+
+// TestPostgresStore_ExistingMethods_RoundTrip covers the dialect whose insert
+// path changed (Omit + sequence default): optimistic concurrency conflicts
+// and per-aggregate reads must behave exactly as on the other stores.
+func TestPostgresStore_ExistingMethods_RoundTrip(t *testing.T) {
+	db := setupPostgresDB(t)
+	ctx := context.Background()
+
+	store, err := infrastructure.NewGormEventStore(db)
+	if err != nil {
+		t.Fatalf("failed to create gorm event store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if err := store.Append(ctx, "agg-a", 0, createTestEvent("agg-a", "ev-1", "test.created", 1)); err != nil {
+		t.Fatalf("failed to append: %v", err)
+	}
+
+	err = store.Append(ctx, "agg-a", 0, createTestEvent("agg-a", "ev-dup", "test.updated", 2))
+	if !errors.Is(err, domain.ErrConcurrencyConflict) {
+		t.Fatalf("expected ErrConcurrencyConflict on stale version, got %v", err)
+	}
+
+	if err := store.Append(ctx, "agg-a", 1, createTestEvent("agg-a", "ev-2", "test.updated", 2)); err != nil {
+		t.Fatalf("failed to append with correct version: %v", err)
+	}
+
+	events, err := store.GetEvents(ctx, "agg-a")
+	if err != nil {
+		t.Fatalf("GetEvents failed: %v", err)
+	}
+	assertEventIDs(t, events, []string{"ev-1", "ev-2"})
+
+	version, err := store.GetCurrentVersion(ctx, "agg-a")
+	if err != nil {
+		t.Fatalf("GetCurrentVersion failed: %v", err)
+	}
+	if version != 2 {
+		t.Errorf("expected version 2, got %d", version)
 	}
 }
 

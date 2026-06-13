@@ -195,6 +195,19 @@ func TestEventStore_ReadAfter(t *testing.T) {
 					t.Errorf("expected no events, got %d", len(events))
 				}
 			})
+
+			t.Run("does not mutate caller envelopes", func(t *testing.T) {
+				store := st.setupStore(t)
+				defer func() { _ = store.Close() }()
+
+				event := createTestEvent("agg-a", "ev-1", "test.created", 1)
+				if err := store.Append(ctx, "agg-a", -1, event); err != nil {
+					t.Fatalf("failed to append: %v", err)
+				}
+				if event.Position != 0 {
+					t.Errorf("store leaked its assigned position %d into the caller's envelope", event.Position)
+				}
+			})
 		})
 	}
 }
@@ -355,5 +368,63 @@ func TestGormStore_ReadAfter_BackfillsLegacyRows(t *testing.T) {
 	assertEventIDs(t, events, []string{"ev-4"})
 	if events[0].Position != 4 {
 		t.Errorf("expected new event at position 4, got %d", events[0].Position)
+	}
+
+	// Mixed backfill on a live table: a NULL-position row appearing after
+	// positions exist (e.g. written by an old binary or restored from a
+	// pre-position backup) must be slotted above existing positions by the
+	// next migration run, not collide with them.
+	if err := db.Exec(insert, "ev-5", "agg-d", "test.created", 1, now).Error; err != nil {
+		t.Fatalf("failed to insert legacy row ev-5: %v", err)
+	}
+	store2, err := infrastructure.NewGormEventStore(db)
+	if err != nil {
+		t.Fatalf("failed to re-create store on live database: %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+
+	events, err = store2.ReadAfter(ctx, 4, 0)
+	if err != nil {
+		t.Fatalf("ReadAfter failed: %v", err)
+	}
+	assertEventIDs(t, events, []string{"ev-5"})
+	if events[0].Position != 5 {
+		t.Errorf("expected mixed-backfill position 5, got %d", events[0].Position)
+	}
+}
+
+// TestGormStore_MigrationRerun_PositionsContinue pins the migration's
+// idempotency on SQLite: constructing the store again on the same database
+// (the normal every-startup path) must not fail or restart positions.
+func TestGormStore_MigrationRerun_PositionsContinue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := newTestGormDB(t)
+
+	store1, err := infrastructure.NewGormEventStore(db)
+	if err != nil {
+		t.Fatalf("failed to create first store: %v", err)
+	}
+	if err := store1.Append(ctx, "agg-a", -1, createTestEvent("agg-a", "ev-1", "test.created", 1)); err != nil {
+		t.Fatalf("failed to append via first store: %v", err)
+	}
+
+	store2, err := infrastructure.NewGormEventStore(db)
+	if err != nil {
+		t.Fatalf("failed to re-create store on live database: %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+	if err := store2.Append(ctx, "agg-b", -1, createTestEvent("agg-b", "ev-2", "test.created", 1)); err != nil {
+		t.Fatalf("failed to append via second store: %v", err)
+	}
+
+	events, err := store2.ReadAfter(ctx, 0, 0)
+	if err != nil {
+		t.Fatalf("ReadAfter failed: %v", err)
+	}
+	assertEventIDs(t, events, []string{"ev-1", "ev-2"})
+	if events[0].Position != 1 || events[1].Position != 2 {
+		t.Errorf("expected positions to continue across constructions, got %d and %d",
+			events[0].Position, events[1].Position)
 	}
 }

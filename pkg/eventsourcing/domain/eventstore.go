@@ -65,7 +65,10 @@ type EventStore interface {
 	// returned, no event with a smaller Position will ever appear in a later
 	// call. Implementations backed by databases with concurrent writers must
 	// withhold events whose positions are visible before an earlier-position
-	// transaction has committed.
+	// transaction has committed. The cost of that guarantee is liveness, not
+	// correctness: a long-running write transaction anywhere in the database
+	// delays the feed (an empty result can mean "caught up" or "withheld
+	// behind an in-flight writer").
 	//
 	// Stores without a global ordering return ErrGlobalOrderingNotSupported.
 	ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]EventEnvelope[any], error)
