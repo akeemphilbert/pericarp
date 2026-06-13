@@ -7,6 +7,13 @@ import (
 	"gorm.io/gorm"
 )
 
+// PostgresNotifyChannel is the NOTIFY channel the Postgres event store
+// signals after each committed append. Background subscribers LISTEN on it
+// (see pkg/eventsourcing/subscriptions.PostgresListener) to wake immediately
+// instead of waiting out their poll interval. Notifications are never
+// load-bearing: a missed one costs at most one poll interval.
+const PostgresNotifyChannel = "pericarp_events"
+
 // GormEventRepository provides GORM-based persistence for event models.
 type GormEventRepository struct {
 	db       *gorm.DB
@@ -36,7 +43,12 @@ func (r *GormEventRepository) SaveEvents(ctx context.Context, events []GormEvent
 // position is computed as MAX(position)+1 inside the write transaction.
 func (r *GormEventRepository) insertEventsTx(tx *gorm.DB, events []GormEventModel) error {
 	if r.postgres {
-		return tx.Omit("Position").Create(&events).Error
+		if err := tx.Omit("Position").Create(&events).Error; err != nil {
+			return err
+		}
+		// Wake LISTENing subscribers; Postgres delivers the notification
+		// when this transaction commits.
+		return tx.Exec("SELECT pg_notify(?, '')", PostgresNotifyChannel).Error
 	}
 
 	var maxPos int64

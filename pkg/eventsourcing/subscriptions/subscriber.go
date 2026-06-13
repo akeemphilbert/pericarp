@@ -60,6 +60,11 @@ type Subscriber struct {
 	maxRetries   int
 	retryBackoff time.Duration
 	maxBackoff   time.Duration
+
+	// wake lets the idle loop react to new commits immediately; nil means
+	// poll-only. Polling continues regardless, so lost notifications cost at
+	// most one poll interval, never correctness.
+	wake <-chan struct{}
 }
 
 // SubscriberOption configures a Subscriber.
@@ -114,6 +119,14 @@ func WithRetryBackoff(initial, maximum time.Duration) SubscriberOption {
 		s.retryBackoff = initial
 		s.maxBackoff = maximum
 	}
+}
+
+// WithWakeSignal lets the subscriber wake on new commits instead of waiting
+// out the poll interval: pass InProcessNotifier.Subscribe() (single-process /
+// SQLite) or PostgresListener.Wake() (cross-process via LISTEN/NOTIFY).
+// Polling continues as the fallback, so notifications are never load-bearing.
+func WithWakeSignal(wake <-chan struct{}) SubscriberOption {
+	return func(s *Subscriber) { s.wake = wake }
 }
 
 // NewSubscriber creates a subscriber. name identifies the checkpoint —
@@ -206,6 +219,8 @@ func (s *Subscriber) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			timer.Stop()
 			return nil
+		case <-s.wake: // nil when unset; a nil channel never fires
+			timer.Stop()
 		case <-timer.C:
 		}
 	}
