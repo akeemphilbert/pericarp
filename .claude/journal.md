@@ -84,7 +84,7 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ### 2026-04-19: CompositeEventStore for primary-sync + secondaries-async replication
 
-- Added `CompositeEventStore` in `pkg/eventsourcing/infrastructure/composite_store.go` — 6th EventStore implementation; wraps a primary store plus zero or more secondaries
+- Added `CompositeEventStore` in `pkg/eventsourcing/infrastructure/composite_store.go` — a new EventStore implementation; wraps a primary store plus zero or more secondaries
 - Primary `Append` is synchronous; each secondary gets a dedicated goroutine + buffered channel (default 1024) so secondary latency/failures never block the caller
 - All read methods forward to the primary — secondaries are write-only replicas in v1
 - Optional `WithErrorHandler` functional option receives failed secondary appends; no `Logger` interface added to pericarp per existing "callers decide logging strategy" convention
@@ -96,7 +96,7 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ### 2026-04-20: Bigtable EventStore implementation
 
-- Added `BigtableEventStore` in `pkg/eventsourcing/infrastructure/bigtable_store.go` — 7th EventStore implementation (after Memory, File, GORM, BigQuery, Dynamo, Composite)
+- Added `BigtableEventStore` in `pkg/eventsourcing/infrastructure/bigtable_store.go` — a new EventStore implementation (joining Memory, File, GORM, Dynamo, Composite)
 - Single-table design with three row-key spaces: `e#<agg>#<seq:20>` (events), `id#<eventID>` (index for GetEventByID), `tx#<txID>#<agg>#<seq:20>` (index for GetEventsByTransactionID)
 - Zero-padded 20-digit sequence numbers so lexicographic row order equals numeric order — enables `bigtable.NewRange` scans for `GetEventsRange` / `GetEventsFromVersion`
 - `GetCurrentVersion` uses `ReverseScan()` + `LimitRows(1)` — O(1) regardless of history length, unlike BigQuery's MAX(seq) aggregation
