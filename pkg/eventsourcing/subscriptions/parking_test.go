@@ -323,6 +323,93 @@ func TestSubscriber_WithoutParkingLotPoisonEventHaltsCheckpoint(t *testing.T) {
 	}
 }
 
+// TestGormParkingLot_ForeignTransactionIsNotAdopted pins that Park never
+// writes parked_events through a batch transaction belonging to a different
+// database — the row must land where List/Replay can find it.
+func TestGormParkingLot_ForeignTransactionIsNotAdopted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	lotDB, _, _ := newGormFixture(t)
+	otherDB, _, otherCheckpoints := newGormFixture(t)
+
+	lot, err := subscriptions.NewGormParkingLot(lotDB)
+	if err != nil {
+		t.Fatalf("failed to create parking lot: %v", err)
+	}
+	// Give the foreign database a parked_events table too — the dangerous
+	// misconfiguration is exactly when the foreign write would succeed.
+	if _, err := subscriptions.NewGormParkingLot(otherDB); err != nil {
+		t.Fatalf("failed to migrate foreign parked_events table: %v", err)
+	}
+
+	// A batch transaction from the OTHER database in context.
+	batch, acquired, err := otherCheckpoints.Acquire(ctx, "foreign")
+	if err != nil || !acquired {
+		t.Fatalf("failed to acquire foreign batch (acquired=%v): %v", acquired, err)
+	}
+	defer func() { _ = batch.Rollback() }()
+
+	if err := lot.Park(batch.HandlerContext(ctx), subscriptions.ParkedEvent{
+		Subscriber: "s", EventID: "ev-1", EventType: "test.created", Position: 1,
+		Error: "boom", Attempts: 1, ParkedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("failed to park: %v", err)
+	}
+
+	// The row is in the lot's database (visible immediately, not part of the
+	// foreign transaction), and not in the other database.
+	parked, err := lot.List(ctx, "s")
+	if err != nil {
+		t.Fatalf("failed to list: %v", err)
+	}
+	if len(parked) != 1 {
+		t.Fatalf("expected the park to land in the lot's own database, got %v", parked)
+	}
+	var count int64
+	if err := otherDB.Table("parked_events").Count(&count).Error; err != nil {
+		t.Fatalf("failed to count foreign parked_events: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no parked rows in the foreign database, got %d", count)
+	}
+}
+
+func TestMemoryParkingLot_ReparkedEntrySurvivesReplay(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	lot := subscriptions.NewMemoryParkingLot()
+	event := createTestEvent("agg-1", "ev-1", "test.created", 1)
+	park := func(errMsg string, attempts int) subscriptions.ParkedEvent {
+		return subscriptions.ParkedEvent{
+			Subscriber: "s", EventID: "ev-1", EventType: "test.created", Position: 1,
+			Error: errMsg, Attempts: attempts, ParkedAt: time.Now(),
+		}
+	}
+	if err := lot.Park(ctx, park("original failure", 6)); err != nil {
+		t.Fatalf("failed to park: %v", err)
+	}
+
+	// The handler succeeds, but mid-replay the event is parked again (a
+	// fresh failure, e.g. after a checkpoint reset). The fresh record must
+	// survive the replay's clear.
+	handler := func(ctx context.Context, e domain.EventEnvelope[any]) error {
+		return lot.Park(ctx, park("fresh failure", 1))
+	}
+	if err := lot.Replay(ctx, "s", "ev-1", event, handler); err != nil {
+		t.Fatalf("failed to replay: %v", err)
+	}
+
+	parked, err := lot.List(ctx, "s")
+	if err != nil {
+		t.Fatalf("failed to list: %v", err)
+	}
+	if len(parked) != 1 || parked[0].Error != "fresh failure" {
+		t.Fatalf("expected the fresh park record to survive the replay, got %v", parked)
+	}
+}
+
 func TestMemoryParkingLot_ParkListReplay(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

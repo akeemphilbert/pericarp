@@ -90,6 +90,11 @@ func WithLogger(logger *slog.Logger) SubscriberOption {
 // and the checkpoint advances past it so the events behind it keep flowing.
 // Without a parking lot, a failing event abandons the batch and is retried
 // every poll interval forever.
+//
+// Failed attempts' writes are discarded only when the batch has a real
+// transaction (GormCheckpointStore) and the handler writes through it; with
+// MemoryCheckpointStore or out-of-transaction side effects, each retry
+// re-applies whatever the handler did before failing.
 func WithParkingLot(lot ParkingLot) SubscriberOption {
 	return func(s *Subscriber) { s.parking = lot }
 }
@@ -301,7 +306,10 @@ func (s *Subscriber) processEvent(handlerCtx, runCtx context.Context, batch Batc
 		select {
 		case <-runCtx.Done():
 			timer.Stop()
-			return fmt.Errorf("shutdown while retrying event %s: %w", event.ID, lastErr)
+			// Wrap the context error too so Run recognizes this as
+			// shutdown rather than logging a spurious batch failure.
+			return errors.Join(runCtx.Err(),
+				fmt.Errorf("shutdown while retrying event %s: %w", event.ID, lastErr))
 		case <-timer.C:
 		}
 	}
@@ -341,10 +349,12 @@ func (s *Subscriber) processEvent(handlerCtx, runCtx context.Context, batch Batc
 func (s *Subscriber) backoffDelay(attempt int) time.Duration {
 	delay := s.retryBackoff
 	for range attempt {
-		delay *= 2
-		if delay >= s.maxBackoff {
+		// Stop before doubling can pass the cap (or overflow into a
+		// non-positive duration that would turn backoff into a hot loop).
+		if delay > s.maxBackoff/2 {
 			return s.maxBackoff
 		}
+		delay *= 2
 	}
 	return min(delay, s.maxBackoff)
 }
