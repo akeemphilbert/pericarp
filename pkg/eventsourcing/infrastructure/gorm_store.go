@@ -160,6 +160,13 @@ func (s *GormEventStore) GetCurrentVersion(ctx context.Context, aggregateID stri
 	return s.repo.GetCurrentVersion(ctx, aggregateID)
 }
 
+// HeadPosition returns the highest position ReadAfter could currently
+// deliver. On Postgres the same commit-visibility guard as ReadAfter applies,
+// so lag measured against it reaches zero when a consumer is caught up.
+func (s *GormEventStore) HeadPosition(ctx context.Context) (int64, error) {
+	return s.repo.GetHeadPosition(ctx)
+}
+
 // Close closes the GORM event store (no-op since GORM connection is managed externally).
 func (s *GormEventStore) Close() error {
 	return nil

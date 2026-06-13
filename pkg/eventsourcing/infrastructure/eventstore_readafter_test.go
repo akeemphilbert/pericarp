@@ -212,14 +212,61 @@ func TestEventStore_ReadAfter(t *testing.T) {
 	}
 }
 
-func TestDynamoStore_ReadAfter_NotSupported(t *testing.T) {
+func TestEventStore_HeadPosition(t *testing.T) {
 	t.Parallel()
 
-	// ReadAfter never touches DynamoDB, so a client that points nowhere is fine.
+	stores := []struct {
+		name       string
+		setupStore func(t *testing.T) domain.EventStore
+	}{
+		{name: "memory", setupStore: setupMemoryStore},
+		{name: "gorm", setupStore: setupGormStore},
+		{name: "file", setupStore: setupFileStore},
+	}
+
+	for _, st := range stores {
+		t.Run(st.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store := st.setupStore(t)
+			defer func() { _ = store.Close() }()
+
+			head, err := store.HeadPosition(ctx)
+			if err != nil {
+				t.Fatalf("HeadPosition failed: %v", err)
+			}
+			if head != 0 {
+				t.Errorf("expected head 0 on empty store, got %d", head)
+			}
+
+			appendFeedFixture(t, store)
+			events, err := store.ReadAfter(ctx, 0, 0)
+			if err != nil {
+				t.Fatalf("ReadAfter failed: %v", err)
+			}
+			head, err = store.HeadPosition(ctx)
+			if err != nil {
+				t.Fatalf("HeadPosition failed: %v", err)
+			}
+			if want := events[len(events)-1].Position; head != want {
+				t.Errorf("expected head %d (last readable position), got %d", want, head)
+			}
+		})
+	}
+}
+
+func TestDynamoStore_FeedNotSupported(t *testing.T) {
+	t.Parallel()
+
+	// ReadAfter/HeadPosition never touch DynamoDB, so a client that points nowhere is fine.
 	store := infrastructure.NewDynamoEventStore(dynamodb.New(dynamodb.Options{Region: "us-east-1"}), "events")
 	_, err := store.ReadAfter(context.Background(), 0, 10)
 	if !errors.Is(err, domain.ErrGlobalOrderingNotSupported) {
-		t.Fatalf("expected ErrGlobalOrderingNotSupported, got %v", err)
+		t.Fatalf("expected ErrGlobalOrderingNotSupported from ReadAfter, got %v", err)
+	}
+	_, err = store.HeadPosition(context.Background())
+	if !errors.Is(err, domain.ErrGlobalOrderingNotSupported) {
+		t.Fatalf("expected ErrGlobalOrderingNotSupported from HeadPosition, got %v", err)
 	}
 }
 

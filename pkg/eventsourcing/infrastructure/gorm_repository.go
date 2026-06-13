@@ -73,6 +73,18 @@ func (r *GormEventRepository) GetEventsAfterPosition(ctx context.Context, afterP
 	return events, err
 }
 
+// GetHeadPosition returns the highest committed position (0 when empty),
+// applying the same visibility guard as GetEventsAfterPosition on Postgres.
+func (r *GormEventRepository) GetHeadPosition(ctx context.Context) (int64, error) {
+	query := r.db.WithContext(ctx).Model(&GormEventModel{})
+	if r.postgres {
+		query = query.Where("xact_id < pg_snapshot_xmin(pg_current_snapshot())")
+	}
+	var head int64
+	err := query.Select("COALESCE(MAX(position), 0)").Scan(&head).Error
+	return head, err
+}
+
 // GetEventsByAggregateID retrieves all events for a given aggregate, ordered by sequence number.
 func (r *GormEventRepository) GetEventsByAggregateID(ctx context.Context, aggregateID string) ([]GormEventModel, error) {
 	var events []GormEventModel

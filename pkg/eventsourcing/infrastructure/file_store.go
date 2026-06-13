@@ -465,6 +465,13 @@ func (f *FileStore) ReadAfter(ctx context.Context, afterPosition int64, limit in
 	return result, nil
 }
 
+// HeadPosition returns the highest position assigned so far.
+func (f *FileStore) HeadPosition(ctx context.Context) (int64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.lastPos, nil
+}
+
 // GetCurrentVersion returns the current version for the aggregate.
 func (f *FileStore) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {
 	events, err := f.GetEvents(ctx, aggregateID)

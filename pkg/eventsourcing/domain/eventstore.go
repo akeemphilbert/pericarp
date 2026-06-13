@@ -73,6 +73,13 @@ type EventStore interface {
 	// Stores without a global ordering return ErrGlobalOrderingNotSupported.
 	ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]EventEnvelope[any], error)
 
+	// HeadPosition returns the highest Position that ReadAfter could
+	// currently deliver (0 when the store is empty). Feed consumers use it to
+	// measure lag against their checkpoint.
+	//
+	// Stores without a global ordering return ErrGlobalOrderingNotSupported.
+	HeadPosition(ctx context.Context) (int64, error)
+
 	// Close closes the event store and releases any resources.
 	Close() error
 }

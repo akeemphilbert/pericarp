@@ -212,6 +212,13 @@ func (m *MemoryStore) ReadAfter(ctx context.Context, afterPosition int64, limit 
 	return result, nil
 }
 
+// HeadPosition returns the highest position assigned so far.
+func (m *MemoryStore) HeadPosition(ctx context.Context) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.lastPos, nil
+}
+
 // Close closes the memory store (no-op for in-memory implementation).
 func (m *MemoryStore) Close() error {
 	m.mu.Lock()
