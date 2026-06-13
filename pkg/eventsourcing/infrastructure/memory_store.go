@@ -20,6 +20,8 @@ type MemoryStore struct {
 	events     map[string][]domain.EventEnvelope[any] // aggregateID -> events
 	eventsByID map[string]domain.EventEnvelope[any]   // eventID -> event
 	versions   map[string]int                         // aggregateID -> current version
+	log        []domain.EventEnvelope[any]            // all events in global commit order
+	lastPos    int64                                  // last assigned global position
 }
 
 // NewMemoryStore creates a new in-memory event store.
@@ -62,10 +64,15 @@ func (m *MemoryStore) Append(ctx context.Context, aggregateID string, expectedVe
 		eventList = make([]domain.EventEnvelope[any], 0)
 	}
 
-	// Append events preserving their SequenceNo as set by the domain
+	// Append events preserving their SequenceNo as set by the domain.
+	// Each event is copied so the store-assigned global Position does not
+	// mutate the caller's envelopes.
 	for _, event := range events {
+		m.lastPos++
+		event.Position = m.lastPos
 		eventList = append(eventList, event)
 		m.eventsByID[event.ID] = event
+		m.log = append(m.log, event)
 	}
 
 	m.events[aggregateID] = eventList
@@ -185,6 +192,26 @@ func (m *MemoryStore) GetCurrentVersion(ctx context.Context, aggregateID string)
 	return m.versions[aggregateID], nil
 }
 
+// ReadAfter returns events with Position > afterPosition across all aggregates,
+// ordered by Position ascending, up to limit (limit <= 0 means no limit).
+func (m *MemoryStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]domain.EventEnvelope[any], 0)
+	for _, event := range m.log {
+		if event.Position <= afterPosition {
+			continue
+		}
+		result = append(result, event)
+		if limit > 0 && len(result) == limit {
+			break
+		}
+	}
+
+	return result, nil
+}
+
 // Close closes the memory store (no-op for in-memory implementation).
 func (m *MemoryStore) Close() error {
 	m.mu.Lock()
@@ -194,6 +221,8 @@ func (m *MemoryStore) Close() error {
 	m.events = make(map[string][]domain.EventEnvelope[any])
 	m.eventsByID = make(map[string]domain.EventEnvelope[any])
 	m.versions = make(map[string]int)
+	m.log = nil
+	m.lastPos = 0
 
 	return nil
 }

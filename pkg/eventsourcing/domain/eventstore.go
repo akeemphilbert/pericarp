@@ -14,6 +14,10 @@ var (
 
 	// ErrInvalidEvent is returned when an event is invalid or malformed.
 	ErrInvalidEvent = errors.New("invalid event")
+
+	// ErrGlobalOrderingNotSupported is returned by ReadAfter on stores that
+	// cannot provide a global, cross-aggregate ordering of events.
+	ErrGlobalOrderingNotSupported = errors.New("event store does not support a global ordered feed")
 )
 
 // EventStore defines the interface for persisting and retrieving events.
@@ -53,6 +57,19 @@ type EventStore interface {
 	// Returns 0 if the aggregate doesn't exist.
 	GetCurrentVersion(ctx context.Context, aggregateID string) (int, error)
 
+	// ReadAfter returns committed events across all aggregates whose global
+	// Position is greater than afterPosition, ordered by Position ascending.
+	// At most limit events are returned; limit <= 0 means no limit.
+	//
+	// The result is safe to use as a resumable feed: once an event is
+	// returned, no event with a smaller Position will ever appear in a later
+	// call. Implementations backed by databases with concurrent writers must
+	// withhold events whose positions are visible before an earlier-position
+	// transaction has committed.
+	//
+	// Stores without a global ordering return ErrGlobalOrderingNotSupported.
+	ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]EventEnvelope[any], error)
+
 	// Close closes the event store and releases any resources.
 	Close() error
 }
@@ -69,5 +86,6 @@ func ToAnyEnvelope[T any](envelope EventEnvelope[T]) EventEnvelope[any] {
 		SequenceNo:    envelope.SequenceNo,
 		TransactionID: envelope.TransactionID,
 		Metadata:      envelope.Metadata,
+		Position:      envelope.Position,
 	}
 }

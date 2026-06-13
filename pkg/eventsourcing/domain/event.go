@@ -26,6 +26,13 @@ type EventEnvelope[T any] struct {
 	SequenceNo    int                    `json:"sequence_no"`
 	TransactionID string                 `json:"transaction_id,omitempty"`
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+
+	// Position is the event's place in the store's global, cross-aggregate
+	// commit order. It is assigned by the event store at persistence time and
+	// populated on reads; it is zero on envelopes that have not been persisted
+	// (or that were stored before global ordering existed and have not been
+	// backfilled). Positions are strictly increasing but not necessarily dense.
+	Position int64 `json:"position,omitempty"`
 }
 
 // NewEventEnvelope creates a new EventEnvelope with the given payload and metadata.
