@@ -33,6 +33,12 @@ const (
 	// retrySavepoint brackets each handler attempt inside the batch
 	// transaction so a failed attempt's partial writes are discarded.
 	retrySavepoint = "pericarp_handler_attempt"
+
+	// wakeRetryInterval is how soon a subscriber re-checks the feed after a
+	// wake signal that found nothing: on Postgres a NOTIFY is delivered at
+	// commit, but the feed's visibility guard can withhold the events until
+	// an older concurrent transaction finishes.
+	wakeRetryInterval = 200 * time.Millisecond
 )
 
 // Subscriber runs a Handler as a crash-safe background worker over the event
@@ -123,8 +129,12 @@ func WithRetryBackoff(initial, maximum time.Duration) SubscriberOption {
 
 // WithWakeSignal lets the subscriber wake on new commits instead of waiting
 // out the poll interval: pass InProcessNotifier.Subscribe() (single-process /
-// SQLite) or PostgresListener.Wake() (cross-process via LISTEN/NOTIFY).
-// Polling continues as the fallback, so notifications are never load-bearing.
+// SQLite) or PostgresListener.Subscribe() (cross-process via LISTEN/NOTIFY).
+// Each subscriber needs its own channel — channel receives are
+// point-to-point, so a shared channel would wake only one subscriber per
+// signal. Polling continues as the fallback, so notifications are never
+// load-bearing. A closed channel is detected and the subscriber falls back
+// to pure polling.
 func WithWakeSignal(wake <-chan struct{}) SubscriberOption {
 	return func(s *Subscriber) { s.wake = wake }
 }
@@ -174,6 +184,9 @@ func NewSubscriber(name string, events domain.EventStore, checkpoints Checkpoint
 	if s.retryBackoff <= 0 || s.maxBackoff < s.retryBackoff {
 		return nil, fmt.Errorf("retry backoff must be positive and its cap at least the initial delay, got %v/%v", s.retryBackoff, s.maxBackoff)
 	}
+	if s.logger == nil {
+		s.logger = slog.Default()
+	}
 	return s, nil
 }
 
@@ -192,6 +205,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 	s.logger.Info("subscriber started", "subscriber", s.name)
 	defer s.logger.Info("subscriber stopped", "subscriber", s.name)
 
+	woken := false
 	for {
 		processed, err := s.processBatch(ctx)
 		if err != nil {
@@ -211,16 +225,35 @@ func (s *Subscriber) Run(ctx context.Context) error {
 		}
 		if processed > 0 && err == nil {
 			// There may be more backlog; read again immediately.
+			woken = false
 			continue
 		}
 
-		timer := time.NewTimer(s.pollInterval)
+		// A wake that found nothing usually means the notifying commit is
+		// still withheld by the feed's visibility guard — re-check soon
+		// instead of sleeping the full poll interval.
+		wait := s.pollInterval
+		if woken && err == nil {
+			wait = min(wait, wakeRetryInterval)
+		}
+		woken = false
+
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return nil
-		case <-s.wake: // nil when unset; a nil channel never fires
+		case _, ok := <-s.wake: // nil when unset; a nil channel never fires
 			timer.Stop()
+			if !ok {
+				// A closed wake channel would otherwise fire every
+				// iteration and turn the loop hot; drop to pure polling.
+				s.logger.Warn("wake channel closed; falling back to polling",
+					"subscriber", s.name)
+				s.wake = nil
+			} else {
+				woken = true
+			}
 		case <-timer.C:
 		}
 	}

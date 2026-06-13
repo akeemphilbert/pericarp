@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,16 +22,20 @@ const defaultPostgresNotifyChannel = "pericarp_events"
 const DefaultListenerReconnectDelay = 5 * time.Second
 
 // PostgresListener holds a dedicated Postgres connection LISTENing for the
-// event store's commit notifications and turns them into subscriber wake
-// signals (WithWakeSignal). Notifications are never load-bearing: while the
-// connection is down — or if a NOTIFY is missed entirely — subscribers still
-// make progress through their poll interval.
+// event store's commit notifications and fans them out as subscriber wake
+// signals: every Subscribe() channel receives each notification, so one
+// listener serves any number of subscribers in the process. Notifications
+// are never load-bearing: while the connection is down — or if a NOTIFY is
+// missed entirely — subscribers still make progress through their poll
+// interval.
 type PostgresListener struct {
 	dsn            string
 	channel        string
 	logger         *slog.Logger
 	reconnectDelay time.Duration
-	wake           chan struct{}
+
+	mu          sync.Mutex
+	subscribers []chan struct{}
 }
 
 // PostgresListenerOption configures a PostgresListener.
@@ -43,7 +48,7 @@ func WithListenerChannel(channel string) PostgresListenerOption {
 }
 
 // WithListenerLogger sets the logger for connection failures (default
-// slog.Default()).
+// slog.Default(); nil falls back to the default).
 func WithListenerLogger(logger *slog.Logger) PostgresListenerOption {
 	return func(l *PostgresListener) { l.logger = logger }
 }
@@ -55,7 +60,8 @@ func WithListenerReconnectDelay(d time.Duration) PostgresListenerOption {
 }
 
 // NewPostgresListener creates a listener for the given Postgres DSN. Call Run
-// to start it and pass Wake() to subscribers via WithWakeSignal.
+// to start it and pass each subscriber its own Subscribe() channel via
+// WithWakeSignal.
 func NewPostgresListener(dsn string, opts ...PostgresListenerOption) (*PostgresListener, error) {
 	if dsn == "" {
 		return nil, errors.New("postgres listener DSN must not be empty")
@@ -65,7 +71,6 @@ func NewPostgresListener(dsn string, opts ...PostgresListenerOption) (*PostgresL
 		channel:        defaultPostgresNotifyChannel,
 		logger:         slog.Default(),
 		reconnectDelay: DefaultListenerReconnectDelay,
-		wake:           make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(l)
@@ -76,13 +81,34 @@ func NewPostgresListener(dsn string, opts ...PostgresListenerOption) (*PostgresL
 	if l.reconnectDelay <= 0 {
 		return nil, fmt.Errorf("reconnect delay must be positive, got %v", l.reconnectDelay)
 	}
+	if l.logger == nil {
+		l.logger = slog.Default()
+	}
 	return l, nil
 }
 
-// Wake returns the channel that receives after each notification. Pass it to
-// subscribers via WithWakeSignal; it is buffered, and sends never block.
-func (l *PostgresListener) Wake() <-chan struct{} {
-	return l.wake
+// Subscribe returns a channel that receives after each notification. Every
+// subscriber needs its own channel (a Go channel receive is point-to-point,
+// not broadcast — sharing one channel would wake only one subscriber per
+// notification). Channels are buffered and sends never block.
+func (l *PostgresListener) Subscribe() <-chan struct{} {
+	ch := make(chan struct{}, 1)
+	l.mu.Lock()
+	l.subscribers = append(l.subscribers, ch)
+	l.mu.Unlock()
+	return ch
+}
+
+// broadcast wakes all subscribers without blocking.
+func (l *PostgresListener) broadcast() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, ch := range l.subscribers {
+		select {
+		case ch <- struct{}{}:
+		default: // a wake is already pending; one is enough
+		}
+	}
 }
 
 // Run maintains the LISTEN connection until ctx is cancelled, reconnecting
@@ -133,9 +159,6 @@ func (l *PostgresListener) listen(ctx context.Context) error {
 			}
 			return fmt.Errorf("failed waiting for notification: %w", err)
 		}
-		select {
-		case l.wake <- struct{}{}:
-		default: // a wake is already pending; one is enough
-		}
+		l.broadcast()
 	}
 }

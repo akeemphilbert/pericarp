@@ -47,8 +47,16 @@ func (r *GormEventRepository) insertEventsTx(tx *gorm.DB, events []GormEventMode
 			return err
 		}
 		// Wake LISTENing subscribers; Postgres delivers the notification
-		// when this transaction commits.
-		return tx.Exec("SELECT pg_notify(?, '')", PostgresNotifyChannel).Error
+		// when this transaction commits. Notifications are best-effort by
+		// contract — a notify failure must not abort a successful append, so
+		// it is logged (through GORM's configured logger) and dropped;
+		// subscribers catch up by polling.
+		if err := tx.Exec("SELECT pg_notify(?, '')", PostgresNotifyChannel).Error; err != nil {
+			tx.Logger.Error(tx.Statement.Context,
+				"pericarp: failed to NOTIFY %s after append (subscribers will catch up by polling): %v",
+				PostgresNotifyChannel, err)
+		}
+		return nil
 	}
 
 	var maxPos int64

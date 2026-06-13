@@ -227,30 +227,43 @@ func TestPostgresSubscriptions_NotifyWakesListeningSubscriber(t *testing.T) {
 		}
 	}()
 
-	// Wait until the LISTEN is established: a manual NOTIFY must reach the
-	// wake channel (the buffered token is consumed here, before the
-	// subscriber takes over the channel).
+	// Wait until the LISTEN is established, using a dedicated probe channel
+	// so the subscriber's own wake channel cannot inherit a stale token from
+	// the handshake.
+	probe := listener.Subscribe()
 	waitFor(t, 10*time.Second, func() bool {
 		if err := db.Exec("SELECT pg_notify(?, '')", infrastructure.PostgresNotifyChannel).Error; err != nil {
 			return false
 		}
 		select {
-		case <-listener.Wake():
+		case <-probe:
 			return true
 		case <-time.After(100 * time.Millisecond):
 			return false
 		}
 	}, "listener to establish LISTEN")
 
-	sub, err := subscriptions.NewSubscriber("listening", store, checkpoints,
+	counting := &countingStore{EventStore: store}
+	sub, err := subscriptions.NewSubscriber("listening", counting, checkpoints,
 		projectingHandler(t, ""),
 		subscriptions.WithPollInterval(time.Hour),
-		subscriptions.WithWakeSignal(listener.Wake()))
+		subscriptions.WithWakeSignal(listener.Subscribe()))
 	if err != nil {
 		t.Fatalf("failed to create subscriber: %v", err)
 	}
 	stop := runSubscriber(t, sub)
 	defer stop()
+
+	// Wait for the subscriber to have read the feed at least once and for
+	// all handshake-induced wake tokens to be spent: only after the read
+	// count settles can a later processing run be attributed to the append's
+	// own NOTIFY rather than the startup cycle or a stale token. The 500ms
+	// quiet window exceeds the subscriber's empty-wake retry (200ms).
+	waitFor(t, 10*time.Second, func() bool {
+		before := counting.reads.Load()
+		time.Sleep(500 * time.Millisecond)
+		return before >= 1 && counting.reads.Load() == before
+	}, "feed reads to settle after handshake")
 
 	// Committing through the event store fires NOTIFY; the subscriber must
 	// process the events long before its one-hour poll.
