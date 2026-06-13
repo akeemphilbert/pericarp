@@ -68,4 +68,13 @@ type Batch interface {
 	// Rollback abandons the cycle: the checkpoint stays at Position() and
 	// any handler writes made through the batch transaction are discarded.
 	Rollback() error
+
+	// Savepoint marks a rollback point inside the batch and
+	// RollbackToSavepoint discards everything written through the batch
+	// transaction after the mark. The subscriber brackets each handler
+	// attempt with one so a failed attempt's partial writes are discarded
+	// without abandoning the whole batch. Implementations without a
+	// transaction treat both as no-ops.
+	Savepoint(ctx context.Context, name string) error
+	RollbackToSavepoint(ctx context.Context, name string) error
 }

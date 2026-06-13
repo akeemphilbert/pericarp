@@ -188,6 +188,17 @@ func (b *gormBatch) Rollback() error {
 	return b.tx.Rollback().Error
 }
 
+// Savepoint marks a rollback point inside the batch transaction.
+func (b *gormBatch) Savepoint(ctx context.Context, name string) error {
+	return b.tx.SavePoint(name).Error
+}
+
+// RollbackToSavepoint discards writes made through the batch transaction
+// after the named savepoint.
+func (b *gormBatch) RollbackToSavepoint(ctx context.Context, name string) error {
+	return b.tx.RollbackTo(name).Error
+}
+
 type txContextKey struct{}
 
 // TxFromContext returns the batch transaction attached to a handler's context

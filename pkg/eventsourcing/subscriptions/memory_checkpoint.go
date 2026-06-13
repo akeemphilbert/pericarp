@@ -90,3 +90,9 @@ func (b *memoryBatch) Rollback() error {
 	delete(b.store.held, b.subscriber)
 	return nil
 }
+
+// Savepoint is a no-op: memory batches have no transaction to mark.
+func (b *memoryBatch) Savepoint(ctx context.Context, name string) error { return nil }
+
+// RollbackToSavepoint is a no-op: memory batches have no transaction.
+func (b *memoryBatch) RollbackToSavepoint(ctx context.Context, name string) error { return nil }
