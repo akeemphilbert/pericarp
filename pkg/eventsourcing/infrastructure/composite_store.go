@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 )
@@ -40,9 +41,10 @@ type PanicHandler func(idx int, recovered any, stack []byte)
 type Option func(*compositeConfig)
 
 type compositeConfig struct {
-	bufferSize   int
-	errorHandler SecondaryErrorHandler
-	panicHandler PanicHandler
+	bufferSize       int
+	errorHandler     SecondaryErrorHandler
+	panicHandler     PanicHandler
+	secondaryTimeout time.Duration
 }
 
 // WithErrorHandler registers a callback invoked for every failed secondary Append.
@@ -70,6 +72,19 @@ func WithSecondaryBufferSize(n int) Option {
 	}
 }
 
+// WithSecondaryAppendTimeout bounds every secondary Append call. The deadline
+// is derived from a value-preserving context (caller trace IDs survive) but
+// is otherwise independent of the original request's cancellation. Set this
+// to prevent an unhealthy secondary from stalling queue draining and blocking
+// Close indefinitely. A non-positive duration disables the timeout (default).
+func WithSecondaryAppendTimeout(d time.Duration) Option {
+	return func(c *compositeConfig) {
+		if d > 0 {
+			c.secondaryTimeout = d
+		}
+	}
+}
+
 // CompositeEventStore wraps a primary EventStore plus zero or more secondaries.
 // Writes to the primary are synchronous; writes to each secondary run on a
 // dedicated background goroutine so secondary processing never contends with
@@ -81,12 +96,13 @@ func WithSecondaryBufferSize(n int) Option {
 // After Close, Append returns ErrCompositeClosed; it is safe to call Close
 // multiple times.
 type CompositeEventStore struct {
-	primary      domain.EventStore
-	secondaries  []domain.EventStore
-	queues       []chan secondaryJob
-	wg           sync.WaitGroup
-	errorHandler SecondaryErrorHandler
-	panicHandler PanicHandler
+	primary          domain.EventStore
+	secondaries      []domain.EventStore
+	queues           []chan secondaryJob
+	wg               sync.WaitGroup
+	errorHandler     SecondaryErrorHandler
+	panicHandler     PanicHandler
+	secondaryTimeout time.Duration
 
 	// sendMu serializes Append calls (RLock) against Close (Lock). This makes
 	// close-on-queue safe: Close cannot close a channel while any Append holds
@@ -98,6 +114,7 @@ type CompositeEventStore struct {
 }
 
 type secondaryJob struct {
+	callerCtx   context.Context
 	aggregateID string
 	events      []domain.EventEnvelope[any]
 }
@@ -124,11 +141,12 @@ func NewCompositeEventStore(primary domain.EventStore, secondaries []domain.Even
 	}
 
 	c := &CompositeEventStore{
-		primary:      primary,
-		secondaries:  secondaries,
-		queues:       make([]chan secondaryJob, len(secondaries)),
-		errorHandler: cfg.errorHandler,
-		panicHandler: cfg.panicHandler,
+		primary:          primary,
+		secondaries:      secondaries,
+		queues:           make([]chan secondaryJob, len(secondaries)),
+		errorHandler:     cfg.errorHandler,
+		panicHandler:     cfg.panicHandler,
+		secondaryTimeout: cfg.secondaryTimeout,
 	}
 	for i := range secondaries {
 		c.queues[i] = make(chan secondaryJob, cfg.bufferSize)
@@ -145,9 +163,23 @@ func (c *CompositeEventStore) runSecondary(idx int) {
 		// Secondaries are best-effort replicas; the primary is authoritative for
 		// optimistic concurrency. Passing -1 here prevents a missed event from
 		// permanently wedging all future secondary writes with ErrConcurrencyConflict.
-		// Background context: per-request cancellations must not kill replication;
-		// secondaries are expected to honor their own deadlines internally.
-		if err := secondary.Append(context.Background(), job.aggregateID, -1, job.events...); err != nil {
+		//
+		// context.WithoutCancel preserves the caller's context values (trace IDs,
+		// request metadata) while detaching from the caller's cancellation — a
+		// request-scoped deadline must not kill replication after the primary
+		// has already committed. If WithSecondaryAppendTimeout was set, wrap
+		// with an independent deadline so an unhealthy secondary cannot stall
+		// queue draining (and therefore Close) indefinitely.
+		ctx := context.WithoutCancel(job.callerCtx)
+		var cancel context.CancelFunc
+		if c.secondaryTimeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, c.secondaryTimeout)
+		}
+		err := secondary.Append(ctx, job.aggregateID, -1, job.events...)
+		if cancel != nil {
+			cancel()
+		}
+		if err != nil {
 			c.reportError(idx, err, job.events)
 		}
 	}
@@ -195,7 +227,7 @@ func (c *CompositeEventStore) Append(ctx context.Context, aggregateID string, ex
 		return nil
 	}
 	copied := append([]domain.EventEnvelope[any](nil), events...)
-	job := secondaryJob{aggregateID: aggregateID, events: copied}
+	job := secondaryJob{callerCtx: ctx, aggregateID: aggregateID, events: copied}
 	for _, q := range c.queues {
 		select {
 		case q <- job:
