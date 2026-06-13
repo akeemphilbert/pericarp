@@ -42,8 +42,10 @@ type CheckpointStore interface {
 
 	// Reset sets the subscriber's committed checkpoint, creating it if
 	// needed. Resetting to 0 makes the subscriber replay all history,
-	// incrementally and resumably, on its next cycles. Reset blocks until
-	// any in-flight batch for the subscriber finishes.
+	// incrementally and resumably, on its next cycles. Implementations
+	// serialize Reset against in-flight batches: either Reset waits for the
+	// batch (or fails), or the batch's Commit detects the moved checkpoint
+	// and aborts — a reset is never silently overwritten.
 	Reset(ctx context.Context, subscriber string, position int64) error
 }
 

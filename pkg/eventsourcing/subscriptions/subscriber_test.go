@@ -294,6 +294,169 @@ func TestSubscriber_Lag(t *testing.T) {
 	}
 }
 
+// The package promises EventDispatcher.Dispatch wires directly as a Handler;
+// pin the signatures together at compile time.
+var _ subscriptions.Handler = (&domain.EventDispatcher{}).Dispatch
+
+func TestSubscriber_SkipsCycleWhileCheckpointHeld(t *testing.T) {
+	t.Parallel()
+
+	store := infrastructure.NewMemoryStore()
+	checkpoints := subscriptions.NewMemoryCheckpointStore()
+	handler := &recordingHandler{}
+	appendNumberedEvents(t, store, 1, 2)
+
+	// Hold the checkpoint from outside, as another replica would.
+	held, acquired, err := checkpoints.Acquire(context.Background(), "shared")
+	if err != nil || !acquired {
+		t.Fatalf("failed to pre-acquire checkpoint (acquired=%v): %v", acquired, err)
+	}
+
+	sub, err := subscriptions.NewSubscriber("shared", store, checkpoints, handler.handle,
+		subscriptions.WithPollInterval(subscriptionTestPollInterval))
+	if err != nil {
+		t.Fatalf("failed to create subscriber: %v", err)
+	}
+	stop := runSubscriber(t, sub)
+	defer stop()
+
+	// While held, the subscriber must idle without errors or processing.
+	time.Sleep(20 * subscriptionTestPollInterval)
+	if got := handler.handled(); len(got) != 0 {
+		t.Fatalf("expected no events processed while checkpoint held, got %v", got)
+	}
+
+	// Released, it must pick up where the checkpoint stands.
+	if err := held.Rollback(); err != nil {
+		t.Fatalf("failed to release checkpoint: %v", err)
+	}
+	waitForCheckpoint(t, checkpoints, "shared", 2)
+}
+
+func TestSubscriber_TwoSameNameSubscribersProcessExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	store := infrastructure.NewMemoryStore()
+	checkpoints := subscriptions.NewMemoryCheckpointStore()
+	handler := &recordingHandler{}
+	appendNumberedEvents(t, store, 1, 10)
+
+	// Both instances share the handler and the checkpoint name; the
+	// checkpoint store must let only one batch run at a time so each event
+	// is handled once across the pair.
+	mk := func() *subscriptions.Subscriber {
+		sub, err := subscriptions.NewSubscriber("pair", store, checkpoints, handler.handle,
+			subscriptions.WithPollInterval(subscriptionTestPollInterval), subscriptions.WithBatchSize(3))
+		if err != nil {
+			t.Fatalf("failed to create subscriber: %v", err)
+		}
+		return sub
+	}
+	stopA := runSubscriber(t, mk())
+	stopB := runSubscriber(t, mk())
+	waitForCheckpoint(t, checkpoints, "pair", 10)
+	stopA()
+	stopB()
+
+	got := handler.handled()
+	if len(got) != 10 {
+		t.Fatalf("expected each of the 10 events handled exactly once across both instances, got %d: %v", len(got), got)
+	}
+	seen := make(map[string]bool, len(got))
+	for _, id := range got {
+		if seen[id] {
+			t.Fatalf("event %s handled more than once: %v", id, got)
+		}
+		seen[id] = true
+	}
+}
+
+// flakyStore fails ReadAfter once, then delegates — a transient infrastructure
+// hiccup must never stop the subscriber.
+type flakyStore struct {
+	*infrastructure.MemoryStore
+	mu     sync.Mutex
+	failed bool
+}
+
+func (f *flakyStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	f.mu.Lock()
+	if !f.failed {
+		f.failed = true
+		f.mu.Unlock()
+		return nil, errors.New("transient: connection reset")
+	}
+	f.mu.Unlock()
+	return f.MemoryStore.ReadAfter(ctx, afterPosition, limit)
+}
+
+func TestSubscriber_SurvivesTransientReadErrors(t *testing.T) {
+	t.Parallel()
+
+	store := &flakyStore{MemoryStore: infrastructure.NewMemoryStore()}
+	checkpoints := subscriptions.NewMemoryCheckpointStore()
+	handler := &recordingHandler{}
+	appendNumberedEvents(t, store, 1, 3)
+
+	sub, err := subscriptions.NewSubscriber("resilient", store, checkpoints, handler.handle,
+		subscriptions.WithPollInterval(subscriptionTestPollInterval))
+	if err != nil {
+		t.Fatalf("failed to create subscriber: %v", err)
+	}
+	stop := runSubscriber(t, sub)
+	waitForCheckpoint(t, checkpoints, "resilient", 3)
+	stop()
+
+	if got := handler.handled(); len(got) != 3 {
+		t.Fatalf("expected all 3 events after the transient error, got %v", got)
+	}
+}
+
+func TestSubscriber_HandlerPanicReleasesCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	store := infrastructure.NewMemoryStore()
+	checkpoints := subscriptions.NewMemoryCheckpointStore()
+	appendNumberedEvents(t, store, 1, 2)
+
+	sub, err := subscriptions.NewSubscriber("panicky", store, checkpoints,
+		func(ctx context.Context, event domain.EventEnvelope[any]) error { panic("handler bug") },
+		subscriptions.WithPollInterval(subscriptionTestPollInterval))
+	if err != nil {
+		t.Fatalf("failed to create subscriber: %v", err)
+	}
+
+	recovered := make(chan any, 1)
+	go func() {
+		defer func() { recovered <- recover() }()
+		_ = sub.Run(context.Background())
+	}()
+	select {
+	case r := <-recovered:
+		if r == nil {
+			t.Fatal("expected the handler panic to propagate out of Run")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler panic did not propagate within 10s")
+	}
+
+	// The batch must have been rolled back on the way out: a healthy
+	// subscriber can acquire the checkpoint and process everything.
+	handler := &recordingHandler{}
+	healthy, err := subscriptions.NewSubscriber("panicky", store, checkpoints, handler.handle,
+		subscriptions.WithPollInterval(subscriptionTestPollInterval))
+	if err != nil {
+		t.Fatalf("failed to create subscriber: %v", err)
+	}
+	stop := runSubscriber(t, healthy)
+	waitForCheckpoint(t, checkpoints, "panicky", 2)
+	stop()
+
+	if got := handler.handled(); len(got) != 2 {
+		t.Fatalf("expected the events to process after the panicked batch was released, got %v", got)
+	}
+}
+
 // noFeedStore simulates an event store without a global ordered feed.
 type noFeedStore struct {
 	*infrastructure.MemoryStore

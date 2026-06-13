@@ -63,7 +63,12 @@ func (g *GormCheckpointStore) Acquire(ctx context.Context, subscriber string) (B
 		return nil, false, err
 	}
 
-	tx := g.db.WithContext(ctx).Begin()
+	// The transaction deliberately outlives ctx: its lifecycle is owned by
+	// Batch.Commit/Rollback, and a batch in flight when the subscriber's run
+	// context is cancelled must drain — database/sql would otherwise
+	// auto-rollback the transaction the moment ctx is cancelled, silently
+	// discarding handler writes and the checkpoint advance.
+	tx := g.db.WithContext(context.WithoutCancel(ctx)).Begin()
 	if tx.Error != nil {
 		return nil, false, fmt.Errorf("failed to begin batch transaction: %w", tx.Error)
 	}
@@ -78,7 +83,9 @@ func (g *GormCheckpointStore) Acquire(ctx context.Context, subscriber string) (B
 		return nil, false, fmt.Errorf("failed to lock checkpoint row: %w", err)
 	}
 	if len(rows) == 0 {
-		_ = tx.Rollback()
+		if err := tx.Rollback().Error; err != nil {
+			return nil, false, fmt.Errorf("failed to release batch transaction: %w", err)
+		}
 		if g.postgres {
 			// The row exists (ensured above) but is locked by another
 			// process — skip this cycle.
@@ -102,9 +109,12 @@ func (g *GormCheckpointStore) Position(ctx context.Context, subscriber string) (
 	return rows[0].Position, nil
 }
 
-// Reset sets the subscriber's checkpoint, creating the row if needed. It
-// blocks until any in-flight batch for the subscriber commits or rolls back
-// (the batch transaction holds the row).
+// Reset sets the subscriber's checkpoint, creating the row if needed. On
+// Postgres it blocks until any in-flight batch for the subscriber finishes
+// (the batch transaction holds the row). On SQLite a concurrent in-flight
+// batch is not blocked; instead its Commit detects that the checkpoint moved
+// and aborts, so the reset always wins and processing resumes from the reset
+// position.
 func (g *GormCheckpointStore) Reset(ctx context.Context, subscriber string, position int64) error {
 	return g.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "subscriber"}},
@@ -148,8 +158,12 @@ func (b *gormBatch) Commit(ctx context.Context, position int64) error {
 	}
 	b.done = true
 
+	// The position guard makes the advance conditional on the checkpoint not
+	// having moved since acquisition. On Postgres the row lock makes that a
+	// given; on SQLite (no row lock) it detects a concurrent Reset, in which
+	// case the whole batch aborts rather than silently clobbering the reset.
 	res := b.tx.Model(&GormCheckpointModel{}).
-		Where("subscriber = ?", b.subscriber).
+		Where("subscriber = ? AND position = ?", b.subscriber, b.position).
 		Updates(map[string]any{"position": position, "updated_at": time.Now()})
 	if res.Error != nil {
 		_ = b.tx.Rollback()
@@ -157,7 +171,7 @@ func (b *gormBatch) Commit(ctx context.Context, position int64) error {
 	}
 	if res.RowsAffected != 1 {
 		_ = b.tx.Rollback()
-		return fmt.Errorf("checkpoint row for subscriber %q disappeared during batch", b.subscriber)
+		return fmt.Errorf("checkpoint for subscriber %q moved during the batch (concurrent reset?); batch abandoned", b.subscriber)
 	}
 	if err := b.tx.Commit().Error; err != nil {
 		return fmt.Errorf("failed to commit batch: %w", err)

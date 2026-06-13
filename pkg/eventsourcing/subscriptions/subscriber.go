@@ -58,7 +58,8 @@ func WithPollInterval(d time.Duration) SubscriberOption {
 }
 
 // WithLogger sets the logger for batch failures and lifecycle events. The
-// default discards logs.
+// default is slog.Default() — a permanently failing subscriber must be
+// visible somewhere out of the box.
 func WithLogger(logger *slog.Logger) SubscriberOption {
 	return func(s *Subscriber) { s.logger = logger }
 }
@@ -88,7 +89,7 @@ func NewSubscriber(name string, events domain.EventStore, checkpoints Checkpoint
 		handler:      handler,
 		batchSize:    DefaultBatchSize,
 		pollInterval: DefaultPollInterval,
-		logger:       slog.New(slog.DiscardHandler),
+		logger:       slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -123,7 +124,10 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			if errors.Is(err, domain.ErrGlobalOrderingNotSupported) {
 				return fmt.Errorf("subscriber %q cannot run: %w", s.name, err)
 			}
-			if ctx.Err() == nil {
+			// Cancellation noise from Acquire/ReadAfter during shutdown is
+			// expected; anything else — including a failed drain of the final
+			// batch — is a real error and must be visible.
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				s.logger.Error("subscriber batch failed",
 					"subscriber", s.name, "error", err)
 			}
@@ -150,38 +154,59 @@ func (s *Subscriber) Run(ctx context.Context) error {
 // It returns the number of events processed. Once a batch has been read,
 // processing and the checkpoint commit are shielded from ctx cancellation so
 // shutdown drains the in-flight batch instead of abandoning it.
-func (s *Subscriber) processBatch(ctx context.Context) (int, error) {
+func (s *Subscriber) processBatch(ctx context.Context) (processed int, err error) {
 	batch, acquired, err := s.checkpoints.Acquire(ctx, s.name)
 	if err != nil {
 		return 0, fmt.Errorf("failed to acquire checkpoint: %w", err)
 	}
 	if !acquired {
+		s.logger.Debug("checkpoint held by another process; skipping cycle",
+			"subscriber", s.name)
 		return 0, nil
 	}
+
+	// The batch must end no matter how this function exits — including a
+	// handler panic. A leaked batch would hold the checkpoint (and, for
+	// database-backed stores, its transaction and row lock) forever,
+	// silently starving every replica of the subscriber.
+	batchFinished := false
+	defer func() {
+		if batchFinished {
+			return
+		}
+		if rbErr := batch.Rollback(); rbErr != nil {
+			rbErr = fmt.Errorf("failed to roll back batch: %w", rbErr)
+			if err == nil {
+				err = rbErr
+			} else {
+				err = errors.Join(err, rbErr)
+			}
+		}
+	}()
 
 	events, err := s.events.ReadAfter(ctx, batch.Position(), s.batchSize)
 	if err != nil {
-		_ = batch.Rollback()
 		return 0, fmt.Errorf("failed to read feed after position %d: %w", batch.Position(), err)
 	}
 	if len(events) == 0 {
-		_ = batch.Rollback()
 		return 0, nil
 	}
 
-	// From here on the batch is drained even if ctx is cancelled.
+	// From here on the batch is drained even if ctx is cancelled. A handler
+	// panic propagates to the caller after the deferred rollback runs.
 	drainCtx := context.WithoutCancel(ctx)
 	handlerCtx := batch.HandlerContext(drainCtx)
 	for _, event := range events {
 		if err := s.handler(handlerCtx, event); err != nil {
-			_ = batch.Rollback()
 			return 0, fmt.Errorf("handler failed at position %d (event %s, type %s): %w",
 				event.Position, event.ID, event.EventType, err)
 		}
 	}
 
 	last := events[len(events)-1].Position
-	if err := batch.Commit(drainCtx, last); err != nil {
+	err = batch.Commit(drainCtx, last)
+	batchFinished = true // Commit owns the batch outcome either way; never double-finish.
+	if err != nil {
 		return 0, fmt.Errorf("failed to commit batch at position %d: %w", last, err)
 	}
 	return len(events), nil
@@ -189,6 +214,11 @@ func (s *Subscriber) processBatch(ctx context.Context) (int, error) {
 
 // Lag returns how far the subscriber's committed checkpoint trails the feed
 // head (0 when caught up). Consumers log or meter it; pericarp does not.
+//
+// A checkpoint ahead of the head is reported as an error rather than clamped
+// to 0: it means the events table was truncated or the checkpoint was reset
+// past the head, and the subscriber would otherwise look caught up while
+// silently skipping everything until positions catch back up.
 func (s *Subscriber) Lag(ctx context.Context) (int64, error) {
 	head, err := s.events.HeadPosition(ctx)
 	if err != nil {
@@ -198,14 +228,17 @@ func (s *Subscriber) Lag(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to read checkpoint: %w", err)
 	}
-	return max(head-position, 0), nil
+	if position > head {
+		return 0, fmt.Errorf("checkpoint %d is ahead of feed head %d: the event store was truncated or the checkpoint was reset past the head", position, head)
+	}
+	return head - position, nil
 }
 
 // ResetCheckpoint sets the subscriber's checkpoint. Resetting to 0 replays
 // all history — incrementally and resumably, since replay uses the same
-// batch/checkpoint cycle as live processing. Call it while the subscriber is
-// stopped, or rely on the checkpoint store to serialize with in-flight
-// batches (the GORM store blocks until the current batch finishes).
+// batch/checkpoint cycle as live processing. It is safe while the subscriber
+// runs: the checkpoint store serializes with in-flight batches (see
+// CheckpointStore.Reset), so the reset is never silently overwritten.
 func (s *Subscriber) ResetCheckpoint(ctx context.Context, position int64) error {
 	return s.checkpoints.Reset(ctx, s.name, position)
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -31,7 +32,10 @@ func (projectionRow) TableName() string { return "projection_rows" }
 // each glebarez :memory: connection gets a private database.
 func newGormFixture(t *testing.T) (*gorm.DB, domain.EventStore, *subscriptions.GormCheckpointStore) {
 	t.Helper()
-	dsn := filepath.Join(t.TempDir(), "subscriptions.db") + "?_pragma=busy_timeout(10000)"
+	// WAL so readers (the test's assertions, the subscriber's feed reads)
+	// never block writers — also what a production SQLite deployment of a
+	// background subscriber would run.
+	dsn := filepath.Join(t.TempDir(), "subscriptions.db") + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -171,6 +175,109 @@ func TestGormBatch_AbandonedBatchLeavesNoTrace(t *testing.T) {
 	}
 	if position != 0 {
 		t.Fatalf("expected checkpoint to stay at 0, got %d", position)
+	}
+}
+
+// TestSubscriber_DrainsGormBatchOnShutdown is the database-backed drain test:
+// cancelling the run context mid-batch must not kill the batch transaction —
+// handler writes and the checkpoint advance still commit before Run returns.
+// (database/sql auto-rolls-back transactions begun on a cancelled context,
+// which is exactly the regression this pins.)
+func TestSubscriber_DrainsGormBatchOnShutdown(t *testing.T) {
+	t.Parallel()
+
+	db, store, checkpoints := newGormFixture(t)
+	appendNumberedEvents(t, store, 1, 3)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	handler := func(ctx context.Context, event domain.EventEnvelope[any]) error {
+		startOnce.Do(func() {
+			close(started)
+			<-release
+		})
+		tx := subscriptions.TxFromContext(ctx)
+		if tx == nil {
+			return errors.New("handler expected the batch transaction in context")
+		}
+		return tx.Create(&projectionRow{EventID: event.ID}).Error
+	}
+
+	sub, err := subscriptions.NewSubscriber("gorm-drainer", store, checkpoints, handler,
+		subscriptions.WithPollInterval(subscriptionTestPollInterval), subscriptions.WithBatchSize(10))
+	if err != nil {
+		t.Fatalf("failed to create subscriber: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sub.Run(ctx) }()
+
+	<-started
+	cancel()
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("subscriber did not stop within 10s")
+	}
+
+	got := projectedEventIDs(t, db)
+	if len(got) != 3 {
+		t.Fatalf("expected the in-flight batch of 3 events to drain and commit, got %v", got)
+	}
+	position, err := checkpoints.Position(context.Background(), "gorm-drainer")
+	if err != nil {
+		t.Fatalf("failed to read checkpoint: %v", err)
+	}
+	if position != 3 {
+		t.Fatalf("expected checkpoint 3 after drain, got %d", position)
+	}
+}
+
+// TestGormCheckpointStore_ResetWinsOverInFlightBatch pins the reset contract
+// on SQLite, where the batch holds no row lock: an in-flight batch whose
+// checkpoint is reset underneath it must abort at Commit rather than
+// silently clobber the reset.
+func TestGormCheckpointStore_ResetWinsOverInFlightBatch(t *testing.T) {
+	t.Parallel()
+
+	_, _, checkpoints := newGormFixture(t)
+	ctx := context.Background()
+
+	// Establish a checkpoint at 3, then open a batch on top of it.
+	if err := checkpoints.Reset(ctx, "resettable", 3); err != nil {
+		t.Fatalf("failed to seed checkpoint: %v", err)
+	}
+	batch, acquired, err := checkpoints.Acquire(ctx, "resettable")
+	if err != nil || !acquired {
+		t.Fatalf("failed to acquire (acquired=%v): %v", acquired, err)
+	}
+	if batch.Position() != 3 {
+		t.Fatalf("expected batch at position 3, got %d", batch.Position())
+	}
+
+	// Operator resets to 0 while the batch is in flight.
+	if err := checkpoints.Reset(ctx, "resettable", 0); err != nil {
+		t.Fatalf("failed to reset: %v", err)
+	}
+
+	// The batch must notice the moved checkpoint and abort.
+	if err := batch.Commit(ctx, 5); err == nil {
+		t.Fatal("expected Commit to fail after a concurrent reset")
+	}
+
+	position, err := checkpoints.Position(ctx, "resettable")
+	if err != nil {
+		t.Fatalf("failed to read checkpoint: %v", err)
+	}
+	if position != 0 {
+		t.Fatalf("expected the reset to win (checkpoint 0), got %d", position)
 	}
 }
 
