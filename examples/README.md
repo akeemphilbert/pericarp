@@ -35,3 +35,18 @@ Demonstrates authorization decisions using both the `PolicyDecisionPoint` (pure 
 go run ./examples/authz/
 go test -v -race ./examples/authz/
 ```
+
+## Projection (`projection/`)
+
+Sketches the recommended Postgres + DynamoDB layering: Postgres is the authoritative event store (global ordered feed + crash-safe subscriptions), and a background subscriber projects events into a DynamoDB read model. Crash recovery happens from Postgres — the subscriber resumes from its checkpoint and re-applies events.
+
+- Single atomic write path (Postgres); no cross-database dual write
+- Subscriber wired with `GormCheckpointStore`, `GormParkingLot`, and `PostgresListener` (LISTEN/NOTIFY wake, polling fallback)
+- **At-least-once** DynamoDB projection made correct by an **idempotent** conditional write keyed on the global feed position (replays are no-ops; application stays monotonic)
+- Why the handler does not use `TxFromContext`: a DynamoDB write cannot join the subscriber's Postgres batch transaction
+
+```bash
+# needs live Postgres + DynamoDB
+POSTGRES_DSN=postgres://... DYNAMO_PROJECTION_TABLE=accounts \
+  AWS_REGION=us-east-1 go run ./examples/projection/
+```

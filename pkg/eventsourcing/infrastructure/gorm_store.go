@@ -18,10 +18,15 @@ type GormEventStore struct {
 	db   *gorm.DB
 }
 
-// NewGormEventStore creates a new GORM-based event store and auto-migrates the events table.
+// NewGormEventStore creates a new GORM-based event store and auto-migrates the
+// events table, including the global position column used by ReadAfter (and,
+// on Postgres, the xact_id commit-visibility guard).
 func NewGormEventStore(db *gorm.DB) (*GormEventStore, error) {
 	if err := db.AutoMigrate(&GormEventModel{}); err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate events table: %w", err)
+	}
+	if err := migrateEventPositions(db); err != nil {
+		return nil, fmt.Errorf("failed to migrate event positions: %w", err)
 	}
 	return &GormEventStore{
 		repo: NewGormEventRepository(db),
@@ -77,8 +82,21 @@ func (s *GormEventStore) Append(ctx context.Context, aggregateID string, expecte
 				domain.ErrConcurrencyConflict, expectedVersion, currentVersion)
 		}
 
-		return tx.Create(&models).Error
+		return s.repo.insertEventsTx(tx, models)
 	})
+}
+
+// ReadAfter returns committed events with Position > afterPosition across all
+// aggregates, ordered by Position ascending, up to limit (limit <= 0 means no
+// limit). On Postgres, rows whose inserting transaction may still be in
+// flight are withheld so the feed never skips an event that commits later
+// with a smaller position.
+func (s *GormEventStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	models, err := s.repo.GetEventsAfterPosition(ctx, afterPosition, limit)
+	if err != nil {
+		return nil, err
+	}
+	return modelsToEnvelopes(models), nil
 }
 
 // GetEvents retrieves all events for the given aggregate ID.
@@ -142,6 +160,13 @@ func (s *GormEventStore) GetCurrentVersion(ctx context.Context, aggregateID stri
 	return s.repo.GetCurrentVersion(ctx, aggregateID)
 }
 
+// HeadPosition returns the highest position ReadAfter could currently
+// deliver. On Postgres the same commit-visibility guard as ReadAfter applies,
+// so lag measured against it reaches zero when a consumer is caught up.
+func (s *GormEventStore) HeadPosition(ctx context.Context) (int64, error) {
+	return s.repo.GetHeadPosition(ctx)
+}
+
 // Close closes the GORM event store (no-op since GORM connection is managed externally).
 func (s *GormEventStore) Close() error {
 	return nil
@@ -164,6 +189,7 @@ func envelopeToModel(env domain.EventEnvelope[any]) (GormEventModel, error) {
 		EventType:     env.EventType,
 		SequenceNo:    env.SequenceNo,
 		TransactionID: env.TransactionID,
+		Position:      env.Position,
 		Payload:       payload,
 		Metadata:      metadata,
 		CreatedAt:     env.Created,
@@ -209,6 +235,7 @@ func modelToEnvelope(m GormEventModel) domain.EventEnvelope[any] {
 		SequenceNo:    m.SequenceNo,
 		TransactionID: m.TransactionID,
 		Metadata:      metadata,
+		Position:      m.Position,
 	}
 }
 

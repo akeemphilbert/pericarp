@@ -46,8 +46,14 @@ pkg/
 │   ├── infrastructure/               # EventStore implementations
 │   │   ├── memory_eventstore.go      # In-memory store (testing)
 │   │   └── file_eventstore.go        # File-based JSON store (development)
-│   └── application/                  # UnitOfWork
-│       └── unit_of_work.go           # SimpleUnitOfWork — tracks entities, atomic commit
+│   ├── application/                  # UnitOfWork
+│   │   └── unit_of_work.go           # SimpleUnitOfWork — tracks entities, atomic commit
+│   └── subscriptions/                # Opt-in crash-safe background subscriber runtime
+│       ├── subscriber.go             # Subscriber loop over EventStore.ReadAfter
+│       ├── checkpoint.go             # CheckpointStore/Batch interfaces
+│       ├── gorm_checkpoint.go        # Transactional checkpoints; TxFromContext for handlers
+│       ├── parking.go                # Poison-event ParkingLot (park, list, replay)
+│       └── postgres_listener.go      # LISTEN/NOTIFY wake signals (pgx)
 ```
 
 ### Key Types and Their Relationships
@@ -61,6 +67,8 @@ pkg/
 **SimpleUnitOfWork** (`application/unit_of_work.go`) — Tracks multiple entities, commits their uncommitted events atomically to an EventStore. Optionally dispatches events to an EventDispatcher after commit.
 
 **EventDispatcher** (`domain/event_dispatcher.go`) — Subscribe to event types with pattern matching (`user.created`, `user.*`, `*.created`, `*.*`). Handlers run in parallel via `errgroup`.
+
+**Subscriber** (`subscriptions/subscriber.go`) — Opt-in background worker over the store's global ordered feed (`EventStore.ReadAfter` + `Position`). Remembers one checkpoint per subscriber name; with `GormCheckpointStore`, handler writes through `TxFromContext` commit atomically with the checkpoint (exactly-once). Poison events are retried with backoff then parked (`WithParkingLot`); replicas coordinate via `FOR UPDATE SKIP LOCKED`; commits wake subscribers via Postgres LISTEN/NOTIFY or `InProcessNotifier`, with polling as the floor. Postgres 13+ required for the commit-visibility guard (`xid8`).
 
 ### Event Flow
 
@@ -80,7 +88,7 @@ pkg/
 
 ## Dependencies
 
-Only two: `github.com/segmentio/ksuid` (event IDs) and `golang.org/x/sync` (errgroup for parallel dispatch). Go 1.24+.
+Core: `github.com/segmentio/ksuid` (event IDs) and `golang.org/x/sync` (errgroup for parallel dispatch). Persistence/runtime: `gorm.io/gorm` (+ `glebarez/sqlite`, `gorm.io/driver/postgres`), `github.com/jackc/pgx/v5` (Postgres LISTEN/NOTIFY), AWS SDK (DynamoDB store). Auth (`pkg/auth`): `golang-jwt/jwt/v5`, `casbin`, `gorilla/sessions`, `golang.org/x/crypto`. Tests: `testcontainers-go`. Go 1.25+.
 
 ## Testing Conventions
 

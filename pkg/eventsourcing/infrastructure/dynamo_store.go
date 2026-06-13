@@ -356,6 +356,18 @@ func (s *DynamoEventStore) GetCurrentVersion(ctx context.Context, aggregateID st
 	return seqNo, nil
 }
 
+// ReadAfter is not supported: DynamoDB has no global, cross-aggregate write
+// ordering to assign positions from. It always returns ErrGlobalOrderingNotSupported.
+func (s *DynamoEventStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	return nil, domain.ErrGlobalOrderingNotSupported
+}
+
+// HeadPosition is not supported: DynamoDB has no global, cross-aggregate write
+// ordering. It always returns ErrGlobalOrderingNotSupported.
+func (s *DynamoEventStore) HeadPosition(ctx context.Context) (int64, error) {
+	return 0, domain.ErrGlobalOrderingNotSupported
+}
+
 // Close closes the DynamoDB event store (no-op since AWS SDK client is managed externally).
 func (s *DynamoEventStore) Close() error {
 	return nil

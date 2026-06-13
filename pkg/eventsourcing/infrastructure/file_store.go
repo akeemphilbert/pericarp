@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,11 @@ type FileStore struct {
 	mu      sync.RWMutex
 	// Cache for in-memory access
 	cache map[string][]domain.EventEnvelope[any]
+	// lastPos is the highest global position assigned so far. It is
+	// initialized from disk at construction and only ever grows, so positions
+	// stay monotonic even if the cache is cleared. The store assumes a single
+	// process owns the directory (it is a development store).
+	lastPos int64
 }
 
 // NewFileStore creates a new file-based event store.
@@ -45,7 +51,63 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 		return nil, fmt.Errorf("failed to load existing events: %w", err)
 	}
 
+	// Assign global positions to events stored before positions existed.
+	if err := store.backfillPositions(); err != nil {
+		return nil, fmt.Errorf("failed to backfill event positions: %w", err)
+	}
+
 	return store, nil
+}
+
+// backfillPositions assigns global positions to cached events that predate
+// position tracking (Position == 0) and initializes lastPos. Legacy events are
+// ordered by event ID — KSUIDs sort by creation time, which is the best
+// available approximation of commit order. Aggregates whose events changed are
+// rewritten to disk so the assignment is stable across restarts.
+func (f *FileStore) backfillPositions() error {
+	for _, events := range f.cache {
+		for _, event := range events {
+			if event.Position > f.lastPos {
+				f.lastPos = event.Position
+			}
+		}
+	}
+
+	type ref struct {
+		aggregateID string
+		index       int
+		eventID     string
+	}
+	var missing []ref
+	for aggregateID, events := range f.cache {
+		for i, event := range events {
+			if event.Position == 0 {
+				missing = append(missing, ref{aggregateID, i, event.ID})
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	slices.SortFunc(missing, func(a, b ref) int {
+		return cmp.Compare(a.eventID, b.eventID)
+	})
+
+	changed := make(map[string]bool)
+	for _, r := range missing {
+		f.lastPos++
+		f.cache[r.aggregateID][r.index].Position = f.lastPos
+		changed[r.aggregateID] = true
+	}
+
+	for aggregateID := range changed {
+		if err := f.saveToFile(aggregateID, f.cache[aggregateID]); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // getFilePath returns the file path for an aggregate's events.
@@ -177,8 +239,14 @@ func (f *FileStore) Append(ctx context.Context, aggregateID string, expectedVers
 		return fmt.Errorf("%w: expected version %d, got %d", domain.ErrConcurrencyConflict, expectedVersion, currentVersion)
 	}
 
-	// Append events preserving their SequenceNo as set by the domain
-	currentEvents = append(currentEvents, events...)
+	// Append events preserving their SequenceNo as set by the domain.
+	// Each event is copied so the store-assigned global Position does not
+	// mutate the caller's envelopes.
+	for _, event := range events {
+		f.lastPos++
+		event.Position = f.lastPos
+		currentEvents = append(currentEvents, event)
+	}
 
 	// Save to disk
 	if err := f.saveToFile(aggregateID, currentEvents); err != nil {
@@ -325,23 +393,8 @@ func (f *FileStore) GetEventsByTransactionID(ctx context.Context, transactionID 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// Ensure aggregates on disk but not yet cached are loaded.
-	entries, err := os.ReadDir(f.baseDir)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("failed to read event directory: %w", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		aggregateID := entry.Name()[:len(entry.Name())-5]
-		if _, cached := f.cache[aggregateID]; !cached {
-			loaded, loadErr := f.loadFromFile(filepath.Join(f.baseDir, entry.Name()))
-			if loadErr != nil {
-				return nil, fmt.Errorf("failed to load events from %s: %w", entry.Name(), loadErr)
-			}
-			f.cache[aggregateID] = loaded
-		}
+	if err := f.loadUncachedLocked(); err != nil {
+		return nil, err
 	}
 
 	var result []domain.EventEnvelope[any]
@@ -358,6 +411,65 @@ func (f *FileStore) GetEventsByTransactionID(ctx context.Context, transactionID 
 	}
 	slices.SortFunc(result, compareEnvelopes)
 	return result, nil
+}
+
+// loadUncachedLocked loads aggregates that exist on disk but are not yet
+// cached. The caller must hold the write lock.
+func (f *FileStore) loadUncachedLocked() error {
+	entries, err := os.ReadDir(f.baseDir)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read event directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		aggregateID := entry.Name()[:len(entry.Name())-5]
+		if _, cached := f.cache[aggregateID]; !cached {
+			loaded, loadErr := f.loadFromFile(filepath.Join(f.baseDir, entry.Name()))
+			if loadErr != nil {
+				return fmt.Errorf("failed to load events from %s: %w", entry.Name(), loadErr)
+			}
+			f.cache[aggregateID] = loaded
+		}
+	}
+	return nil
+}
+
+// ReadAfter returns events with Position > afterPosition across all aggregates,
+// ordered by Position ascending, up to limit (limit <= 0 means no limit).
+func (f *FileStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if err := f.loadUncachedLocked(); err != nil {
+		return nil, err
+	}
+
+	result := make([]domain.EventEnvelope[any], 0)
+	for _, events := range f.cache {
+		for _, event := range events {
+			if event.Position > afterPosition {
+				result = append(result, event)
+			}
+		}
+	}
+
+	slices.SortFunc(result, func(a, b domain.EventEnvelope[any]) int {
+		return cmp.Compare(a.Position, b.Position)
+	})
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+
+	return result, nil
+}
+
+// HeadPosition returns the highest position assigned so far.
+func (f *FileStore) HeadPosition(ctx context.Context) (int64, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.lastPos, nil
 }
 
 // GetCurrentVersion returns the current version for the aggregate.
