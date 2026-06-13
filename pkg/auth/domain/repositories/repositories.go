@@ -2,9 +2,17 @@ package repositories
 
 import (
 	"context"
+	"errors"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 )
+
+// ErrDuplicateCredential is returned by CredentialRepository.Save when the
+// row violates the unique index on (provider, provider_user_id). This lets
+// callers translate a TOCTOU race between a FindByProvider pre-check and a
+// concurrent insert into the appropriate domain-level error (e.g.
+// ErrEmailAlreadyTaken) without depending on driver-specific error shapes.
+var ErrDuplicateCredential = errors.New("repositories: duplicate credential (provider, provider_user_id)")
 
 // PaginatedResponse represents a paginated response with cursor-based pagination.
 type PaginatedResponse[T any] struct {
@@ -105,6 +113,26 @@ type CredentialRepository interface {
 
 	// FindAll retrieves Credential aggregates with cursor-based pagination.
 	FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.Credential], error)
+}
+
+// PasswordCredentialRepository defines the interface for PasswordCredential
+// aggregate persistence. PasswordCredentials are linked 1:1 to a Credential
+// of provider="password" by CredentialID.
+type PasswordCredentialRepository interface {
+	// Save persists the PasswordCredential aggregate state.
+	Save(ctx context.Context, credential *entities.PasswordCredential) error
+
+	// FindByID retrieves a PasswordCredential by its ID.
+	// Returns (nil, nil) if not found.
+	FindByID(ctx context.Context, id string) (*entities.PasswordCredential, error)
+
+	// FindByCredentialID retrieves the PasswordCredential linked to the
+	// given Credential. Returns (nil, nil) if not found.
+	FindByCredentialID(ctx context.Context, credentialID string) (*entities.PasswordCredential, error)
+
+	// Delete removes the PasswordCredential row linked to the given
+	// Credential. A no-op (returns nil) when no row exists.
+	Delete(ctx context.Context, credentialID string) error
 }
 
 // InviteRepository defines the interface for Invite aggregate persistence.

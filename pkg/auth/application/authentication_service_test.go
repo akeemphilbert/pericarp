@@ -2,13 +2,21 @@ package application_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"errors"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/akeemphilbert/pericarp/pkg/auth"
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
+	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
+	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+	esInfra "github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 )
 
 // --- Mock implementations ---
@@ -899,12 +907,22 @@ func TestDefaultAuthenticationService_RefreshTokens_ProviderFails(t *testing.T) 
 // --- Mock JWTService ---
 
 type mockJWTService struct {
-	issueFunc func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (string, error)
+	issueFunc func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim, extras map[string]any) (string, error)
+	// lastSubscription / lastExtras capture inputs so wiring tests can
+	// assert what reached the signer. issueCount disambiguates "called
+	// with nil extras" from "not called at all" — the fail-closed
+	// enricher contract relies on the latter.
+	lastSubscription *auth.SubscriptionClaim
+	lastExtras       map[string]any
+	issueCount       int
 }
 
-func (m *mockJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (string, error) {
+func (m *mockJWTService) IssueToken(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string, subscription *auth.SubscriptionClaim, extras map[string]any) (string, error) {
+	m.lastSubscription = subscription
+	m.lastExtras = extras
+	m.issueCount++
 	if m.issueFunc != nil {
-		return m.issueFunc(ctx, agent, accounts, activeAccountID)
+		return m.issueFunc(ctx, agent, accounts, activeAccountID, subscription, extras)
 	}
 	return "mock-jwt-token", nil
 }
@@ -1030,6 +1048,734 @@ func TestIssueIdentityToken_NilAccountRepo_StillIssuesToken(t *testing.T) {
 	}
 }
 
+// --- ClaimsEnricher wiring tests ---
+
+func TestIssueIdentityToken_NoClaimsEnricher_NilExtras(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	if jwtSvc.lastExtras != nil {
+		t.Errorf("expected nil extras when no enricher configured, got %v", jwtSvc.lastExtras)
+	}
+}
+
+func TestIssueIdentityToken_ClaimsEnricher_PassesExtras(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	enricher := func(_ context.Context, agent *entities.Agent, _ []*entities.Account, activeAccountID string) (map[string]any, error) {
+		return map[string]any{"role": "admin", "agent_seen": agent.GetID(), "active": activeAccountID}, nil
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	if jwtSvc.lastExtras["role"] != "admin" {
+		t.Errorf("lastExtras[role] = %v, want admin", jwtSvc.lastExtras["role"])
+	}
+	if jwtSvc.lastExtras["agent_seen"] != "agent-1" {
+		t.Errorf("lastExtras[agent_seen] = %v, want agent-1", jwtSvc.lastExtras["agent_seen"])
+	}
+	if jwtSvc.lastExtras["active"] != "account-1" {
+		t.Errorf("lastExtras[active] = %v, want account-1", jwtSvc.lastExtras["active"])
+	}
+}
+
+func TestIssueIdentityToken_ClaimsEnricher_ErrorFailsIssuance(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	wantErr := errors.New("enricher: db down")
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return nil, wantErr
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	_, err := svc.IssueIdentityToken(ctx, agent, "account-1")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want wraps %v", err, wantErr)
+	}
+	if jwtSvc.issueCount != 0 {
+		t.Errorf("JWTService.IssueToken called %d times after enricher error; fail-closed contract requires zero", jwtSvc.issueCount)
+	}
+}
+
+func TestIssueIdentityToken_ClaimsEnricher_NilResult_NoExtras(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return nil, nil
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	if jwtSvc.issueCount != 1 {
+		t.Errorf("issueCount = %d, want 1", jwtSvc.issueCount)
+	}
+	if jwtSvc.lastExtras != nil {
+		t.Errorf("lastExtras = %v, want nil for nil enricher result", jwtSvc.lastExtras)
+	}
+}
+
+func TestIssueIdentityToken_ClaimsEnricher_EmptyResult_NoExtras(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return map[string]any{}, nil
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	if jwtSvc.issueCount != 1 {
+		t.Errorf("issueCount = %d, want 1", jwtSvc.issueCount)
+	}
+	if len(jwtSvc.lastExtras) != 0 {
+		t.Errorf("lastExtras len = %d, want 0", len(jwtSvc.lastExtras))
+	}
+}
+
+// TestIssueIdentityToken_ClaimsEnricher_NilOption_Ignored locks the
+// documented contract that WithClaimsEnricher(nil) is a silent no-op
+// (matching every other With* option). Without this assertion, a
+// future change that propagates nil through the option could regress
+// to either a panic or a silently-cleared previously-set enricher.
+func TestIssueIdentityToken_ClaimsEnricher_NilOption_Ignored(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(nil),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	if jwtSvc.lastExtras != nil {
+		t.Errorf("lastExtras = %v, want nil for nil enricher option", jwtSvc.lastExtras)
+	}
+}
+
+func TestIssueIdentityToken_SubscriptionAndEnricher_Coexist(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	subSvc := &mockSubscriptionService{
+		claim: &auth.SubscriptionClaim{Status: auth.SubscriptionStatusActive, Plan: "pro"},
+	}
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return map[string]any{"role": "admin"}, nil
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	if jwtSvc.lastSubscription == nil || jwtSvc.lastSubscription.Plan != "pro" {
+		t.Errorf("lastSubscription = %+v, want plan=pro", jwtSvc.lastSubscription)
+	}
+	if jwtSvc.lastExtras["role"] != "admin" {
+		t.Errorf("lastExtras[role] = %v, want admin", jwtSvc.lastExtras["role"])
+	}
+}
+
+func TestIssueIdentityToken_ClaimsEnricher_ReservedKeyRejected(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Use the real RSAJWTService so the reserved-name gate runs end to
+	// end — protects against a future change that drops the check.
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	jwtSvc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(rsaKey))
+
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return map[string]any{"sub": "agent-spoof", "role": "admin"}, nil
+	}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	_, err = svc.IssueIdentityToken(ctx, agent, "account-1")
+	if !errors.Is(err, application.ErrReservedClaim) {
+		t.Fatalf("err = %v, want wraps ErrReservedClaim", err)
+	}
+}
+
+// Acceptance test for issue #37.
+func TestIssueIdentityToken_ClaimsEnricher_EndToEnd(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	jwtSvc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(rsaKey))
+
+	enricher := func(_ context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (map[string]any, error) {
+		// Echo every input so the test can assert each one was wired
+		// through correctly — guards against a refactor that
+		// accidentally drops or stubs an argument.
+		accountIDs := make([]any, len(accounts))
+		for i, a := range accounts {
+			accountIDs[i] = a.GetID()
+		}
+		return map[string]any{
+			"role":           "owner",
+			"tenant_id":      "tenant-42",
+			"enricher_agent": agent.GetID(),
+			"enricher_acct":  activeAccountID,
+			"enricher_accts": accountIDs,
+		}, nil
+	}
+
+	deps := &testDeps{
+		providers:   application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+		tokens:      newMockTokenStore(),
+	}
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
+		application.WithTokenStore(deps.tokens),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-7", "Owner", entities.AgentTypePerson)
+	account, _ := new(entities.Account).With("account-7", "Owner's Account", entities.AccountTypePersonal)
+	deps.accounts.accounts["account-7"] = account
+	deps.accounts.byMember["agent-7"] = account
+
+	tokenString, err := svc.IssueIdentityToken(ctx, agent, "account-7")
+	if err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	if tokenString == "" {
+		t.Fatal("expected non-empty token")
+	}
+
+	claims, err := jwtSvc.ValidateToken(ctx, tokenString)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.AgentID != "agent-7" {
+		t.Errorf("AgentID = %q, want agent-7", claims.AgentID)
+	}
+	if claims.Extras["role"] != "owner" {
+		t.Errorf("Extras[role] = %v, want owner", claims.Extras["role"])
+	}
+	if claims.Extras["tenant_id"] != "tenant-42" {
+		t.Errorf("Extras[tenant_id] = %v, want tenant-42", claims.Extras["tenant_id"])
+	}
+	if claims.Extras["enricher_agent"] != "agent-7" {
+		t.Errorf("Extras[enricher_agent] = %v, want agent-7", claims.Extras["enricher_agent"])
+	}
+	if claims.Extras["enricher_acct"] != "account-7" {
+		t.Errorf("Extras[enricher_acct] = %v, want account-7", claims.Extras["enricher_acct"])
+	}
+	gotAccts, _ := claims.Extras["enricher_accts"].([]any)
+	if len(gotAccts) != 1 || gotAccts[0] != "account-7" {
+		t.Errorf("Extras[enricher_accts] = %v, want [account-7] (verifies accounts arg flowed through)", gotAccts)
+	}
+}
+
+// --- RefreshIdentityToken tests ---
+
+func TestRefreshIdentityToken_NoJWTService_ReturnsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, _ := newTestService() // no WithJWTService
+	token, err := svc.RefreshIdentityToken(ctx, "agent-1", "account-1")
+	if !errors.Is(err, application.ErrJWTServiceNotConfigured) {
+		t.Fatalf("err = %v, want ErrJWTServiceNotConfigured", err)
+	}
+	if token != "" {
+		t.Errorf("token = %q, want empty on error", token)
+	}
+}
+
+func TestRefreshIdentityToken_EmptyAgentID_ReturnsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+
+	if _, err := svc.RefreshIdentityToken(ctx, "", "account-1"); err == nil {
+		t.Fatal("expected error for empty agent ID")
+	}
+	if jwtSvc.issueCount != 0 {
+		t.Errorf("JWTService.IssueToken called %d times for empty agent ID; want 0", jwtSvc.issueCount)
+	}
+}
+
+func TestRefreshIdentityToken_AgentNotFound_ReturnsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+
+	_, err := svc.RefreshIdentityToken(ctx, "agent-missing", "account-1")
+	if err == nil {
+		t.Fatal("expected error when agent not found")
+	}
+	if jwtSvc.issueCount != 0 {
+		t.Errorf("JWTService.IssueToken called %d times for missing agent; want 0", jwtSvc.issueCount)
+	}
+}
+
+func TestRefreshIdentityToken_AgentLookupFails_ReturnsError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	wantErr := errors.New("database down")
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		&errorAgentRepo{err: wantErr},
+		newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+
+	_, err := svc.RefreshIdentityToken(ctx, "agent-1", "account-1")
+	// errors.Is locks the wrap chain — a regression that drops %w would
+	// silently break callers that route on the underlying error.
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want wraps %v", err, wantErr)
+	}
+	if jwtSvc.issueCount != 0 {
+		t.Errorf("JWTService.IssueToken called %d times after lookup error; want 0", jwtSvc.issueCount)
+	}
+}
+
+// TestRefreshIdentityToken_RereadsEnricherAndSubscription wires an
+// enricher whose return value depends on a mutable closure variable
+// alongside a SubscriptionService whose claim is also mutable. Issue a
+// token, flip both, refresh, validate — assert the new token reflects
+// both updates AND that it is genuinely a fresh token (not the cached
+// original) via a jti and token-string inequality check. The freshness
+// check guards against a future caching regression that returns an old
+// token whose claims happen to match.
+func TestRefreshIdentityToken_RereadsEnricherAndSubscription(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	jwtSvc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(rsaKey))
+
+	role := "viewer"
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return map[string]any{"role": role}, nil
+	}
+	subSvc := &mockSubscriptionService{
+		claim: &auth.SubscriptionClaim{Status: auth.SubscriptionStatusTrialing, Plan: "trial"},
+	}
+
+	deps := &testDeps{
+		providers:   application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+		tokens:      newMockTokenStore(),
+	}
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
+		application.WithTokenStore(deps.tokens),
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+		application.WithSubscriptionService(subSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-9", "Refreshable", entities.AgentTypePerson)
+	if err := deps.agents.Save(ctx, agent); err != nil {
+		t.Fatalf("save agent: %v", err)
+	}
+	account, _ := new(entities.Account).With("account-9", "Refreshable's Account", entities.AccountTypePersonal)
+	deps.accounts.accounts["account-9"] = account
+	deps.accounts.byMember["agent-9"] = account
+
+	originalToken, err := svc.IssueIdentityToken(ctx, agent, "account-9")
+	if err != nil {
+		t.Fatalf("IssueIdentityToken: %v", err)
+	}
+	originalClaims, err := jwtSvc.ValidateToken(ctx, originalToken)
+	if err != nil {
+		t.Fatalf("ValidateToken (original): %v", err)
+	}
+	if originalClaims.Extras["role"] != "viewer" {
+		t.Fatalf("original Extras[role] = %v, want viewer", originalClaims.Extras["role"])
+	}
+	if originalClaims.Subscription == nil || originalClaims.Subscription.Plan != "trial" {
+		t.Fatalf("original Subscription = %+v, want plan=trial", originalClaims.Subscription)
+	}
+
+	// Server-side state changes (purchase confirmed, role granted).
+	role = "admin"
+	subSvc.claim = &auth.SubscriptionClaim{Status: auth.SubscriptionStatusActive, Plan: "pro"}
+
+	refreshedToken, err := svc.RefreshIdentityToken(ctx, "agent-9", "account-9")
+	if err != nil {
+		t.Fatalf("RefreshIdentityToken: %v", err)
+	}
+	if refreshedToken == originalToken {
+		t.Fatal("refresh returned the original token verbatim; new signature required")
+	}
+	refreshedClaims, err := jwtSvc.ValidateToken(ctx, refreshedToken)
+	if err != nil {
+		t.Fatalf("ValidateToken (refreshed): %v", err)
+	}
+	// jti is a fresh ksuid per token (RSAJWTService.IssueToken), so it
+	// always differs between calls regardless of timing — a stronger
+	// "this is not the same token" check than IssuedAt and with no
+	// wall-clock dependency.
+	if refreshedClaims.ID == originalClaims.ID {
+		t.Errorf("refreshed jti = %q (same as original); IssueToken must mint a fresh ksuid", refreshedClaims.ID)
+	}
+	if refreshedClaims.Extras["role"] != "admin" {
+		t.Errorf("refreshed Extras[role] = %v, want admin (enricher must re-run)", refreshedClaims.Extras["role"])
+	}
+	if refreshedClaims.Subscription == nil || refreshedClaims.Subscription.Plan != "pro" {
+		t.Errorf("refreshed Subscription = %+v, want plan=pro (subscription must re-snapshot)", refreshedClaims.Subscription)
+	}
+	if refreshedClaims.AgentID != "agent-9" {
+		t.Errorf("refreshed AgentID = %q, want agent-9", refreshedClaims.AgentID)
+	}
+}
+
+// TestRefreshIdentityToken_SubscriptionLookupFails_FailOpen guards the
+// inherited fail-open contract: if the SubscriptionService errors, the
+// refresh still succeeds with no subscription claim. A regression that
+// turns this into fail-closed would silently break refresh during any
+// upstream billing-provider outage.
+func TestRefreshIdentityToken_SubscriptionLookupFails_FailOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	jwtSvc := authjwt.NewRSAJWTService(authjwt.WithSigningKey(rsaKey))
+
+	subSvc := &mockSubscriptionService{err: errors.New("stripe: 503")}
+
+	deps := &testDeps{
+		providers:   application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+	}
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+	)
+	agent, _ := new(entities.Agent).With("agent-2", "Bob", entities.AgentTypePerson)
+	if err := deps.agents.Save(ctx, agent); err != nil {
+		t.Fatalf("save agent: %v", err)
+	}
+
+	token, err := svc.RefreshIdentityToken(ctx, "agent-2", "")
+	if err != nil {
+		t.Fatalf("RefreshIdentityToken should fail-open on subscription error, got: %v", err)
+	}
+	claims, err := jwtSvc.ValidateToken(ctx, token)
+	if err != nil {
+		t.Fatalf("ValidateToken: %v", err)
+	}
+	if claims.Subscription != nil {
+		t.Errorf("Subscription = %+v, want nil (subscription lookup errored, fail-open should drop the claim)", claims.Subscription)
+	}
+}
+
+func TestRefreshIdentityToken_EnricherErrorFailsIssuance(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	wantErr := errors.New("enricher: db down")
+	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
+		return nil, wantErr
+	}
+	deps := &testDeps{
+		providers:   application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+	}
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
+		application.WithJWTService(jwtSvc),
+		application.WithClaimsEnricher(enricher),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+	if err := deps.agents.Save(ctx, agent); err != nil {
+		t.Fatalf("save agent: %v", err)
+	}
+
+	_, err := svc.RefreshIdentityToken(ctx, "agent-1", "account-1")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, want wraps %v", err, wantErr)
+	}
+	if jwtSvc.issueCount != 0 {
+		t.Errorf("JWTService.IssueToken called %d times after enricher error; want 0", jwtSvc.issueCount)
+	}
+}
+
+// --- SubscriptionService wiring tests ---
+
+type mockSubscriptionService struct {
+	claim         *auth.SubscriptionClaim
+	err           error
+	calledAgentID string
+	calledAccount string
+	called        bool
+}
+
+func (m *mockSubscriptionService) GetSubscription(_ context.Context, agentID, accountID string) (*auth.SubscriptionClaim, error) {
+	m.called = true
+	m.calledAgentID = agentID
+	m.calledAccount = accountID
+	return m.claim, m.err
+}
+
+func TestIssueIdentityToken_NoSubscriptionService_OmitsClaim(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if jwtSvc.lastSubscription != nil {
+		t.Errorf("expected nil subscription, got %+v", jwtSvc.lastSubscription)
+	}
+}
+
+func TestIssueIdentityToken_WithSubscriptionService_EmbedsClaim(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	want := &auth.SubscriptionClaim{
+		Status:   auth.SubscriptionStatusActive,
+		Plan:     "pro",
+		Provider: "stripe",
+	}
+	subSvc := &mockSubscriptionService{claim: want}
+	jwtSvc := &mockJWTService{}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if !subSvc.called {
+		t.Fatal("SubscriptionService.GetSubscription was not called")
+	}
+	if subSvc.calledAgentID != "agent-1" {
+		t.Errorf("called agentID = %q, want %q", subSvc.calledAgentID, "agent-1")
+	}
+	if subSvc.calledAccount != "account-1" {
+		t.Errorf("called accountID = %q, want %q", subSvc.calledAccount, "account-1")
+	}
+	if jwtSvc.lastSubscription != want {
+		t.Errorf("subscription passed to JWTService = %+v, want %+v", jwtSvc.lastSubscription, want)
+	}
+}
+
+func TestIssueIdentityToken_NonNilInactiveClaim_EmbeddedAsIs(t *testing.T) {
+	// Adapters that distinguish "no record" from "found, no paid plan"
+	// return a non-nil claim with Status=Inactive. Verify that flows
+	// through end-to-end rather than getting collapsed into nil.
+	t.Parallel()
+	ctx := context.Background()
+
+	want := &auth.SubscriptionClaim{Status: auth.SubscriptionStatusInactive, Provider: "stripe"}
+	subSvc := &mockSubscriptionService{claim: want}
+	jwtSvc := &mockJWTService{}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if jwtSvc.lastSubscription != want {
+		t.Fatalf("subscription passed to JWTService = %+v, want %+v", jwtSvc.lastSubscription, want)
+	}
+	if jwtSvc.lastSubscription.IsActive() {
+		t.Error("inactive claim should not report active")
+	}
+}
+
+func TestIssueIdentityToken_SubscriptionLookupError_TokenStillIssued(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	subSvc := &mockSubscriptionService{err: errors.New("billing provider unreachable")}
+	jwtSvc := &mockJWTService{}
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(subSvc),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	token, err := svc.IssueIdentityToken(ctx, agent, "account-1")
+	if err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected token despite subscription lookup error, got empty")
+	}
+	if jwtSvc.lastSubscription != nil {
+		t.Errorf("expected nil subscription on lookup error, got %+v", jwtSvc.lastSubscription)
+	}
+}
+
+func TestWithSubscriptionService_NilNoOp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+		application.WithSubscriptionService(nil),
+	)
+
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "account-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() error: %v", err)
+	}
+	if jwtSvc.lastSubscription != nil {
+		t.Errorf("expected nil subscription, got %+v", jwtSvc.lastSubscription)
+	}
+}
+
+// errorAgentRepo is a mock AgentRepository whose FindByID always errors.
+type errorAgentRepo struct {
+	err error
+}
+
+func (m *errorAgentRepo) Save(_ context.Context, _ *entities.Agent) error { return nil }
+func (m *errorAgentRepo) FindByID(_ context.Context, _ string) (*entities.Agent, error) {
+	return nil, m.err
+}
+func (m *errorAgentRepo) FindAll(_ context.Context, _ string, _ int) (*repositories.PaginatedResponse[*entities.Agent], error) {
+	return nil, nil
+}
+
 // errorAccountRepo is a mock AccountRepository that always returns an error from FindByMember.
 type errorAccountRepo struct {
 	err error
@@ -1080,5 +1826,166 @@ func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 	// With nil authorization checker, permissions should be nil/empty
 	if len(info.Permissions) != 0 {
 		t.Errorf("expected 0 permissions with nil authorization checker, got %d", len(info.Permissions))
+	}
+}
+
+// newServiceWithEventing builds the same mock-backed service as newTestService,
+// but additionally wires a real in-memory EventStore and (optionally) an
+// EventDispatcher so callers can assert dispatch behavior.
+func newServiceWithEventing(t *testing.T, dispatcher *esDomain.EventDispatcher) (*application.DefaultAuthenticationService, *testDeps, *esInfra.MemoryStore) {
+	t.Helper()
+	deps := &testDeps{
+		providers: application.OAuthProviderRegistry{
+			"google": &mockOAuthProvider{name: "google"},
+		},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+		tokens:      newMockTokenStore(),
+		authz:       &mockAuthorizationChecker{},
+	}
+	store := esInfra.NewMemoryStore()
+
+	opts := []application.AuthServiceOption{
+		application.WithTokenStore(deps.tokens),
+		application.WithAuthorizationChecker(deps.authz),
+		application.WithEventStore(store),
+	}
+	if dispatcher != nil {
+		opts = append(opts, application.WithEventDispatcher(dispatcher))
+	}
+
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers,
+		deps.agents,
+		deps.credentials,
+		deps.sessions,
+		deps.accounts,
+		opts...,
+	)
+	return svc, deps, store
+}
+
+// TestFindOrCreateAgent_DispatchesEventsWhenConfigured verifies that when an
+// EventDispatcher is wired via WithEventDispatcher, FindOrCreateAgent fans the
+// committed envelopes out to subscribed handlers.
+func TestFindOrCreateAgent_DispatchesEventsWhenConfigured(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	dispatcher := esDomain.NewEventDispatcher()
+
+	var mu sync.Mutex
+	var received []string
+	if err := dispatcher.SubscribeWildcard(func(_ context.Context, env esDomain.EventEnvelope[any]) error {
+		mu.Lock()
+		defer mu.Unlock()
+		received = append(received, env.EventType)
+		return nil
+	}); err != nil {
+		t.Fatalf("SubscribeWildcard() error: %v", err)
+	}
+
+	svc, _, _ := newServiceWithEventing(t, dispatcher)
+
+	if _, _, _, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
+		ProviderUserID: "google-user-dispatch",
+		Email:          "dispatch@example.com",
+		DisplayName:    "Dispatch User",
+		Provider:       "google",
+	}); err != nil {
+		t.Fatalf("FindOrCreateAgent() error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	wantTypes := map[string]bool{
+		entities.EventTypeAgentCreated:       false,
+		entities.EventTypeAccountCreated:     false,
+		entities.EventTypeAccountMemberAdded: false,
+		entities.EventTypeCredentialCreated:  false,
+	}
+	for _, et := range received {
+		if _, ok := wantTypes[et]; ok {
+			wantTypes[et] = true
+		}
+	}
+	for et, seen := range wantTypes {
+		if !seen {
+			sorted := append([]string(nil), received...)
+			sort.Strings(sorted)
+			t.Errorf("dispatcher did not receive event %q; got %v", et, sorted)
+		}
+	}
+}
+
+// TestFindOrCreateAgent_NoDispatcherIsDefault verifies that omitting
+// WithEventDispatcher is a true no-op: FindOrCreateAgent still succeeds, and
+// — critically — events still land in the EventStore. The store readback is
+// what makes this test meaningful (otherwise it would only assert "no panic"),
+// since the visible "events are durable independent of dispatcher" contract
+// is precisely what callers without subscribers depend on.
+func TestFindOrCreateAgent_NoDispatcherIsDefault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, _, store := newServiceWithEventing(t, nil)
+
+	agent, credential, account, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
+		ProviderUserID: "google-user-nodisp",
+		Email:          "nodisp@example.com",
+		DisplayName:    "No Dispatch",
+		Provider:       "google",
+	})
+	if err != nil {
+		t.Fatalf("FindOrCreateAgent() error: %v", err)
+	}
+	if agent == nil || credential == nil || account == nil {
+		t.Fatal("expected non-nil agent, credential, and account")
+	}
+
+	agentEvents, err := store.GetEvents(ctx, agent.GetID())
+	if err != nil {
+		t.Fatalf("store.GetEvents(agent) error: %v", err)
+	}
+	if len(agentEvents) == 0 {
+		t.Error("expected agent events to be durably appended even without a dispatcher")
+	}
+}
+
+// TestFindOrCreateAgent_DispatchHandlerErrorIsNonFatal verifies that handler
+// failures are swallowed by SimpleUnitOfWork.Commit (events are already
+// durable post-Append) and do not cause FindOrCreateAgent to fail. This
+// matches the eventually-consistent dispatch contract documented on
+// WithEventDispatcher.
+func TestFindOrCreateAgent_DispatchHandlerErrorIsNonFatal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	dispatcher := esDomain.NewEventDispatcher()
+	if err := dispatcher.SubscribeWildcard(func(_ context.Context, _ esDomain.EventEnvelope[any]) error {
+		return errors.New("handler intentionally failing")
+	}); err != nil {
+		t.Fatalf("SubscribeWildcard() error: %v", err)
+	}
+
+	svc, deps, _ := newServiceWithEventing(t, dispatcher)
+
+	agent, _, _, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
+		ProviderUserID: "google-user-handler-err",
+		Email:          "handler-err@example.com",
+		DisplayName:    "Handler Err",
+		Provider:       "google",
+	})
+	if err != nil {
+		t.Fatalf("FindOrCreateAgent() error despite non-fatal handler failure: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("expected non-nil agent even when handler errors")
+	}
+	if len(deps.agents.agents) != 1 {
+		t.Errorf("expected 1 saved agent, got %d", len(deps.agents.agents))
 	}
 }

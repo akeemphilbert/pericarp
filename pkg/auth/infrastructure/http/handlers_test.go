@@ -130,6 +130,26 @@ func (m *mockAuthService) IssueIdentityToken(ctx context.Context, agent *entitie
 	return "", nil
 }
 
+func (m *mockAuthService) RefreshIdentityToken(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockAuthService) RegisterPassword(_ context.Context, _, _, _ string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	return nil, nil, nil, nil
+}
+
+func (m *mockAuthService) VerifyPassword(_ context.Context, _, _ string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	return nil, nil, nil, nil
+}
+
+func (m *mockAuthService) ImportPasswordCredential(_ context.Context, _, _, _, _, _ string, _ ...application.ImportOption) error {
+	return nil
+}
+
+func (m *mockAuthService) UpdatePassword(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
 // --- Mock CredentialRepository ---
 
 type mockCredRepo struct {
@@ -804,7 +824,7 @@ func TestCallback_WithJWT_SetsCookie(t *testing.T) {
 	svc := &mockAuthService{
 		issueIdentityTokenFunc: func(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
 			account, _ := new(entities.Account).With("account-1", "Test Account", entities.AccountTypePersonal)
-			return jwtSvc.IssueToken(ctx, agent, []*entities.Account{account}, activeAccountID)
+			return jwtSvc.IssueToken(ctx, agent, []*entities.Account{account}, activeAccountID, nil, nil)
 		},
 	}
 

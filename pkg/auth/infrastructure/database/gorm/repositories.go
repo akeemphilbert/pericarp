@@ -3,6 +3,7 @@ package gorm
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
@@ -10,6 +11,28 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/models"
 	"gorm.io/gorm"
 )
+
+// isDuplicateKeyError reports whether err describes a unique-constraint
+// violation. It first checks gorm.ErrDuplicatedKey (set when the connection
+// has TranslateError enabled) and falls back to driver-specific substrings
+// otherwise: SQLite ("UNIQUE constraint failed"), Postgres ("duplicate key
+// value violates unique constraint"), and MySQL ("Duplicate entry").
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "UNIQUE constraint failed"),
+		strings.Contains(msg, "duplicate key value violates unique constraint"),
+		strings.Contains(msg, "Duplicate entry"):
+		return true
+	}
+	return false
+}
 
 // agentRepository implements repositories.AgentRepository using GORM.
 type agentRepository struct {
@@ -212,7 +235,13 @@ func NewCredentialRepository(db *gorm.DB) repositories.CredentialRepository {
 
 func (r *credentialRepository) Save(ctx context.Context, credential *entities.Credential) error {
 	m := models.CredentialModelFromEntity(credential)
-	return r.db.WithContext(ctx).Save(m).Error
+	if err := r.db.WithContext(ctx).Save(m).Error; err != nil {
+		if isDuplicateKeyError(err) {
+			return repositories.ErrDuplicateCredential
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *credentialRepository) FindByID(ctx context.Context, id string) (*entities.Credential, error) {

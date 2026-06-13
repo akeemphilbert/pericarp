@@ -5,25 +5,38 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/akeemphilbert/pericarp/pkg/auth"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
+	"github.com/akeemphilbert/pericarp/pkg/ddd"
 	esApplication "github.com/akeemphilbert/pericarp/pkg/eventsourcing/application"
 	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 	"github.com/segmentio/ksuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Sentinel errors for the authentication domain.
 var (
-	ErrInvalidProvider    = errors.New("authentication: invalid provider")
-	ErrInvalidState       = errors.New("authentication: invalid state parameter")
-	ErrCodeExchangeFailed = errors.New("authentication: code exchange failed")
-	ErrSessionNotFound    = errors.New("authentication: session not found")
-	ErrSessionExpired     = errors.New("authentication: session expired")
-	ErrSessionRevoked     = errors.New("authentication: session revoked")
-	ErrTokenRefreshFailed = errors.New("authentication: token refresh failed")
-	ErrCredentialNotFound = errors.New("authentication: credential not found")
+	ErrInvalidProvider              = errors.New("authentication: invalid provider")
+	ErrInvalidState                 = errors.New("authentication: invalid state parameter")
+	ErrCodeExchangeFailed           = errors.New("authentication: code exchange failed")
+	ErrSessionNotFound              = errors.New("authentication: session not found")
+	ErrSessionExpired               = errors.New("authentication: session expired")
+	ErrSessionRevoked               = errors.New("authentication: session revoked")
+	ErrTokenRefreshFailed           = errors.New("authentication: token refresh failed")
+	ErrCredentialNotFound           = errors.New("authentication: credential not found")
+	ErrEmailAlreadyTaken            = errors.New("authentication: email already registered with a password")
+	ErrPasswordSupportNotConfigured = errors.New("authentication: password support not configured")
+	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
+	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
+	// no JWTService is wired. Distinct from IssueIdentityToken's
+	// ("", nil) shape because refresh's sole purpose is to mint a token —
+	// a silent empty result on misconfiguration would be a foot-gun.
+	ErrJWTServiceNotConfigured = errors.New("authentication: JWTService not configured")
 )
 
 // AuthRequest represents the result of initiating an OAuth authorization flow.
@@ -114,9 +127,47 @@ type AuthenticationService interface {
 	// For new users, a personal Account is also created with the agent as owner.
 	FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
 
+	// RegisterPassword creates a new Agent + personal Account + Credential
+	// (provider="password") + PasswordCredential. Returns ErrEmailAlreadyTaken
+	// when a password credential for the email already exists.
+	RegisterPassword(ctx context.Context, email, displayName, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error)
+
+	// VerifyPassword authenticates an email + plaintext pair against a stored
+	// PasswordCredential and returns the associated Agent, Credential and
+	// (optional) personal Account on success. To prevent account enumeration,
+	// both wrong-password and unknown-email cases return ErrInvalidPassword.
+	VerifyPassword(ctx context.Context, email, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error)
+
+	// ImportPasswordCredential imports an already-hashed legacy bcrypt blob
+	// against a caller-supplied agentID/accountID. Idempotent on
+	// (provider="password", lower(email)). Used for bulk migration where
+	// existing foreign keys must remain valid. Pass ImportWithSalt(salt)
+	// for legacy systems that applied an extra application-layer salt
+	// suffix on top of bcrypt.
+	ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string, opts ...ImportOption) error
+
+	// UpdatePassword rotates the stored password for the given agent.
+	// Verifies oldPlaintext before applying the change.
+	UpdatePassword(ctx context.Context, agentID, oldPlaintext, newPlaintext string) error
+
 	// IssueIdentityToken issues a signed JWT for the given agent.
 	// Returns ("", nil) if no JWTService is configured.
 	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
+
+	// RefreshIdentityToken re-snapshots claims for an existing agent and
+	// returns a freshly signed JWT. Re-runs the ClaimsEnricher and
+	// re-fetches subscription state — unlike TokenReissuer.ReissueToken,
+	// which copies existing extras + subscription verbatim. Takes an
+	// agent ID instead of doing an OAuth round-trip or password verify,
+	// so the caller owns the trust decision (typically: validated a
+	// still-valid session/JWT before calling). Use after a server-side
+	// change that affects authorization claims (subscription purchased,
+	// role granted, feature flag flipped). Returns ErrJWTServiceNotConfigured
+	// when no JWTService is wired (a misconfiguration if you reached
+	// this method) — distinct from IssueIdentityToken's ("", nil) shape,
+	// which exists to support opaque-session-only flows that refresh
+	// does not.
+	RefreshIdentityToken(ctx context.Context, agentID string, activeAccountID string) (string, error)
 
 	// CreateSession creates an authenticated session for an agent.
 	CreateSession(ctx context.Context, agentID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
@@ -137,19 +188,53 @@ type AuthenticationService interface {
 // OAuthProviderRegistry maps provider names to their OAuthProvider implementations.
 type OAuthProviderRegistry map[string]OAuthProvider
 
+// ClaimsEnricher computes app-specific JWT claims for a freshly
+// authenticated agent. Returned values are passed verbatim as the
+// extras map to JWTService.IssueToken — keys colliding with reserved
+// JWT or pericarp core claim names surface as ErrReservedClaim from
+// the configured JWTService (per the JWTService contract). An
+// enricher returning an error fails token issuance: a
+// developer-supplied invariant must surface, never be silently
+// dropped (contrast SubscriptionService, where a third-party outage
+// is logged and the token issues without the claim).
+//
+// The enricher is invoked on IssueIdentityToken (fresh authentication)
+// and on RefreshIdentityToken (server-side state change without
+// re-auth — see RefreshIdentityToken for the trust model).
+// TokenReissuer.ReissueToken (e.g. account-switch) snapshots the
+// existing extras verbatim onto the new token rather than re-running
+// the enricher; the same stale-but-stable rule applies as for the
+// subscription claim. A new enricher snapshot is taken on the next
+// IssueIdentityToken or RefreshIdentityToken call.
+//
+// Implementations MUST treat the accounts slice as read-only and MUST
+// NOT retain it past the call — IssueIdentityToken passes the same
+// slice to JWTService.IssueToken next, and a future caching refactor
+// could expose mutations to other request-scoped code. Panics from
+// the enricher are not recovered; they propagate to the caller of
+// IssueIdentityToken.
+type ClaimsEnricher func(ctx context.Context, agent *entities.Agent, accounts []*entities.Account, activeAccountID string) (map[string]any, error)
+
 // DefaultAuthenticationService implements AuthenticationService using OAuth providers
 // and domain aggregates.
 type DefaultAuthenticationService struct {
-	providers     OAuthProviderRegistry
-	agents        repositories.AgentRepository
-	credentials   repositories.CredentialRepository
-	sessions      repositories.AuthSessionRepository
-	accounts      repositories.AccountRepository
-	eventStore    esDomain.EventStore
-	tokens        TokenStore
-	authorization AuthorizationChecker
-	logger        Logger
-	jwtService    JWTService
+	providers           OAuthProviderRegistry
+	agents              repositories.AgentRepository
+	credentials         repositories.CredentialRepository
+	sessions            repositories.AuthSessionRepository
+	accounts            repositories.AccountRepository
+	passwordCredentials repositories.PasswordCredentialRepository
+	eventStore          esDomain.EventStore
+	dispatcher          *esDomain.EventDispatcher
+	tokens              TokenStore
+	authorization       AuthorizationChecker
+	logger              Logger
+	jwtService          JWTService
+	subscriptionService SubscriptionService
+	claimsEnricher      ClaimsEnricher
+	bcryptCost          int
+	dummyHashOnce       sync.Once
+	dummyHashValue      string
 }
 
 // NewDefaultAuthenticationService creates a new DefaultAuthenticationService.
@@ -323,7 +408,7 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 
 	// Commit events atomically to event store via UnitOfWork
 	if s.eventStore != nil {
-		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, nil)
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
 		if err = uow.Track(agent, account, credential); err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to track entities: %w", err)
 		}
@@ -469,8 +554,13 @@ func (s *DefaultAuthenticationService) RevokeAllSessions(ctx context.Context, ag
 	return s.sessions.RevokeAllForAgent(ctx, agentID)
 }
 
-// IssueIdentityToken issues a signed JWT for the given agent.
-// Returns ("", nil) if no JWTService is configured.
+// IssueIdentityToken issues a signed JWT for the given agent, or ("", nil)
+// if no JWTService is configured. When a SubscriptionService is wired the
+// current claim is snapshotted into the token; lookup failures are logged
+// but do not block issuance — billing-provider outages must not break
+// login. When a ClaimsEnricher is wired its result is passed as extras
+// to JWTService.IssueToken; an enricher error fails token issuance
+// (contrast SubscriptionService, which is fail-open).
 func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
 	if s.jwtService == nil {
 		return "", nil
@@ -486,5 +576,448 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 			return "", fmt.Errorf("authentication: failed to fetch accounts for token: %w", err)
 		}
 	}
-	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID)
+	var subscription *auth.SubscriptionClaim
+	if s.subscriptionService != nil {
+		sub, err := s.subscriptionService.GetSubscription(ctx, agent.GetID(), activeAccountID)
+		if err != nil {
+			s.logger.Warn(ctx, "auth: subscription lookup failed", "agent_id", agent.GetID(), "active_account_id", activeAccountID, "error", err)
+		} else if sub != nil {
+			if sub.Status.Valid() {
+				subscription = sub
+			} else {
+				s.logger.Warn(ctx, "auth: subscription lookup returned invalid status", "agent_id", agent.GetID(), "active_account_id", activeAccountID, "status", sub.Status)
+			}
+		}
+	}
+	var extras map[string]any
+	if s.claimsEnricher != nil {
+		var err error
+		extras, err = s.claimsEnricher(ctx, agent, accounts, activeAccountID)
+		if err != nil {
+			return "", fmt.Errorf("authentication: claims enricher failed: %w", err)
+		}
+	}
+	return s.jwtService.IssueToken(ctx, agent, accounts, activeAccountID, subscription, extras)
+}
+
+// RefreshIdentityToken loads the agent by ID and delegates to
+// IssueIdentityToken so every snapshot rule (fresh accounts, fresh
+// subscription, fresh enricher result, fail-closed on enricher error,
+// fail-open on subscription lookup) stays in one place.
+func (s *DefaultAuthenticationService) RefreshIdentityToken(ctx context.Context, agentID, activeAccountID string) (string, error) {
+	if s.jwtService == nil {
+		return "", ErrJWTServiceNotConfigured
+	}
+	if agentID == "" {
+		return "", fmt.Errorf("authentication: agent ID must not be empty")
+	}
+	agent, err := s.agents.FindByID(ctx, agentID)
+	if err != nil {
+		return "", fmt.Errorf("authentication: load agent for refresh: %w", err)
+	}
+	if agent == nil {
+		return "", fmt.Errorf("authentication: agent %s not found", agentID)
+	}
+	return s.IssueIdentityToken(ctx, agent, activeAccountID)
+}
+
+// normalizeEmail returns the canonical form of an email used as the
+// password credential's provider_user_id.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// RegisterPassword creates a new Agent + personal Account + Credential
+// (provider="password") + PasswordCredential.
+func (s *DefaultAuthenticationService) RegisterPassword(ctx context.Context, email, displayName, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	if s.passwordCredentials == nil {
+		return nil, nil, nil, ErrPasswordSupportNotConfigured
+	}
+	normalizedEmail := normalizeEmail(email)
+	if normalizedEmail == "" {
+		return nil, nil, nil, fmt.Errorf("authentication: email must not be empty")
+	}
+	if plaintext == "" {
+		return nil, nil, nil, fmt.Errorf("authentication: password must not be empty")
+	}
+
+	existing, err := s.credentials.FindByProvider(ctx, entities.ProviderPassword, normalizedEmail)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: lookup existing credential: %w", err)
+	}
+	if existing != nil {
+		return nil, nil, nil, ErrEmailAlreadyTaken
+	}
+
+	algorithm, hash, err := hashPassword(plaintext, s.bcryptCost)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: hash password: %w", err)
+	}
+
+	agentID := ksuid.New().String()
+	agent, err := new(entities.Agent).With(agentID, displayName, entities.AgentTypePerson)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create agent: %w", err)
+	}
+
+	accountID := ksuid.New().String()
+	account, err := new(entities.Account).With(accountID, displayName+"'s Account", entities.AccountTypePersonal)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create account: %w", err)
+	}
+	if err := account.AddMember(agentID, entities.RoleOwner); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: add account member: %w", err)
+	}
+
+	credentialID := ksuid.New().String()
+	credential, err := new(entities.Credential).With(credentialID, agentID, entities.ProviderPassword, normalizedEmail, normalizedEmail, displayName)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create credential: %w", err)
+	}
+
+	passwordCredentialID := ksuid.New().String()
+	passwordCredential, err := new(entities.PasswordCredential).With(passwordCredentialID, credentialID, algorithm, hash)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: create password credential: %w", err)
+	}
+
+	if s.eventStore != nil {
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
+		if err := uow.Track(agent, account, credential, passwordCredential); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: track entities: %w", err)
+		}
+		if err := uow.Commit(ctx); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: commit unit of work: %w", err)
+		}
+	}
+
+	if err := s.agents.Save(ctx, agent); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: save agent: %w", err)
+	}
+	if s.accounts != nil {
+		if err := s.accounts.Save(ctx, account); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: save account: %w", err)
+		}
+		if err := s.accounts.SaveMember(ctx, accountID, agentID, entities.RoleOwner); err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: save account member: %w", err)
+		}
+	}
+	if err := s.credentials.Save(ctx, credential); err != nil {
+		// Race against a concurrent register: another caller wrote a
+		// credential row for the same (provider, lower(email)) between
+		// our pre-check and this Save. Translate to the same sentinel
+		// the pre-check would have returned. Note: the agent + account
+		// rows we wrote above are now orphaned; cleaning them up
+		// requires wrapping projection writes in a DB transaction,
+		// which is tracked as a follow-up (the same race exists in
+		// FindOrCreateAgent for OAuth flows today).
+		if errors.Is(err, repositories.ErrDuplicateCredential) {
+			return nil, nil, nil, ErrEmailAlreadyTaken
+		}
+		return nil, nil, nil, fmt.Errorf("authentication: save credential: %w", err)
+	}
+	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: save password credential: %w", err)
+	}
+
+	return agent, credential, account, nil
+}
+
+// VerifyPassword authenticates an email + plaintext pair. Returns
+// ErrInvalidPassword for both wrong-password and unknown-email so callers
+// cannot enumerate registered emails.
+func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email, plaintext string) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	if s.passwordCredentials == nil {
+		return nil, nil, nil, ErrPasswordSupportNotConfigured
+	}
+	normalizedEmail := normalizeEmail(email)
+
+	credential, err := s.credentials.FindByProvider(ctx, entities.ProviderPassword, normalizedEmail)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: lookup credential: %w", err)
+	}
+	if credential == nil || !credential.Active() {
+		s.runTimingShield(ctx, plaintext)
+		s.logger.Warn(ctx, "auth: password verify failed (no active credential)", "email", normalizedEmail)
+		return nil, nil, nil, ErrInvalidPassword
+	}
+
+	passwordCredential, err := s.passwordCredentials.FindByCredentialID(ctx, credential.GetID())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: lookup password credential: %w", err)
+	}
+	if passwordCredential == nil {
+		s.runTimingShield(ctx, plaintext)
+		s.logger.Warn(ctx, "auth: password verify failed (missing password row)", "credential_id", credential.GetID())
+		return nil, nil, nil, ErrInvalidPassword
+	}
+
+	if err := verifyPassword(passwordCredential.Algorithm(), passwordCredential.Hash(), plaintext, passwordCredential.Salt()); err != nil {
+		// Map any verify failure (mismatch OR corrupt hash / unsupported
+		// algorithm) to ErrInvalidPassword so timing and error-type do not
+		// distinguish the two cases. The internal log retains detail.
+		if !errors.Is(err, ErrInvalidPassword) {
+			s.logger.Error(ctx, "auth: password compare failed (non-mismatch error)", "credential_id", credential.GetID(), "error", err)
+		} else {
+			s.logger.Warn(ctx, "auth: password verify failed (mismatch)", "credential_id", credential.GetID())
+		}
+		return nil, nil, nil, ErrInvalidPassword
+	}
+
+	agent, err := s.agents.FindByID(ctx, credential.AgentID())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: load agent: %w", err)
+	}
+	if agent == nil {
+		return nil, nil, nil, fmt.Errorf("authentication: agent %s not found", credential.AgentID())
+	}
+
+	var account *entities.Account
+	if s.accounts != nil {
+		account, err = s.accounts.FindPersonalByMember(ctx, agent.GetID())
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("authentication: load personal account: %w", err)
+		}
+	}
+
+	// Housekeeping writes (last-used / last-verified) are best-effort: the
+	// password was correct, so denying login because a metadata projection
+	// failed to update would be a worse UX than a stale timestamp.
+	if err := credential.MarkUsed(); err != nil {
+		s.logger.Warn(ctx, "auth: mark credential used failed", "credential_id", credential.GetID(), "error", err)
+	} else if err := s.credentials.Save(ctx, credential); err != nil {
+		s.logger.Warn(ctx, "auth: save credential after verify failed", "credential_id", credential.GetID(), "error", err)
+	}
+	passwordCredential.MarkVerified()
+	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
+		s.logger.Warn(ctx, "auth: save password credential after verify failed", "password_credential_id", passwordCredential.GetID(), "error", err)
+	}
+
+	return agent, credential, account, nil
+}
+
+// runTimingShield runs a real bcrypt compare against a parseable dummy
+// hash so the unknown-email / orphan-row branches of VerifyPassword do
+// not return measurably faster than a real failed login. The dummy hash
+// matches the service's configured cost. A non-mismatch error from the
+// compare means the shield is degraded; we log at Error level so it
+// surfaces in operational telemetry instead of being silent.
+func (s *DefaultAuthenticationService) runTimingShield(ctx context.Context, plaintext string) {
+	if err := verifyPassword(entities.PasswordAlgorithmBcrypt, s.dummyBcryptHash(ctx), plaintext, ""); err != nil && !errors.Is(err, ErrInvalidPassword) {
+		s.logger.Error(ctx, "auth: timing-shield bcrypt compare failed (shield degraded)", "error", err)
+	}
+}
+
+// ImportPasswordCredential imports a pre-hashed bcrypt blob against existing
+// agent/account IDs. Idempotent on (provider="password", lower(email)).
+// Pass ImportWithSalt(salt) for legacy hashes that bcrypted plaintext+salt
+// (an extra application-layer suffix on top of bcrypt's own per-hash salt).
+func (s *DefaultAuthenticationService) ImportPasswordCredential(ctx context.Context, email, displayName, bcryptHash, agentID, accountID string, opts ...ImportOption) error {
+	if s.passwordCredentials == nil {
+		return ErrPasswordSupportNotConfigured
+	}
+	cfg := importConfig{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&cfg)
+	}
+	normalizedEmail := normalizeEmail(email)
+	if normalizedEmail == "" {
+		return fmt.Errorf("authentication: email must not be empty")
+	}
+	if bcryptHash == "" {
+		return fmt.Errorf("authentication: bcrypt hash must not be empty")
+	}
+	// Reject malformed hashes upfront so a corrupt migration row fails at
+	// import time rather than silently turning into ErrInvalidPassword on
+	// every future login attempt for that account.
+	if _, costErr := bcrypt.Cost([]byte(bcryptHash)); costErr != nil {
+		return fmt.Errorf("authentication: invalid bcrypt hash: %w", costErr)
+	}
+	if agentID == "" {
+		return fmt.Errorf("authentication: agent ID must not be empty")
+	}
+
+	existing, err := s.credentials.FindByProvider(ctx, entities.ProviderPassword, normalizedEmail)
+	if err != nil {
+		return fmt.Errorf("authentication: lookup credential: %w", err)
+	}
+	if existing != nil {
+		return nil
+	}
+
+	agent, err := s.agents.FindByID(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("authentication: load agent: %w", err)
+	}
+	if agent == nil {
+		return fmt.Errorf("authentication: agent %s not found", agentID)
+	}
+	if accountID != "" && s.accounts != nil {
+		account, err := s.accounts.FindByID(ctx, accountID)
+		if err != nil {
+			return fmt.Errorf("authentication: load account: %w", err)
+		}
+		if account == nil {
+			return fmt.Errorf("authentication: account %s not found", accountID)
+		}
+	}
+
+	credentialID := ksuid.New().String()
+	credential, err := new(entities.Credential).With(credentialID, agentID, entities.ProviderPassword, normalizedEmail, normalizedEmail, displayName)
+	if err != nil {
+		return fmt.Errorf("authentication: create credential: %w", err)
+	}
+
+	passwordCredentialID := ksuid.New().String()
+	passwordCredential, err := new(entities.PasswordCredential).WithSalt(passwordCredentialID, credentialID, entities.PasswordAlgorithmBcrypt, bcryptHash, cfg.saltSuffix)
+	if err != nil {
+		return fmt.Errorf("authentication: create password credential: %w", err)
+	}
+
+	if s.eventStore != nil {
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
+		if err := uow.Track(credential, passwordCredential); err != nil {
+			return fmt.Errorf("authentication: track entities: %w", err)
+		}
+		if err := uow.Commit(ctx); err != nil {
+			return fmt.Errorf("authentication: commit unit of work: %w", err)
+		}
+	}
+
+	if err := s.credentials.Save(ctx, credential); err != nil {
+		// Race-induced dup-key after an idempotent pre-check returned
+		// nil: another caller landed the same (provider, lower(email))
+		// in the meantime. Treat the import as a no-op to preserve
+		// idempotent semantics. The CredentialCreated and
+		// PasswordCredentialCreated events we already committed to the
+		// event store describe an aggregate without a projection row;
+		// this is the same divergence the broader transaction
+		// follow-up will close.
+		if errors.Is(err, repositories.ErrDuplicateCredential) {
+			return nil
+		}
+		return fmt.Errorf("authentication: save credential: %w", err)
+	}
+	if err := s.passwordCredentials.Save(ctx, passwordCredential); err != nil {
+		return fmt.Errorf("authentication: save password credential: %w", err)
+	}
+	return nil
+}
+
+// UpdatePassword rotates the stored password for the given agent.
+func (s *DefaultAuthenticationService) UpdatePassword(ctx context.Context, agentID, oldPlaintext, newPlaintext string) error {
+	if s.passwordCredentials == nil {
+		return ErrPasswordSupportNotConfigured
+	}
+	if agentID == "" {
+		return fmt.Errorf("authentication: agent ID must not be empty")
+	}
+	if newPlaintext == "" {
+		return fmt.Errorf("authentication: new password must not be empty")
+	}
+
+	creds, err := s.credentials.FindByAgent(ctx, agentID)
+	if err != nil {
+		return fmt.Errorf("authentication: lookup credentials: %w", err)
+	}
+	var passwordCredentialEntity *entities.Credential
+	for _, c := range creds {
+		if c.Provider() == entities.ProviderPassword && c.Active() {
+			passwordCredentialEntity = c
+			break
+		}
+	}
+	if passwordCredentialEntity == nil {
+		return ErrPasswordCredentialMissing
+	}
+
+	pc, err := s.passwordCredentials.FindByCredentialID(ctx, passwordCredentialEntity.GetID())
+	if err != nil {
+		return fmt.Errorf("authentication: lookup password credential: %w", err)
+	}
+	if pc == nil {
+		return ErrPasswordCredentialMissing
+	}
+
+	if err := verifyPassword(pc.Algorithm(), pc.Hash(), oldPlaintext, pc.Salt()); err != nil {
+		if errors.Is(err, ErrInvalidPassword) {
+			return ErrInvalidPassword
+		}
+		return fmt.Errorf("authentication: verify old password: %w", err)
+	}
+
+	algorithm, hash, err := hashPassword(newPlaintext, s.bcryptCost)
+	if err != nil {
+		return fmt.Errorf("authentication: hash new password: %w", err)
+	}
+
+	// The aggregate was rehydrated from the projection via Restore(), which
+	// resets sequenceNo to 0. If an EventStore is configured we must reseat
+	// the BaseEntity to the stream's true current version before recording
+	// a new event, otherwise UnitOfWork.Commit would call Append with
+	// expectedVersion=0 and conflict with the existing stream — and skipping
+	// the commit would silently drop the PasswordUpdated event, breaking
+	// the audit trail.
+	if s.eventStore != nil {
+		currentVersion, verErr := s.eventStore.GetCurrentVersion(ctx, pc.GetID())
+		if verErr != nil {
+			return fmt.Errorf("authentication: load password credential version: %w", verErr)
+		}
+		pc.BaseEntity = ddd.RestoreBaseEntity(pc.GetID(), currentVersion)
+	}
+
+	if err := pc.Update(algorithm, hash); err != nil {
+		return fmt.Errorf("authentication: update password credential: %w", err)
+	}
+
+	if s.eventStore != nil {
+		uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
+		if err := uow.Track(pc); err != nil {
+			return fmt.Errorf("authentication: track password credential: %w", err)
+		}
+		if err := uow.Commit(ctx); err != nil {
+			return fmt.Errorf("authentication: commit password update: %w", err)
+		}
+	} else {
+		// No event store wired: the recorded event has nowhere durable to
+		// land, so drop it from the aggregate before saving the projection
+		// to keep state consistent on subsequent operations.
+		pc.ClearUncommittedEvents()
+	}
+
+	if err := s.passwordCredentials.Save(ctx, pc); err != nil {
+		return fmt.Errorf("authentication: save password credential: %w", err)
+	}
+	return nil
+}
+
+// fallbackDummyBcryptHash is a real bcrypt(DefaultCost) hash used as a
+// last-resort timing-shield target if dummy-hash generation ever fails at
+// runtime. The corresponding plaintext is intentionally unguessable.
+const fallbackDummyBcryptHash = "$2a$10$EEI56WhQ.0l6UnEoiuE3bOZM7ADLEEdvDaI6KNGpodfiLnQnL7kbO"
+
+// dummyBcryptHash returns a parseable bcrypt hash whose cost matches the
+// service's configured bcryptCost, generated once per service instance.
+// VerifyPassword uses it as a timing-equalization target on the
+// unknown-email branch. Matching the live cost keeps the unknown-email
+// path indistinguishable from a real failed login by elapsed time, even
+// when WithBcryptCost configures a non-default cost.
+func (s *DefaultAuthenticationService) dummyBcryptHash(ctx context.Context) string {
+	s.dummyHashOnce.Do(func() {
+		cost := s.bcryptCost
+		if cost <= 0 {
+			cost = bcrypt.DefaultCost
+		}
+		out, err := bcrypt.GenerateFromPassword([]byte("__pericarp_dummy_unguessable_plaintext__"), cost)
+		if err != nil {
+			s.logger.Error(ctx, "auth: dummy hash generation failed; timing shield degraded to fallback cost", "error", err, "configured_cost", cost)
+			s.dummyHashValue = fallbackDummyBcryptHash
+			return
+		}
+		s.dummyHashValue = string(out)
+	})
+	return s.dummyHashValue
 }

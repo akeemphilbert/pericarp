@@ -418,10 +418,49 @@ func (s *BigtableEventStore) GetCurrentVersion(ctx context.Context, aggregateID 
 	return latest, nil
 }
 
-// Close is a no-op. The client is caller-owned (matches BigQuery/Dynamo peers)
+// Close is a no-op. The client is caller-owned (matches Dynamo peers)
 // so it can safely be shared across stores or long-lived subsystems.
 func (s *BigtableEventStore) Close() error {
 	return nil
+}
+
+// ReadAfter is not supported: Bigtable has no global, cross-aggregate write
+// ordering to assign positions from. It always returns ErrGlobalOrderingNotSupported.
+func (s *BigtableEventStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	return nil, domain.ErrGlobalOrderingNotSupported
+}
+
+// HeadPosition is not supported: Bigtable has no global, cross-aggregate write
+// ordering. It always returns ErrGlobalOrderingNotSupported.
+func (s *BigtableEventStore) HeadPosition(ctx context.Context) (int64, error) {
+	return 0, domain.ErrGlobalOrderingNotSupported
+}
+
+// marshalPayloadAndMetadata converts an envelope's payload and metadata into
+// their JSON string encodings for column storage. Metadata is normalised to an
+// empty object rather than null when absent.
+func marshalPayloadAndMetadata(env domain.EventEnvelope[any]) (string, string, error) {
+	payload, err := toAnyMap(env.Payload)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to convert payload: %w", err)
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	metadata := env.Metadata
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	return string(payloadJSON), string(metadataJSON), nil
 }
 
 // readEventRange materialises every row in r, decodes it, and returns the

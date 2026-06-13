@@ -70,6 +70,14 @@ func (r *recordingStore) GetCurrentVersion(ctx context.Context, aggregateID stri
 	r.readCalls.Add(1)
 	return r.inner.GetCurrentVersion(ctx, aggregateID)
 }
+func (r *recordingStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	r.readCalls.Add(1)
+	return r.inner.ReadAfter(ctx, afterPosition, limit)
+}
+func (r *recordingStore) HeadPosition(ctx context.Context) (int64, error) {
+	r.readCalls.Add(1)
+	return r.inner.HeadPosition(ctx)
+}
 func (r *recordingStore) Close() error { return r.inner.Close() }
 
 // slowStore delays every Append call by a fixed duration.
@@ -100,6 +108,12 @@ func (s *slowStore) GetEventsByTransactionID(ctx context.Context, transactionID 
 func (s *slowStore) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {
 	return s.inner.GetCurrentVersion(ctx, aggregateID)
 }
+func (s *slowStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	return s.inner.ReadAfter(ctx, afterPosition, limit)
+}
+func (s *slowStore) HeadPosition(ctx context.Context) (int64, error) {
+	return s.inner.HeadPosition(ctx)
+}
 func (s *slowStore) Close() error { return s.inner.Close() }
 
 // failingAppendStore returns a fixed error on every Append.
@@ -129,6 +143,12 @@ func (f *failingAppendStore) GetEventsByTransactionID(ctx context.Context, trans
 func (f *failingAppendStore) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {
 	return f.inner.GetCurrentVersion(ctx, aggregateID)
 }
+func (f *failingAppendStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	return f.inner.ReadAfter(ctx, afterPosition, limit)
+}
+func (f *failingAppendStore) HeadPosition(ctx context.Context) (int64, error) {
+	return f.inner.HeadPosition(ctx)
+}
 func (f *failingAppendStore) Close() error { return f.inner.Close() }
 
 // closeFailsStore returns a fixed error from Close(); delegates everything else.
@@ -157,6 +177,12 @@ func (s *closeFailsStore) GetEventsByTransactionID(ctx context.Context, transact
 }
 func (s *closeFailsStore) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {
 	return s.inner.GetCurrentVersion(ctx, aggregateID)
+}
+func (s *closeFailsStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	return s.inner.ReadAfter(ctx, afterPosition, limit)
+}
+func (s *closeFailsStore) HeadPosition(ctx context.Context) (int64, error) {
+	return s.inner.HeadPosition(ctx)
 }
 func (s *closeFailsStore) Close() error { return s.closeErr }
 
@@ -803,6 +829,12 @@ func (s *transientFailStore) GetEventsByTransactionID(ctx context.Context, trans
 }
 func (s *transientFailStore) GetCurrentVersion(ctx context.Context, aggregateID string) (int, error) {
 	return s.inner.GetCurrentVersion(ctx, aggregateID)
+}
+func (s *transientFailStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	return s.inner.ReadAfter(ctx, afterPosition, limit)
+}
+func (s *transientFailStore) HeadPosition(ctx context.Context) (int64, error) {
+	return s.inner.HeadPosition(ctx)
 }
 func (s *transientFailStore) Close() error { return s.inner.Close() }
 

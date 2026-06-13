@@ -230,6 +230,14 @@ func (c *CompositeEventStore) GetCurrentVersion(ctx context.Context, aggregateID
 	return c.primary.GetCurrentVersion(ctx, aggregateID)
 }
 
+func (c *CompositeEventStore) ReadAfter(ctx context.Context, afterPosition int64, limit int) ([]domain.EventEnvelope[any], error) {
+	return c.primary.ReadAfter(ctx, afterPosition, limit)
+}
+
+func (c *CompositeEventStore) HeadPosition(ctx context.Context) (int64, error) {
+	return c.primary.HeadPosition(ctx)
+}
+
 // Close marks the store closed so concurrent Appends fail fast with
 // ErrCompositeClosed, drains every secondary's queue (each goroutine
 // processes remaining jobs before exiting), then closes the primary and

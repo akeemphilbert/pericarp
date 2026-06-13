@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -10,6 +11,44 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 )
+
+func TestProviderCatalog_AllProvidersRegistered(t *testing.T) {
+	t.Parallel()
+
+	registry := BuildProviderRegistry()
+
+	want := []string{"mock-idp", "apple", "github", "google", "microsoft", "facebook", "mastodon", "bluesky", "netsuite"}
+	if got := len(registry); got != len(want) {
+		t.Errorf("registry size = %d, want %d (keys: %v)", got, len(want), keysOf(registry))
+	}
+	for _, name := range want {
+		p, ok := registry[name]
+		if !ok {
+			t.Errorf("registry missing provider %q", name)
+			continue
+		}
+		if got := p.Name(); got != name {
+			t.Errorf("provider %q Name() = %q, want %q", name, got, name)
+		}
+	}
+}
+
+func TestRunMastodonAgainstFake_EndToEnd(t *testing.T) {
+	t.Parallel()
+	// io.Discard keeps the demo's narrative output out of `go test`'s
+	// progress stream so parallel test runs don't interleave with it.
+	if err := RunMastodonAgainstFake(context.Background(), io.Discard); err != nil {
+		t.Fatalf("RunMastodonAgainstFake: %v", err)
+	}
+}
+
+func keysOf(m application.OAuthProviderRegistry) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
 
 func TestAuthenticationFlow_FullLifecycle(t *testing.T) {
 	t.Parallel()
@@ -74,6 +113,9 @@ func TestAuthenticationFlow_FullLifecycle(t *testing.T) {
 	}
 	if result.Claims.ActiveAccountID != result.AccountID {
 		t.Errorf("Claims.ActiveAccountID = %q, want %q", result.Claims.ActiveAccountID, result.AccountID)
+	}
+	if got := result.Claims.Extras["role"]; got != "owner" {
+		t.Errorf("Claims.Extras[role] = %v, want owner (ClaimsEnricher integration)", got)
 	}
 }
 
