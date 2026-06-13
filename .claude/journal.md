@@ -82,6 +82,34 @@ tasks to maintain context across sessions. Entries are never edited or removed.
 
 ---
 
+### 2026-04-19: CompositeEventStore for primary-sync + secondaries-async replication
+
+- Added `CompositeEventStore` in `pkg/eventsourcing/infrastructure/composite_store.go` — a new EventStore implementation; wraps a primary store plus zero or more secondaries
+- Primary `Append` is synchronous; each secondary gets a dedicated goroutine + buffered channel (default 1024) so secondary latency/failures never block the caller
+- All read methods forward to the primary — secondaries are write-only replicas in v1
+- Optional `WithErrorHandler` functional option receives failed secondary appends; no `Logger` interface added to pericarp per existing "callers decide logging strategy" convention
+- `Close()` is idempotent (`sync.Once`), drains each secondary's queue, then closes underlying stores; all close errors are joined via `errors.Join` so no failure is shadowed
+- Handler panics are recovered so a misbehaving handler can't stall replication
+- **Why:** Lets callers attach backup/replica stores (e.g., FileStore mirror of a primary memory/Postgres store) without the replica's latency showing up on the request path
+
+---
+
+### 2026-04-20: Bigtable EventStore implementation
+
+- Added `BigtableEventStore` in `pkg/eventsourcing/infrastructure/bigtable_store.go` — a new EventStore implementation (joining Memory, File, GORM, Dynamo, Composite)
+- Single-table design with three row-key spaces: `e#<agg>#<seq:20>` (events), `id#<eventID>` (index for GetEventByID), `tx#<txID>#<agg>#<seq:20>` (index for GetEventsByTransactionID)
+- Zero-padded 20-digit sequence numbers so lexicographic row order equals numeric order — enables `bigtable.NewRange` scans for `GetEventsRange` / `GetEventsFromVersion`
+- `GetCurrentVersion` uses `ReverseScan()` + `LimitRows(1)` — O(1) regardless of history length, unlike BigQuery's MAX(seq) aggregation
+- `GetEventByID` is a two-phase read (id-index row → event row) to avoid the full-table scan BigQuery needs
+- Append uses `ApplyBulk` to write event row + ID index + optional TX index in one RPC
+- Concurrency: matches BigQuery's documented read-then-write model — weak consistency acceptable for low-contention workloads; high-contention callers should serialize via a per-aggregate actor
+- Integration tests in `bigtable_store_test.go` against `gcr.io/google.com/cloudsdktool/cloud-sdk:emulators` via testcontainers; skip cleanly without Docker
+- Adds `cloud.google.com/go/bigtable v1.46.0` as a direct dependency
+- Pairs naturally with `CompositeEventStore` as a cloud-NoSQL primary
+- **Why:** Bigtable offers single-digit-ms point reads + strong row-level consistency — the missing piece for high-throughput event-sourced workloads on GCP where BigQuery's analytics focus isn't a fit
+
+---
+
 ### 2026-04-25: SubscriptionService adapters — RevenueCat / Stripe / GORM (Stories 2-4 of #24)
 
 - `pkg/auth/infrastructure/subscription/` ships three adapters implementing `application.SubscriptionService`. Each returns `(nil, nil)` for the canonical "no record" answer and an error only for transport / decode / config failures
