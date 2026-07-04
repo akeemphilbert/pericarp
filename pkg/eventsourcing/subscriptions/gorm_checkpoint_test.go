@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,13 @@ func newGormFixture(t *testing.T) (*gorm.DB, domain.EventStore, *subscriptions.G
 	// never block writers — also what a production SQLite deployment of a
 	// background subscriber would run.
 	dsn := filepath.Join(t.TempDir(), "subscriptions.db") + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
+	return newGormFixtureDSN(t, dsn)
+}
+
+// newGormFixtureDSN is newGormFixture with an explicit DSN, so tests that need
+// specific SQLite locking behaviour (e.g. _txlock=immediate) can dictate it.
+func newGormFixtureDSN(t *testing.T, dsn string) (*gorm.DB, domain.EventStore, *subscriptions.GormCheckpointStore) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -344,6 +352,41 @@ func TestGormCheckpointStore_AcquireCommitReset(t *testing.T) {
 	}
 	if position != 7 {
 		t.Fatalf("expected checkpoint 7, got %d", position)
+	}
+}
+
+// TestGormCheckpointStore_EnsuresRowOncePerSubscriber pins the memoization: the
+// checkpoint row is INSERTed once for a subscriber, not on every Acquire. A
+// gorm create-callback counts INSERT statements against subscriber_checkpoints
+// across two Acquire/Commit cycles and expects exactly one.
+func TestGormCheckpointStore_EnsuresRowOncePerSubscriber(t *testing.T) {
+	t.Parallel()
+
+	db, _, checkpoints := newGormFixture(t)
+	ctx := context.Background()
+
+	var inserts int64
+	if err := db.Callback().Create().After("gorm:create").
+		Register("test:count_checkpoint_inserts", func(tx *gorm.DB) {
+			if tx.Statement.Table == "subscriber_checkpoints" {
+				atomic.AddInt64(&inserts, 1)
+			}
+		}); err != nil {
+		t.Fatalf("failed to register callback: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		batch, acquired, err := checkpoints.Acquire(ctx, "memoized")
+		if err != nil || !acquired {
+			t.Fatalf("cycle %d: failed to acquire (acquired=%v): %v", i, acquired, err)
+		}
+		if err := batch.Commit(ctx, int64(i+1)); err != nil {
+			t.Fatalf("cycle %d: failed to commit: %v", i, err)
+		}
+	}
+
+	if got := atomic.LoadInt64(&inserts); got != 1 {
+		t.Fatalf("expected the checkpoint row ensured once across cycles, got %d INSERTs", got)
 	}
 }
 

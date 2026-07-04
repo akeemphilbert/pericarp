@@ -3,6 +3,7 @@ package subscriptions
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -34,6 +35,10 @@ func (GormCheckpointModel) TableName() string {
 type GormCheckpointStore struct {
 	db       *gorm.DB
 	postgres bool
+	// ensured memoizes subscribers whose checkpoint row has been confirmed to
+	// exist for this store's lifetime, so ensure() runs once per subscriber
+	// instead of on every Acquire (see ensureOnce).
+	ensured sync.Map
 }
 
 var _ CheckpointStore = (*GormCheckpointStore)(nil)
@@ -57,9 +62,10 @@ func NewGormCheckpointStore(db *gorm.DB) (*GormCheckpointStore, error) {
 // Acquire begins a batch transaction holding the subscriber's checkpoint row.
 // On Postgres, acquired is false when another process holds the row.
 func (g *GormCheckpointStore) Acquire(ctx context.Context, subscriber string) (Batch, bool, error) {
-	// Ensure the row exists before locking it. Runs outside the batch
+	// Ensure the row exists before locking it, at most once per subscriber for
+	// this store's lifetime (see ensureOnce). Runs outside the batch
 	// transaction so a no-op conflict never interacts with row locks.
-	if err := g.ensure(ctx, subscriber, 0); err != nil {
+	if err := g.ensureOnce(ctx, subscriber); err != nil {
 		return nil, false, err
 	}
 
@@ -120,6 +126,29 @@ func (g *GormCheckpointStore) Reset(ctx context.Context, subscriber string, posi
 		Columns:   []clause.Column{{Name: "subscriber"}},
 		DoUpdates: clause.Assignments(map[string]any{"position": position, "updated_at": time.Now()}),
 	}).Create(&GormCheckpointModel{Subscriber: subscriber, Position: position, UpdatedAt: time.Now()}).Error
+}
+
+// ensureOnce runs ensure() at most once per subscriber for this store's
+// lifetime, memoizing the result so the INSERT ... ON CONFLICT DO NOTHING no
+// longer runs on every Acquire — that redundant write transaction per
+// subscriber wake is gone after the first one.
+//
+// Behaviour change from healing every cycle: a checkpoint row DELETEd out from
+// under a running store is no longer recreated by the next Acquire. Acquire
+// then fails with "checkpoint row ... disappeared" on SQLite, or skips the
+// cycle on Postgres (an absent row is indistinguishable from one locked by
+// another replica). Reset() remains the supported way to move or recreate a
+// checkpoint, and a fresh store — e.g. after a process restart — re-ensures
+// the row on first Acquire.
+func (g *GormCheckpointStore) ensureOnce(ctx context.Context, subscriber string) error {
+	if _, ok := g.ensured.Load(subscriber); ok {
+		return nil
+	}
+	if err := g.ensure(ctx, subscriber, 0); err != nil {
+		return err
+	}
+	g.ensured.Store(subscriber, struct{}{})
+	return nil
 }
 
 // ensure creates the checkpoint row at the given position if it doesn't exist.
