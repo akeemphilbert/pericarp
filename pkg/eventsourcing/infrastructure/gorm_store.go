@@ -126,6 +126,10 @@ func (s *GormEventStore) appendCheckingVersion(tx *gorm.DB, aggregateID string, 
 // savepoint so it does not poison the surrounding batch, which stays usable for
 // further appends and its eventual commit. On success the events commit
 // atomically with the batch.
+//
+// The savepoint is released on both paths (ROLLBACK TO keeps its savepoint
+// alive) so a long-running batch performing many appends keeps a bounded
+// savepoint stack instead of accumulating one entry per append.
 func (s *GormEventStore) appendInTx(tx *gorm.DB, aggregateID string, expectedVersion int, models []GormEventModel) error {
 	name := fmt.Sprintf("pericarp_append_sp_%d", s.savepointSeq.Add(1))
 	if err := tx.SavePoint(name).Error; err != nil {
@@ -142,9 +146,24 @@ func (s *GormEventStore) appendInTx(tx *gorm.DB, aggregateID string, expectedVer
 		if rbErr := tx.RollbackTo(name).Error; rbErr != nil {
 			return fmt.Errorf("%w (rollback to savepoint %s failed: %v)", err, name, rbErr)
 		}
+		if relErr := releaseSavepoint(tx, name); relErr != nil {
+			return fmt.Errorf("%w (release of savepoint %s failed: %v)", err, name, relErr)
+		}
 		return err
 	}
+	if err := releaseSavepoint(tx, name); err != nil {
+		return fmt.Errorf("failed to release append savepoint %s: %w", name, err)
+	}
 	return nil
+}
+
+// releaseSavepoint discards a savepoint without rolling back to it. GORM's
+// savepoint interface only exposes SavePoint and RollbackTo, so the release is
+// issued directly; RELEASE SAVEPOINT is supported by both engines this store
+// runs on (SQLite and Postgres). The name is internally generated
+// ("pericarp_append_sp_<n>"), never caller input.
+func releaseSavepoint(tx *gorm.DB, name string) error {
+	return tx.Exec("RELEASE SAVEPOINT " + name).Error
 }
 
 // ReadAfter returns committed events with Position > afterPosition across all
