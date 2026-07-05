@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/subscriptions"
 	"gorm.io/gorm"
 )
 
@@ -16,6 +18,9 @@ var _ domain.EventStore = (*GormEventStore)(nil)
 type GormEventStore struct {
 	repo *GormEventRepository
 	db   *gorm.DB
+	// savepointSeq names the savepoint each ambient-batch append brackets
+	// itself with; monotonic so nested appends within one batch never collide.
+	savepointSeq atomic.Uint64
 }
 
 // NewGormEventStore creates a new GORM-based event store and auto-migrates the
@@ -36,6 +41,10 @@ func NewGormEventStore(db *gorm.DB) (*GormEventStore, error) {
 
 // Append appends events to the store for the given aggregate.
 // If expectedVersion is not -1, optimistic concurrency control is enforced within a transaction.
+// When the caller's context carries a subscription batch transaction
+// (subscriptions.TxFromContext) — e.g. a handler appending events from inside
+// its own batch — the append joins that transaction, bracketed by a savepoint,
+// instead of opening its own, and commits atomically with the batch.
 func (s *GormEventStore) Append(ctx context.Context, aggregateID string, expectedVersion int, events ...domain.EventEnvelope[any]) error {
 	if len(events) == 0 {
 		return nil
@@ -59,31 +68,102 @@ func (s *GormEventStore) Append(ctx context.Context, aggregateID string, expecte
 		models[i] = m
 	}
 
+	// Join an ambient subscription batch transaction when present — but only
+	// one that belongs to this store's own connection pool. A batch tx cloned
+	// off a different *gorm.DB carries a foreign connection; joining it would
+	// write events into whatever database that connection points at. Pool
+	// identity (kept on the cloned tx's Config; the live tx connection lives on
+	// Statement.ConnPool) distinguishes "batch on my database" from a foreign
+	// one, matching the guard in subscriptions/gorm_parking.go. tx.WithContext
+	// rebinds the append to ctx so statement deadlines and cancellation apply.
+	//
+	// Opening a second write transaction from the same goroutine while our own
+	// batch already holds the database write lock (SQLite BEGIN IMMEDIATE) is an
+	// unresolvable self-wait that burns the whole busy_timeout before failing;
+	// joining the batch avoids it.
+	if tx := subscriptions.TxFromContext(ctx); tx != nil && tx.ConnPool == s.db.ConnPool {
+		return s.appendInTx(tx.WithContext(ctx), aggregateID, expectedVersion, models)
+	}
+
 	if expectedVersion == -1 {
 		return s.repo.SaveEvents(ctx, models)
 	}
 
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var maxSeq *int
-		if err := tx.Model(&GormEventModel{}).
-			Where("aggregate_id = ?", aggregateID).
-			Select("MAX(sequence_no)").
-			Scan(&maxSeq).Error; err != nil {
-			return fmt.Errorf("failed to check current version: %w", err)
-		}
-
-		currentVersion := 0
-		if maxSeq != nil {
-			currentVersion = *maxSeq
-		}
-
-		if currentVersion != expectedVersion {
-			return fmt.Errorf("%w: expected version %d, got %d",
-				domain.ErrConcurrencyConflict, expectedVersion, currentVersion)
-		}
-
-		return s.repo.insertEventsTx(tx, models)
+		return s.appendCheckingVersion(tx, aggregateID, expectedVersion, models)
 	})
+}
+
+// appendCheckingVersion enforces optimistic concurrency (expectedVersion != -1)
+// and inserts the events, all within tx. Shared by the standalone-transaction
+// path and the ambient batch path so both check-then-insert identically.
+func (s *GormEventStore) appendCheckingVersion(tx *gorm.DB, aggregateID string, expectedVersion int, models []GormEventModel) error {
+	var maxSeq *int
+	if err := tx.Model(&GormEventModel{}).
+		Where("aggregate_id = ?", aggregateID).
+		Select("MAX(sequence_no)").
+		Scan(&maxSeq).Error; err != nil {
+		return fmt.Errorf("failed to check current version: %w", err)
+	}
+
+	currentVersion := 0
+	if maxSeq != nil {
+		currentVersion = *maxSeq
+	}
+
+	if currentVersion != expectedVersion {
+		return fmt.Errorf("%w: expected version %d, got %d",
+			domain.ErrConcurrencyConflict, expectedVersion, currentVersion)
+	}
+
+	return s.repo.insertEventsTx(tx, models)
+}
+
+// appendInTx runs an append inside an ambient transaction (a subscription batch
+// transaction joined via subscriptions.TxFromContext). The append is bracketed
+// by a uniquely named savepoint: a batch may contain multiple appends, and a
+// failed one — a version conflict or an insert error — rolls back only to its
+// savepoint so it does not poison the surrounding batch, which stays usable for
+// further appends and its eventual commit. On success the events commit
+// atomically with the batch.
+//
+// The savepoint is released on both paths (ROLLBACK TO keeps its savepoint
+// alive) so a long-running batch performing many appends keeps a bounded
+// savepoint stack instead of accumulating one entry per append.
+func (s *GormEventStore) appendInTx(tx *gorm.DB, aggregateID string, expectedVersion int, models []GormEventModel) error {
+	name := fmt.Sprintf("pericarp_append_sp_%d", s.savepointSeq.Add(1))
+	if err := tx.SavePoint(name).Error; err != nil {
+		return fmt.Errorf("failed to open append savepoint: %w", err)
+	}
+
+	var err error
+	if expectedVersion == -1 {
+		err = s.repo.insertEventsTx(tx, models)
+	} else {
+		err = s.appendCheckingVersion(tx, aggregateID, expectedVersion, models)
+	}
+	if err != nil {
+		if rbErr := tx.RollbackTo(name).Error; rbErr != nil {
+			return fmt.Errorf("%w (rollback to savepoint %s failed: %v)", err, name, rbErr)
+		}
+		if relErr := releaseSavepoint(tx, name); relErr != nil {
+			return fmt.Errorf("%w (release of savepoint %s failed: %v)", err, name, relErr)
+		}
+		return err
+	}
+	if err := releaseSavepoint(tx, name); err != nil {
+		return fmt.Errorf("failed to release append savepoint %s: %w", name, err)
+	}
+	return nil
+}
+
+// releaseSavepoint discards a savepoint without rolling back to it. GORM's
+// savepoint interface only exposes SavePoint and RollbackTo, so the release is
+// issued directly; RELEASE SAVEPOINT is supported by both engines this store
+// runs on (SQLite and Postgres). The name is internally generated
+// ("pericarp_append_sp_<n>"), never caller input.
+func releaseSavepoint(tx *gorm.DB, name string) error {
+	return tx.Exec("RELEASE SAVEPOINT " + name).Error
 }
 
 // ReadAfter returns committed events with Position > afterPosition across all

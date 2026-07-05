@@ -3,8 +3,10 @@ package subscriptions
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -34,6 +36,14 @@ func (GormCheckpointModel) TableName() string {
 type GormCheckpointStore struct {
 	db       *gorm.DB
 	postgres bool
+	// ensured memoizes subscribers whose checkpoint row has been confirmed to
+	// exist for this store's lifetime, so ensure() runs once per subscriber
+	// instead of on every Acquire (see ensureOnce).
+	ensured sync.Map
+	// ensuring collapses concurrent first-time ensures for the same subscriber
+	// into a single flight, so a concurrent wake burst can't slip N goroutines
+	// past the ensured memo and fire N redundant INSERTs (see ensureOnce).
+	ensuring singleflight.Group
 }
 
 var _ CheckpointStore = (*GormCheckpointStore)(nil)
@@ -57,9 +67,10 @@ func NewGormCheckpointStore(db *gorm.DB) (*GormCheckpointStore, error) {
 // Acquire begins a batch transaction holding the subscriber's checkpoint row.
 // On Postgres, acquired is false when another process holds the row.
 func (g *GormCheckpointStore) Acquire(ctx context.Context, subscriber string) (Batch, bool, error) {
-	// Ensure the row exists before locking it. Runs outside the batch
+	// Ensure the row exists before locking it, at most once per subscriber for
+	// this store's lifetime (see ensureOnce). Runs outside the batch
 	// transaction so a no-op conflict never interacts with row locks.
-	if err := g.ensure(ctx, subscriber, 0); err != nil {
+	if err := g.ensureOnce(ctx, subscriber); err != nil {
 		return nil, false, err
 	}
 
@@ -120,6 +131,59 @@ func (g *GormCheckpointStore) Reset(ctx context.Context, subscriber string, posi
 		Columns:   []clause.Column{{Name: "subscriber"}},
 		DoUpdates: clause.Assignments(map[string]any{"position": position, "updated_at": time.Now()}),
 	}).Create(&GormCheckpointModel{Subscriber: subscriber, Position: position, UpdatedAt: time.Now()}).Error
+}
+
+// ensureOnce runs ensure() at most once per subscriber for this store's
+// lifetime, memoizing the result so the INSERT ... ON CONFLICT DO NOTHING no
+// longer runs on every Acquire — that redundant write transaction per
+// subscriber wake is gone after the first one.
+//
+// Concurrency: a plain Load-then-ensure would let two goroutines racing the
+// first Acquire (e.g. a concurrent wake burst) both miss the memo and both run
+// ensure(), re-introducing the write amplification this removes. The
+// singleflight collapses them into one execution. The memo is set only on
+// success, so a failed ensure leaves nothing memoized and the next Acquire
+// retries.
+//
+// Cancellation: each caller waits on the flight via DoChan and its own
+// ctx.Done, so a caller whose ctx is cancelled returns promptly instead of
+// blocking behind another goroutine's in-flight ensure (which may be sitting
+// on a DB lock for the whole busy_timeout). The flight itself runs on a
+// WithoutCancel context: singleflight hands the first caller's ctx to the
+// shared work, and letting that caller's cancellation fail the INSERT would
+// poison the result for every joined waiter (the same pattern as the
+// registration singleflight in auth/infrastructure/providers/mastodon.go).
+//
+// Behaviour change from healing every cycle: a checkpoint row DELETEd out from
+// under a running store is no longer recreated by the next Acquire. Acquire
+// then fails with "checkpoint row ... disappeared" on SQLite, or skips the
+// cycle on Postgres (an absent row is indistinguishable from one locked by
+// another replica). Reset() remains the supported way to move or recreate a
+// checkpoint, and a fresh store — e.g. after a process restart — re-ensures
+// the row on first Acquire.
+func (g *GormCheckpointStore) ensureOnce(ctx context.Context, subscriber string) error {
+	if _, ok := g.ensured.Load(subscriber); ok {
+		return nil
+	}
+	sharedCtx := context.WithoutCancel(ctx)
+	ch := g.ensuring.DoChan(subscriber, func() (any, error) {
+		// Re-check inside the flight: a prior flight for this subscriber may
+		// have already ensured the row while this call was queued.
+		if _, ok := g.ensured.Load(subscriber); ok {
+			return nil, nil
+		}
+		if err := g.ensure(sharedCtx, subscriber, 0); err != nil {
+			return nil, err
+		}
+		g.ensured.Store(subscriber, struct{}{})
+		return nil, nil
+	})
+	select {
+	case res := <-ch:
+		return res.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ensure creates the checkpoint row at the given position if it doesn't exist.

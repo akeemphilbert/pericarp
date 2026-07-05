@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,13 @@ func newGormFixture(t *testing.T) (*gorm.DB, domain.EventStore, *subscriptions.G
 	// never block writers — also what a production SQLite deployment of a
 	// background subscriber would run.
 	dsn := filepath.Join(t.TempDir(), "subscriptions.db") + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
+	return newGormFixtureDSN(t, dsn)
+}
+
+// newGormFixtureDSN is newGormFixture with an explicit DSN, so tests that need
+// specific SQLite locking behaviour (e.g. _txlock=immediate) can dictate it.
+func newGormFixtureDSN(t *testing.T, dsn string) (*gorm.DB, domain.EventStore, *subscriptions.GormCheckpointStore) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -344,6 +352,145 @@ func TestGormCheckpointStore_AcquireCommitReset(t *testing.T) {
 	}
 	if position != 7 {
 		t.Fatalf("expected checkpoint 7, got %d", position)
+	}
+}
+
+// TestGormCheckpointStore_EnsuresRowOncePerSubscriber pins the memoization: the
+// checkpoint row is INSERTed once for a subscriber, not on every Acquire. A
+// gorm create-callback counts INSERT statements against subscriber_checkpoints
+// across two Acquire/Commit cycles and expects exactly one.
+func TestGormCheckpointStore_EnsuresRowOncePerSubscriber(t *testing.T) {
+	t.Parallel()
+
+	db, _, checkpoints := newGormFixture(t)
+	ctx := context.Background()
+
+	var inserts int64
+	if err := db.Callback().Create().After("gorm:create").
+		Register("test:count_checkpoint_inserts", func(tx *gorm.DB) {
+			if tx.Statement.Table == "subscriber_checkpoints" {
+				atomic.AddInt64(&inserts, 1)
+			}
+		}); err != nil {
+		t.Fatalf("failed to register callback: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		batch, acquired, err := checkpoints.Acquire(ctx, "memoized")
+		if err != nil || !acquired {
+			t.Fatalf("cycle %d: failed to acquire (acquired=%v): %v", i, acquired, err)
+		}
+		if err := batch.Commit(ctx, int64(i+1)); err != nil {
+			t.Fatalf("cycle %d: failed to commit: %v", i, err)
+		}
+	}
+
+	if got := atomic.LoadInt64(&inserts); got != 1 {
+		t.Fatalf("expected the checkpoint row ensured once across cycles, got %d INSERTs", got)
+	}
+}
+
+// TestGormCheckpointStore_EnsuresRowOnceUnderConcurrentAcquire pins the
+// concurrency side of the memoization: a wake burst that races several first
+// Acquires for the same fresh subscriber must still ensure the checkpoint row
+// exactly once. A plain load-then-ensure would let every racer miss the memo
+// and fire its own INSERT — the write amplification the memo exists to remove.
+func TestGormCheckpointStore_EnsuresRowOnceUnderConcurrentAcquire(t *testing.T) {
+	t.Parallel()
+
+	db, _, checkpoints := newGormFixture(t)
+
+	var inserts int64
+	if err := db.Callback().Create().After("gorm:create").
+		Register("test:count_concurrent_checkpoint_inserts", func(tx *gorm.DB) {
+			if tx.Statement.Table == "subscriber_checkpoints" {
+				atomic.AddInt64(&inserts, 1)
+			}
+		}); err != nil {
+		t.Fatalf("failed to register callback: %v", err)
+	}
+
+	const racers = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(racers)
+	for range racers {
+		go func() {
+			defer wg.Done()
+			<-start // release all goroutines into Acquire together
+			batch, acquired, err := checkpoints.Acquire(context.Background(), "raced")
+			if err != nil {
+				t.Errorf("failed to acquire: %v", err)
+				return
+			}
+			if acquired {
+				// Release the batch transaction; the row stays ensured.
+				if err := batch.Rollback(); err != nil {
+					t.Errorf("failed to rollback: %v", err)
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&inserts); got != 1 {
+		t.Fatalf("expected the checkpoint row ensured once under concurrent Acquire, got %d INSERTs", got)
+	}
+}
+
+// TestGormCheckpointStore_EnsureRespectsCallerCancellation pins the
+// cancellation contract of the first-time ensure: a caller whose ctx expires
+// while the ensure INSERT is stuck behind the database write lock returns
+// promptly with the ctx error instead of blocking out the full busy_timeout —
+// and the ensure itself, deliberately detached from any one caller's ctx,
+// still completes once the lock frees, so the store converges.
+func TestGormCheckpointStore_EnsureRespectsCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	db, _, checkpoints := newGormFixture(t)
+
+	// Hold SQLite's database write lock in a separate transaction so the
+	// flight's ensure INSERT blocks against busy_timeout (10s in the fixture).
+	blocker := db.Begin()
+	if blocker.Error != nil {
+		t.Fatalf("failed to begin blocking tx: %v", blocker.Error)
+	}
+	if err := blocker.Create(&projectionRow{EventID: "lock-holder"}).Error; err != nil {
+		t.Fatalf("failed to take the write lock: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := checkpoints.Acquire(ctx, "cancellable")
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+	// Well under the 10s busy_timeout the blocked INSERT would otherwise burn.
+	if elapsed > 5*time.Second {
+		t.Fatalf("Acquire blocked %v despite ctx deadline; want prompt return", elapsed)
+	}
+
+	// Release the lock: the detached flight finishes its INSERT and memoizes,
+	// so a later Acquire with a healthy ctx succeeds.
+	if err := blocker.Rollback().Error; err != nil {
+		t.Fatalf("failed to release the write lock: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		batch, acquired, err := checkpoints.Acquire(context.Background(), "cancellable")
+		if err == nil && acquired {
+			if err := batch.Rollback(); err != nil {
+				t.Fatalf("failed to rollback: %v", err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("store never converged after lock release (acquired=%v): %v", acquired, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
