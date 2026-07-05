@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -39,6 +40,10 @@ type GormCheckpointStore struct {
 	// exist for this store's lifetime, so ensure() runs once per subscriber
 	// instead of on every Acquire (see ensureOnce).
 	ensured sync.Map
+	// ensuring collapses concurrent first-time ensures for the same subscriber
+	// into a single flight, so a concurrent wake burst can't slip N goroutines
+	// past the ensured memo and fire N redundant INSERTs (see ensureOnce).
+	ensuring singleflight.Group
 }
 
 var _ CheckpointStore = (*GormCheckpointStore)(nil)
@@ -133,6 +138,13 @@ func (g *GormCheckpointStore) Reset(ctx context.Context, subscriber string, posi
 // longer runs on every Acquire — that redundant write transaction per
 // subscriber wake is gone after the first one.
 //
+// Concurrency: a plain Load-then-ensure would let two goroutines racing the
+// first Acquire (e.g. a concurrent wake burst) both miss the memo and both run
+// ensure(), re-introducing the write amplification this removes. The
+// singleflight collapses them into one execution the others wait on. ensure()
+// runs inside that flight and the memo is set only on success, so a failed
+// ensure leaves nothing memoized and the next Acquire retries.
+//
 // Behaviour change from healing every cycle: a checkpoint row DELETEd out from
 // under a running store is no longer recreated by the next Acquire. Acquire
 // then fails with "checkpoint row ... disappeared" on SQLite, or skips the
@@ -144,11 +156,19 @@ func (g *GormCheckpointStore) ensureOnce(ctx context.Context, subscriber string)
 	if _, ok := g.ensured.Load(subscriber); ok {
 		return nil
 	}
-	if err := g.ensure(ctx, subscriber, 0); err != nil {
-		return err
-	}
-	g.ensured.Store(subscriber, struct{}{})
-	return nil
+	_, err, _ := g.ensuring.Do(subscriber, func() (any, error) {
+		// Re-check inside the flight: a prior flight for this subscriber may
+		// have already ensured the row while this call was queued.
+		if _, ok := g.ensured.Load(subscriber); ok {
+			return nil, nil
+		}
+		if err := g.ensure(ctx, subscriber, 0); err != nil {
+			return nil, err
+		}
+		g.ensured.Store(subscriber, struct{}{})
+		return nil, nil
+	})
+	return err
 }
 
 // ensure creates the checkpoint row at the given position if it doesn't exist.

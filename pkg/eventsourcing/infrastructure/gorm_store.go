@@ -68,12 +68,21 @@ func (s *GormEventStore) Append(ctx context.Context, aggregateID string, expecte
 		models[i] = m
 	}
 
-	// Join an ambient subscription batch transaction when present. Opening a
-	// second write transaction from the same goroutine while the batch already
-	// holds the database write lock (SQLite BEGIN IMMEDIATE) is an unresolvable
-	// self-wait that burns the whole busy_timeout before failing.
-	if tx := subscriptions.TxFromContext(ctx); tx != nil {
-		return s.appendInTx(tx, aggregateID, expectedVersion, models)
+	// Join an ambient subscription batch transaction when present — but only
+	// one that belongs to this store's own connection pool. A batch tx cloned
+	// off a different *gorm.DB carries a foreign connection; joining it would
+	// write events into whatever database that connection points at. Pool
+	// identity (kept on the cloned tx's Config; the live tx connection lives on
+	// Statement.ConnPool) distinguishes "batch on my database" from a foreign
+	// one, matching the guard in subscriptions/gorm_parking.go. tx.WithContext
+	// rebinds the append to ctx so statement deadlines and cancellation apply.
+	//
+	// Opening a second write transaction from the same goroutine while our own
+	// batch already holds the database write lock (SQLite BEGIN IMMEDIATE) is an
+	// unresolvable self-wait that burns the whole busy_timeout before failing;
+	// joining the batch avoids it.
+	if tx := subscriptions.TxFromContext(ctx); tx != nil && tx.ConnPool == s.db.ConnPool {
+		return s.appendInTx(tx.WithContext(ctx), aggregateID, expectedVersion, models)
 	}
 
 	if expectedVersion == -1 {

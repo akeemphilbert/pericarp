@@ -390,6 +390,55 @@ func TestGormCheckpointStore_EnsuresRowOncePerSubscriber(t *testing.T) {
 	}
 }
 
+// TestGormCheckpointStore_EnsuresRowOnceUnderConcurrentAcquire pins the
+// concurrency side of the memoization: a wake burst that races several first
+// Acquires for the same fresh subscriber must still ensure the checkpoint row
+// exactly once. A plain load-then-ensure would let every racer miss the memo
+// and fire its own INSERT — the write amplification the memo exists to remove.
+func TestGormCheckpointStore_EnsuresRowOnceUnderConcurrentAcquire(t *testing.T) {
+	t.Parallel()
+
+	db, _, checkpoints := newGormFixture(t)
+
+	var inserts int64
+	if err := db.Callback().Create().After("gorm:create").
+		Register("test:count_concurrent_checkpoint_inserts", func(tx *gorm.DB) {
+			if tx.Statement.Table == "subscriber_checkpoints" {
+				atomic.AddInt64(&inserts, 1)
+			}
+		}); err != nil {
+		t.Fatalf("failed to register callback: %v", err)
+	}
+
+	const racers = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(racers)
+	for range racers {
+		go func() {
+			defer wg.Done()
+			<-start // release all goroutines into Acquire together
+			batch, acquired, err := checkpoints.Acquire(context.Background(), "raced")
+			if err != nil {
+				t.Errorf("failed to acquire: %v", err)
+				return
+			}
+			if acquired {
+				// Release the batch transaction; the row stays ensured.
+				if err := batch.Rollback(); err != nil {
+					t.Errorf("failed to rollback: %v", err)
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&inserts); got != 1 {
+		t.Fatalf("expected the checkpoint row ensured once under concurrent Acquire, got %d INSERTs", got)
+	}
+}
+
 // TestSubscriber_ResetReplayRebuildsProjection covers the reset-to-replay flow
 // end to end on the database-backed stores: wipe the projection, reset the
 // checkpoint to 0, and the subscriber rebuilds the projection from history.
