@@ -439,6 +439,61 @@ func TestGormCheckpointStore_EnsuresRowOnceUnderConcurrentAcquire(t *testing.T) 
 	}
 }
 
+// TestGormCheckpointStore_EnsureRespectsCallerCancellation pins the
+// cancellation contract of the first-time ensure: a caller whose ctx expires
+// while the ensure INSERT is stuck behind the database write lock returns
+// promptly with the ctx error instead of blocking out the full busy_timeout —
+// and the ensure itself, deliberately detached from any one caller's ctx,
+// still completes once the lock frees, so the store converges.
+func TestGormCheckpointStore_EnsureRespectsCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	db, _, checkpoints := newGormFixture(t)
+
+	// Hold SQLite's database write lock in a separate transaction so the
+	// flight's ensure INSERT blocks against busy_timeout (10s in the fixture).
+	blocker := db.Begin()
+	if blocker.Error != nil {
+		t.Fatalf("failed to begin blocking tx: %v", blocker.Error)
+	}
+	if err := blocker.Create(&projectionRow{EventID: "lock-holder"}).Error; err != nil {
+		t.Fatalf("failed to take the write lock: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := checkpoints.Acquire(ctx, "cancellable")
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+	// Well under the 10s busy_timeout the blocked INSERT would otherwise burn.
+	if elapsed > 5*time.Second {
+		t.Fatalf("Acquire blocked %v despite ctx deadline; want prompt return", elapsed)
+	}
+
+	// Release the lock: the detached flight finishes its INSERT and memoizes,
+	// so a later Acquire with a healthy ctx succeeds.
+	if err := blocker.Rollback().Error; err != nil {
+		t.Fatalf("failed to release the write lock: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		batch, acquired, err := checkpoints.Acquire(context.Background(), "cancellable")
+		if err == nil && acquired {
+			if err := batch.Rollback(); err != nil {
+				t.Fatalf("failed to rollback: %v", err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("store never converged after lock release (acquired=%v): %v", acquired, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestSubscriber_ResetReplayRebuildsProjection covers the reset-to-replay flow
 // end to end on the database-backed stores: wipe the projection, reset the
 // checkpoint to 0, and the subscriber rebuilds the projection from history.
