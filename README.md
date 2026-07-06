@@ -36,6 +36,46 @@ func main() {
 - **Dependency Injection**: Built-in Fx modules for easy configuration
 - **Comprehensive Testing**: Unit tests and integration tests
 
+## Event Stores
+
+Pericarp ships several `EventStore` implementations:
+
+- **`infrastructure.MemoryStore`** — in-memory, for tests and development.
+- **`infrastructure.FileStore`** — JSON-on-disk, for local development and simple backups.
+- **`infrastructure.GormEventStore`** — GORM-backed, for SQLite (development) or Postgres (production).
+- **`infrastructure.BigQueryEventStore`** — BigQuery-backed, for analytics at scale over event streams.
+- **`infrastructure.BigtableEventStore`** — Google Cloud Bigtable-backed, for high-throughput NoSQL event storage with low-latency point reads.
+- **`infrastructure.DynamoEventStore`** — DynamoDB-backed, for managed cloud deployments.
+- **`infrastructure.CompositeEventStore`** — wraps a primary store plus zero or more secondaries. The primary is written synchronously; secondaries are written asynchronously on dedicated goroutines, so replication or backup targets never slow down the commit path.
+
+### Composite (primary sync + secondaries async)
+
+Use a composite when you want a backup/replica sink whose latency must not affect your commit path. Secondary failures never fail the primary commit — they surface through an optional error handler:
+
+```go
+primary := infrastructure.NewMemoryStore()
+backup, err := infrastructure.NewFileStore("/var/lib/myapp/backup")
+if err != nil {
+    log.Fatalf("open backup store: %v", err)
+}
+
+store := infrastructure.NewCompositeEventStore(
+    primary,
+    []domain.EventStore{backup},
+    infrastructure.WithErrorHandler(func(idx int, err error, envs []domain.EventEnvelope[any]) {
+        log.Printf("secondary[%d] replication failed for %d events: %v", idx, len(envs), err)
+    }),
+)
+defer func() {
+    // Close drains pending secondary writes, then closes primary + secondaries.
+    if err := store.Close(); err != nil {
+        log.Printf("composite close: %v", err)
+    }
+}()
+```
+
+All reads forward to the primary. `Close()` drains in-flight secondary writes, then closes the underlying stores. See the godoc on `CompositeEventStore` for details.
+
 ## Installation
 
 ### Prerequisites

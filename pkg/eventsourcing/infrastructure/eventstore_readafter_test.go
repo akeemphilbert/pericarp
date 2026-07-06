@@ -270,6 +270,22 @@ func TestDynamoStore_FeedNotSupported(t *testing.T) {
 	}
 }
 
+func TestBigtableStore_FeedNotSupported(t *testing.T) {
+	t.Parallel()
+
+	store := setupBigtableStore(t)
+	defer func() { _ = store.Close() }()
+
+	_, err := store.ReadAfter(context.Background(), 0, 10)
+	if !errors.Is(err, domain.ErrGlobalOrderingNotSupported) {
+		t.Fatalf("expected ErrGlobalOrderingNotSupported from ReadAfter, got %v", err)
+	}
+	_, err = store.HeadPosition(context.Background())
+	if !errors.Is(err, domain.ErrGlobalOrderingNotSupported) {
+		t.Fatalf("expected ErrGlobalOrderingNotSupported from HeadPosition, got %v", err)
+	}
+}
+
 func TestFileStore_ReadAfter_PositionsSurviveRestart(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
