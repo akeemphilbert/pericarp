@@ -1,6 +1,6 @@
 # Pericarp Go Library Makefile
 
-.PHONY: help build test test-unit test-integration clean deps fmt lint
+.PHONY: help build build-cli test test-unit test-integration clean deps fmt lint
 
 # Default target
 help: ## Show this help message
@@ -12,6 +12,9 @@ help: ## Show this help message
 # Build targets
 build: ## Build the library
 	go build -v ./...
+
+build-cli: ## Build the pericarp CLI (migration tool) into bin/
+	go build -o bin/pericarp ./cmd/pericarp
 
 # Test targets
 test: test-unit ## Run all tests
