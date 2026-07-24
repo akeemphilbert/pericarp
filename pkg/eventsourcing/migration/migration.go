@@ -57,8 +57,11 @@ type ExportOptions struct {
 type ExportReport struct {
 	// Count is the number of events written (excluding the header line).
 	Count int64
-	// LastPosition is the highest source Position written — the cursor to
-	// resume from via ExportOptions.FromPosition.
+	// LastPosition is the resume cursor. It starts at ExportOptions.FromPosition
+	// and advances to each written event's Position, so it is the highest
+	// position written — or equal to FromPosition when nothing was written after
+	// it (Count == 0). Pass it back as ExportOptions.FromPosition to continue an
+	// interrupted export.
 	LastPosition int64
 }
 
