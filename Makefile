@@ -14,6 +14,7 @@ build: ## Build the library
 	go build -v ./...
 
 build-cli: ## Build the pericarp CLI (migration tool) into bin/
+	mkdir -p bin
 	go build -o bin/pericarp ./cmd/pericarp
 
 # Test targets

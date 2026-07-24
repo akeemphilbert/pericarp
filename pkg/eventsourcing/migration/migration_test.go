@@ -271,3 +271,63 @@ func TestExportContextCancelled(t *testing.T) {
 		t.Fatalf("Export with cancelled ctx: err = %v, want context.Canceled", err)
 	}
 }
+
+func TestImportContextCancelled(t *testing.T) {
+	t.Parallel()
+	// A real export (header + events); a cancelled ctx must stop Import before
+	// it appends anything and surface context.Canceled.
+	src, _ := interleavedFixture(t)
+	var buf bytes.Buffer
+	if _, err := migration.Export(context.Background(), src, &buf, migration.ExportOptions{}); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dst := infrastructure.NewMemoryStore()
+	report, err := migration.Import(ctx, dst, &buf, migration.ImportOptions{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Import with cancelled ctx: err = %v, want context.Canceled", err)
+	}
+	if report.Count != 0 {
+		t.Fatalf("Import with cancelled ctx appended %d events, want 0", report.Count)
+	}
+	if got := globalOrder(t, dst); len(got) != 0 {
+		t.Fatalf("dst has %d events after cancelled import, want 0", len(got))
+	}
+}
+
+// TestExportFlushesPartialOnCancel proves that events already written before an
+// early return are flushed, so the file on disk matches the returned report
+// (and can be resumed) rather than being left truncated in the buffer.
+func TestExportFlushesPartialOnCancel(t *testing.T) {
+	t.Parallel()
+	src, order := interleavedFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var buf bytes.Buffer
+	opts := migration.ExportOptions{
+		BatchSize: 2,
+		// Cancel after the first batch is written and counted; the next loop
+		// iteration returns early, exercising the deferred flush.
+		Progress: func(migration.ExportReport) { cancel() },
+	}
+	report, err := migration.Export(ctx, src, &buf, opts)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Export err = %v, want context.Canceled", err)
+	}
+	if report.Count == 0 || report.Count >= int64(len(order)) {
+		t.Fatalf("expected a partial report, got Count=%d of %d", report.Count, len(order))
+	}
+
+	// Importing the partial file must yield exactly the reported count — proof
+	// the buffered batch reached the writer despite the early return.
+	dst := infrastructure.NewMemoryStore()
+	imp, err := migration.Import(context.Background(), dst, &buf, migration.ImportOptions{})
+	if err != nil {
+		t.Fatalf("Import partial file: %v", err)
+	}
+	if imp.Count != report.Count {
+		t.Fatalf("partial file has %d events, but export reported %d", imp.Count, report.Count)
+	}
+}

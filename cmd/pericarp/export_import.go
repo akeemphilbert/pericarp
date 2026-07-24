@@ -22,6 +22,9 @@ func runExport(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := spec.validateExportable(); err != nil {
+		return err
+	}
 
 	store, closeStore, err := openStore(ctx, spec)
 	if err != nil {

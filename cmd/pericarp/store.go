@@ -39,6 +39,20 @@ func addStoreFlags(fs *flag.FlagSet, spec *StoreSpec) {
 	fs.StringVar(&spec.Region, "region", os.Getenv("AWS_REGION"), "AWS region (dynamo, optional)")
 }
 
+// validateExportable checks the spec is valid AND its backend can be exported
+// from. DynamoDB has no global ordered feed (its ReadAfter returns
+// ErrGlobalOrderingNotSupported), so it can only be an import target; rejecting
+// it here gives a clear message instead of a low-level failure once a job runs.
+func (s StoreSpec) validateExportable() error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	if strings.ToLower(s.Backend) == "dynamo" {
+		return fmt.Errorf("the dynamo backend cannot be exported (no global ordered feed); export from sqlite or postgres — dynamo remains a valid import target")
+	}
+	return nil
+}
+
 // validate checks that the spec has the fields its backend requires.
 func (s StoreSpec) validate() error {
 	switch strings.ToLower(s.Backend) {

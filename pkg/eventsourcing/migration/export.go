@@ -22,26 +22,37 @@ import (
 // Only committed, visible events are exported; a store that withholds events
 // behind an in-flight writer (e.g. Postgres) will not export them, so quiesce
 // writes on the source for a complete migration.
-func Export(ctx context.Context, src domain.EventStore, w io.Writer, opts ExportOptions) (ExportReport, error) {
+func Export(ctx context.Context, src domain.EventStore, w io.Writer, opts ExportOptions) (report ExportReport, err error) {
 	batchSize := opts.BatchSize
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
 
-	report := ExportReport{LastPosition: opts.FromPosition}
+	report = ExportReport{LastPosition: opts.FromPosition}
 	bw := bufio.NewWriter(w)
+	// Flush on every return path — success, ctx cancellation, or a mid-stream
+	// ReadAfter error — so the buffer is never dropped with events already
+	// counted in the report. The report then always matches what reached w
+	// (important for resuming from LastPosition). A flush error surfaces only
+	// when nothing else already failed.
+	defer func() {
+		if ferr := bw.Flush(); ferr != nil && err == nil {
+			err = fmt.Errorf("flush export: %w", ferr)
+		}
+	}()
 
-	if err := writeJSONLine(bw, &header{PericarpExport: FormatVersion}); err != nil {
+	if err = writeJSONLine(bw, &header{PericarpExport: FormatVersion}); err != nil {
 		return report, fmt.Errorf("write header: %w", err)
 	}
 
 	cursor := opts.FromPosition
 	for {
-		if err := ctx.Err(); err != nil {
+		if err = ctx.Err(); err != nil {
 			return report, err
 		}
 
-		events, err := src.ReadAfter(ctx, cursor, batchSize)
+		var events []domain.EventEnvelope[any]
+		events, err = src.ReadAfter(ctx, cursor, batchSize)
 		if err != nil {
 			return report, fmt.Errorf("read after position %d: %w", cursor, err)
 		}
@@ -51,7 +62,7 @@ func Export(ctx context.Context, src domain.EventStore, w io.Writer, opts Export
 
 		for i := range events {
 			ev := events[i]
-			if err := writeJSONLine(bw, &ev); err != nil {
+			if err = writeJSONLine(bw, &ev); err != nil {
 				return report, fmt.Errorf("write event %s (position %d): %w", ev.ID, ev.Position, err)
 			}
 			cursor = ev.Position
@@ -63,9 +74,6 @@ func Export(ctx context.Context, src domain.EventStore, w io.Writer, opts Export
 		}
 	}
 
-	if err := bw.Flush(); err != nil {
-		return report, fmt.Errorf("flush export: %w", err)
-	}
 	return report, nil
 }
 
