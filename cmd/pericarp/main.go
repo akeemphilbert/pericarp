@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -25,7 +26,9 @@ func main() {
 	}
 
 	// Ctrl-C / SIGTERM cancels the active operation (and running serve jobs).
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// SIGTERM matters for container runtimes (e.g. Kubernetes) that signal it
+	// on shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var err error

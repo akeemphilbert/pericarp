@@ -48,7 +48,8 @@ destination table and its event-id GSI must already exist.
 migration does not block the request:
 
 ```bash
-pericarp serve --addr 127.0.0.1:8080     # env: PERICARP_MIGRATE_ADDR
+pericarp serve --addr 127.0.0.1:8080 --data-dir ./migrations
+# env: PERICARP_MIGRATE_ADDR, PERICARP_MIGRATE_DATA_DIR
 ```
 
 | Method & path | Purpose |
@@ -59,13 +60,16 @@ pericarp serve --addr 127.0.0.1:8080     # env: PERICARP_MIGRATE_ADDR
 | `GET /export/{id}/download` | download a completed export's artifact |
 | `GET /healthz` | health check |
 
-Request bodies carry database credentials, so the server binds to loopback by
-default. Set `PERICARP_MIGRATE_TOKEN` to require an
-`Authorization: Bearer <token>` header on every route except `/healthz`.
+`output_path` / `input_path` are resolved **relative to `--data-dir`** (default
+the working directory) and may not escape it, so a request body cannot make the
+server read or clobber arbitrary files. Request bodies also carry database
+credentials, so the server binds to loopback by default; set
+`PERICARP_MIGRATE_TOKEN` to require an `Authorization: Bearer <token>` header on
+every route except `/healthz`.
 
 ```bash
 curl -s -XPOST localhost:8080/export -H 'Authorization: Bearer '"$TOKEN" \
-  -d '{"backend":"postgres","dsn":"'"$SRC_DSN"'","output_path":"/data/events.jsonl"}'
+  -d '{"backend":"postgres","dsn":"'"$SRC_DSN"'","output_path":"events.jsonl"}'
 ```
 
 ## Scope

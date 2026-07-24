@@ -59,8 +59,9 @@ func (s StoreSpec) validate() error {
 }
 
 // openStore opens the event store described by spec and returns it with a
-// closer that releases any underlying connections. The store implementations'
-// own Close() is a no-op, so the closer owns the *sql.DB lifecycle.
+// closer that releases any underlying connections. For the GORM-backed stores
+// opened here (SQLite, Postgres) the store's own Close() is a no-op, so the
+// returned closer owns the *sql.DB lifecycle; the Dynamo closer is a no-op.
 func openStore(ctx context.Context, spec StoreSpec) (domain.EventStore, func() error, error) {
 	if err := spec.validate(); err != nil {
 		return nil, nil, err

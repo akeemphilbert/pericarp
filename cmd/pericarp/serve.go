@@ -7,8 +7,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,14 +35,27 @@ import (
 func runServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := fs.String("addr", envOr("PERICARP_MIGRATE_ADDR", "127.0.0.1:8080"), "listen address")
+	dataDir := fs.String("data-dir", envOr("PERICARP_MIGRATE_DATA_DIR", "."), "directory export/import files are read from and written to")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	// Confine all job file I/O to this directory so a request body cannot make
+	// the server read or clobber arbitrary paths (client paths are resolved
+	// relative to it and may not escape it).
+	absDir, err := filepath.Abs(*dataDir)
+	if err != nil {
+		return fmt.Errorf("resolve data dir: %w", err)
+	}
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
+	}
+
 	srv := &migrateServer{
-		ctx:   ctx,
-		token: os.Getenv("PERICARP_MIGRATE_TOKEN"),
-		jobs:  newJobRegistry(),
+		ctx:     ctx,
+		token:   os.Getenv("PERICARP_MIGRATE_TOKEN"),
+		dataDir: absDir,
+		jobs:    newJobRegistry(),
 	}
 	httpServer := &http.Server{
 		Addr:              *addr,
@@ -55,7 +71,7 @@ func runServe(ctx context.Context, args []string) error {
 		_ = httpServer.Shutdown(shutCtx)
 	}()
 
-	fmt.Fprintf(os.Stderr, "pericarp migrate server listening on %s\n", *addr)
+	fmt.Fprintf(os.Stderr, "pericarp migrate server listening on %s (data dir %s)\n", *addr, absDir)
 	if srv.token == "" {
 		fmt.Fprintln(os.Stderr, "warning: PERICARP_MIGRATE_TOKEN not set — endpoint is unauthenticated; keep it bound to localhost")
 	}
@@ -67,9 +83,10 @@ func runServe(ctx context.Context, args []string) error {
 
 // migrateServer holds the shared state for the serve endpoints.
 type migrateServer struct {
-	ctx   context.Context // base context; cancelled on shutdown to stop running jobs
-	token string
-	jobs  *jobRegistry
+	ctx     context.Context // base context; cancelled on shutdown to stop running jobs
+	token   string
+	dataDir string // absolute directory job files are confined to
+	jobs    *jobRegistry
 }
 
 func (s *migrateServer) routes() http.Handler {
@@ -89,11 +106,10 @@ func (s *migrateServer) routes() http.Handler {
 func (s *migrateServer) authenticated(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.token != "" && r.URL.Path != "/healthz" {
-			const prefix = "Bearer "
-			auth := r.Header.Get("Authorization")
-			ok := len(auth) > len(prefix) &&
-				subtle.ConstantTimeCompare([]byte(auth[len(prefix):]), []byte(s.token)) == 1
-			if !ok {
+			// The header must actually be "Bearer <token>": CutPrefix guards
+			// against a value that merely happens to share the token's suffix.
+			presented, hasPrefix := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !hasPrefix || subtle.ConstantTimeCompare([]byte(presented), []byte(s.token)) != 1 {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
@@ -116,15 +132,19 @@ func (s *migrateServer) handleExport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "output_path is required"})
 		return
 	}
+	outPath, err := s.resolvePath(req.OutputPath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	if err := req.validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
 	j := s.jobs.create("export")
-	spec, outPath := req.StoreSpec, req.OutputPath
 	opts := migration.ExportOptions{FromPosition: req.FromPosition, BatchSize: req.BatchSize}
-	go s.runExportJob(j.ID, spec, outPath, opts)
+	go s.runExportJob(j.ID, req.StoreSpec, outPath, opts)
 	writeJSON(w, http.StatusAccepted, j)
 }
 
@@ -141,14 +161,18 @@ func (s *migrateServer) handleImport(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "input_path is required"})
 		return
 	}
+	inPath, err := s.resolvePath(req.InputPath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	if err := req.validate(); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
 	j := s.jobs.create("import")
-	spec, inPath, skip := req.StoreSpec, req.InputPath, req.SkipExisting
-	go s.runImportJob(j.ID, spec, inPath, skip)
+	go s.runImportJob(j.ID, req.StoreSpec, inPath, req.SkipExisting)
 	writeJSON(w, http.StatusAccepted, j)
 }
 
@@ -177,6 +201,19 @@ func (s *migrateServer) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	http.ServeFile(w, r, j.Output)
+}
+
+// resolvePath resolves a client-supplied path within the server's data dir and
+// rejects anything that would escape it. filepath.Join cleans the result, so a
+// traversal like "../../etc/passwd" lands outside dataDir and is caught by the
+// relative-path check.
+func (s *migrateServer) resolvePath(p string) (string, error) {
+	full := filepath.Join(s.dataDir, p)
+	rel, err := filepath.Rel(s.dataDir, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes the server data directory", p)
+	}
+	return full, nil
 }
 
 func (s *migrateServer) runExportJob(id string, spec StoreSpec, outPath string, opts migration.ExportOptions) {
@@ -266,9 +303,14 @@ type job struct {
 	Error        string   `json:"error,omitempty"`
 }
 
+// maxRetainedJobs bounds the in-memory job history so a long-lived server does
+// not grow without limit. When exceeded, the oldest jobs are evicted (FIFO).
+const maxRetainedJobs = 1000
+
 type jobRegistry struct {
-	mu   sync.Mutex
-	jobs map[string]*job
+	mu    sync.Mutex
+	jobs  map[string]*job
+	order []string // job IDs in creation order, for FIFO eviction
 }
 
 func newJobRegistry() *jobRegistry {
@@ -278,8 +320,14 @@ func newJobRegistry() *jobRegistry {
 func (reg *jobRegistry) create(kind string) job {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
+	for len(reg.order) >= maxRetainedJobs {
+		oldest := reg.order[0]
+		reg.order = reg.order[1:]
+		delete(reg.jobs, oldest)
+	}
 	j := &job{ID: ksuid.New().String(), Kind: kind, State: jobRunning}
 	reg.jobs[j.ID] = j
+	reg.order = append(reg.order, j.ID)
 	return *j
 }
 
@@ -332,6 +380,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
+		return false
+	}
+	// Require the body to be exactly one JSON value — reject trailing data.
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "request body must contain a single JSON object"})
 		return false
 	}
 	return true
