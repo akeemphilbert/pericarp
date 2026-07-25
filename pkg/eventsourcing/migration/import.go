@@ -83,10 +83,26 @@ func (p *importer) process(ctx context.Context, line []byte, lineNo int) error {
 	if ev.ID == "" || ev.AggregateID == "" {
 		return fmt.Errorf("line %d: event missing id or aggregate_id", lineNo)
 	}
+	if ev.EventType == "" {
+		return fmt.Errorf("line %d: event %s missing event_type", lineNo, ev.ID)
+	}
+	// Persisted events start at sequence 1; a zero/negative value means the line
+	// is malformed and would append unusable history.
+	if ev.SequenceNo <= 0 {
+		return fmt.Errorf("line %d: event %s has non-positive sequence_no %d", lineNo, ev.ID, ev.SequenceNo)
+	}
 
 	if p.opts.SkipExisting {
-		switch _, err := p.dst.GetEventByID(ctx, ev.ID); {
+		switch existing, err := p.dst.GetEventByID(ctx, ev.ID); {
 		case err == nil:
+			// The ID already exists — only skip if it is genuinely the same
+			// event. A mismatch means the destination holds a different event
+			// under this ID (mixed histories / misconfiguration); fail loudly
+			// rather than silently leave inconsistent history.
+			if existing.AggregateID != ev.AggregateID || existing.EventType != ev.EventType || existing.SequenceNo != ev.SequenceNo {
+				return fmt.Errorf("line %d: event %s already exists on the destination with a different identity (have aggregate %q seq %d type %q, importing aggregate %q seq %d type %q)",
+					lineNo, ev.ID, existing.AggregateID, existing.SequenceNo, existing.EventType, ev.AggregateID, ev.SequenceNo, ev.EventType)
+			}
 			p.report.Skipped++
 			p.maybeProgress()
 			return nil

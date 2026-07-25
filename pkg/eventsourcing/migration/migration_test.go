@@ -250,6 +250,48 @@ func TestImportMalformedLineErrors(t *testing.T) {
 	}
 }
 
+func TestImportRejectsIncompleteEvents(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cases := []struct{ name, line, want string }{
+		{"missing id", `{"aggregate_id":"a","event_type":"x","sequence_no":1}`, "missing id or aggregate_id"},
+		{"missing aggregate", `{"id":"e","event_type":"x","sequence_no":1}`, "missing id or aggregate_id"},
+		{"missing event_type", `{"id":"e","aggregate_id":"a","sequence_no":1}`, "missing event_type"},
+		{"zero sequence_no", `{"id":"e","aggregate_id":"a","event_type":"x","sequence_no":0}`, "non-positive sequence_no"},
+		{"negative sequence_no", `{"id":"e","aggregate_id":"a","event_type":"x","sequence_no":-2}`, "non-positive sequence_no"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dst := infrastructure.NewMemoryStore()
+			_, err := migration.Import(ctx, dst, strings.NewReader(c.line+"\n"), migration.ImportOptions{})
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want containing %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestImportSkipExistingRejectsIDCollision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dst := infrastructure.NewMemoryStore()
+
+	// Destination already holds event ID "dup", but for a different aggregate.
+	pre := domain.NewEventEnvelope[any](map[string]any{"v": "x"}, "other", "other.created", 1)
+	pre.ID = "dup"
+	if err := dst.Append(ctx, "other", 0, pre); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Importing a different event that reuses ID "dup" must fail, not silently skip.
+	line := `{"id":"dup","aggregate_id":"a","event_type":"a.created","payload":{"v":"1"},"timestamp":"2026-01-01T00:00:00Z","sequence_no":1}` + "\n"
+	_, err := migration.Import(ctx, dst, strings.NewReader(line), migration.ImportOptions{SkipExisting: true})
+	if err == nil || !strings.Contains(err.Error(), "different identity") {
+		t.Fatalf("expected identity-mismatch error, got %v", err)
+	}
+}
+
 func TestExportEmptyStore(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
