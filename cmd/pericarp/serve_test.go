@@ -221,6 +221,23 @@ func TestResolvePathConfinement(t *testing.T) {
 	}
 }
 
+// TestJobRegistryEvictsFinishedBeforeRunning fills the registry to capacity
+// with one running job (oldest) and the rest finished, then creates another and
+// asserts the running job survived — a finished job was evicted instead.
+func TestJobRegistryEvictsFinishedBeforeRunning(t *testing.T) {
+	reg := newJobRegistry()
+	running := reg.create("export") // stays in the default running state
+	for i := 1; i < maxRetainedJobs; i++ {
+		j := reg.create("export")
+		reg.update(j.ID, func(j *job) { j.State = jobDone })
+	}
+	// At capacity: 1 running (oldest) + (maxRetainedJobs-1) finished.
+	reg.create("export")
+	if _, ok := reg.snapshot(running.ID); !ok {
+		t.Fatal("running job was evicted; a finished job should be evicted first")
+	}
+}
+
 // countEventLines counts non-empty, non-header lines in an export.
 func countEventLines(s string) int {
 	n := 0

@@ -31,10 +31,14 @@ func Import(ctx context.Context, dst domain.EventStore, r io.Reader, opts Import
 
 	for {
 		raw, readErr := br.ReadBytes('\n')
-		if line := bytes.TrimSpace(raw); len(line) > 0 {
+		// Count every physical line so an error's "line N" matches the file even
+		// across blank lines; only non-empty lines are processed.
+		if len(raw) > 0 {
 			lineNo++
-			if err := p.process(ctx, line, lineNo); err != nil {
-				return p.report, err
+			if line := bytes.TrimSpace(raw); len(line) > 0 {
+				if err := p.process(ctx, line, lineNo); err != nil {
+					return p.report, err
+				}
 			}
 		}
 		if readErr != nil {

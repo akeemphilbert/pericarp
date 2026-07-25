@@ -320,15 +320,30 @@ func newJobRegistry() *jobRegistry {
 func (reg *jobRegistry) create(kind string) job {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
-	for len(reg.order) >= maxRetainedJobs {
-		oldest := reg.order[0]
-		reg.order = reg.order[1:]
-		delete(reg.jobs, oldest)
+	if len(reg.order) >= maxRetainedJobs {
+		reg.evictOne()
 	}
 	j := &job{ID: ksuid.New().String(), Kind: kind, State: jobRunning}
 	reg.jobs[j.ID] = j
 	reg.order = append(reg.order, j.ID)
 	return *j
+}
+
+// evictOne removes one job to make room, preferring the oldest finished job so
+// a still-running job's live status is not dropped (update ignores unknown IDs,
+// and /jobs/{id} would 404 mid-run). Only when every retained job is still
+// running — pathological — does it evict the oldest, to keep memory bounded.
+func (reg *jobRegistry) evictOne() {
+	for i, id := range reg.order {
+		if j, ok := reg.jobs[id]; ok && j.State != jobRunning {
+			delete(reg.jobs, id)
+			reg.order = append(reg.order[:i], reg.order[i+1:]...)
+			return
+		}
+	}
+	oldest := reg.order[0]
+	reg.order = reg.order[1:]
+	delete(reg.jobs, oldest)
 }
 
 // update mutates the named job under the registry lock. Unknown ids are ignored

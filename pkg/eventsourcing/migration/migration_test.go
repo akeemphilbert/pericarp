@@ -226,6 +226,18 @@ func TestImportUnsupportedVersionRejected(t *testing.T) {
 	}
 }
 
+func TestImportLineNumbersCountBlankLines(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	// header (line 1), blank (line 2), malformed event (line 3).
+	in := `{"pericarp_export":1}` + "\n\n" + `{"event_type":"x"}` + "\n"
+	dst := infrastructure.NewMemoryStore()
+	_, err := migration.Import(ctx, dst, strings.NewReader(in), migration.ImportOptions{})
+	if err == nil || !strings.Contains(err.Error(), "line 3") {
+		t.Fatalf("expected error referencing line 3, got %v", err)
+	}
+}
+
 func TestImportMalformedLineErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
