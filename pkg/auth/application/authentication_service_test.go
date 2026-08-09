@@ -645,7 +645,7 @@ func TestDefaultAuthenticationService_CreateSession(t *testing.T) {
 
 	svc, deps := newTestService()
 
-	session, err := svc.CreateSession(ctx, "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	session, err := svc.CreateSession(ctx, "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -679,7 +679,7 @@ func TestDefaultAuthenticationService_ValidateSession(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create a session first
-	session, err := svc.CreateSession(ctx, "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	session, err := svc.CreateSession(ctx, "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -723,7 +723,7 @@ func TestDefaultAuthenticationService_ValidateSession_Revoked(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create and revoke session
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	_ = session.Revoke()
 	deps.sessions.sessions["sess-1"] = session
 
@@ -743,7 +743,7 @@ func TestDefaultAuthenticationService_ValidateSession_Expired(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create expired session
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(-1*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(-1*time.Hour))
 	deps.sessions.sessions["sess-1"] = session
 
 	_, err := svc.ValidateSession(ctx, "sess-1")
@@ -761,7 +761,7 @@ func TestDefaultAuthenticationService_RevokeSession(t *testing.T) {
 
 	svc, deps := newTestService()
 
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	deps.sessions.sessions["sess-1"] = session
 
 	if err := svc.RevokeSession(ctx, "sess-1"); err != nil {
@@ -797,9 +797,9 @@ func TestDefaultAuthenticationService_RevokeAllSessions(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create multiple sessions for the same agent
-	sess1, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
-	sess2, _ := new(entities.AuthSession).With("sess-2", "agent-1", "cred-1", "192.168.1.2", "Chrome", time.Now().Add(24*time.Hour))
-	sess3, _ := new(entities.AuthSession).With("sess-3", "agent-2", "cred-2", "10.0.0.1", "Safari", time.Now().Add(24*time.Hour))
+	sess1, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess2, _ := new(entities.AuthSession).With("sess-2", "agent-1", "acct-1", "cred-1", "192.168.1.2", "Chrome", time.Now().Add(24*time.Hour))
+	sess3, _ := new(entities.AuthSession).With("sess-3", "agent-2", "acct-1", "cred-2", "10.0.0.1", "Safari", time.Now().Add(24*time.Hour))
 
 	deps.sessions.sessions["sess-1"] = sess1
 	deps.sessions.sessions["sess-2"] = sess2
@@ -1804,7 +1804,7 @@ func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 	ctx := context.Background()
 
 	sessions := newMockSessionRepo()
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	session.ClearUncommittedEvents()
 	sessions.sessions["sess-1"] = session
 

@@ -107,7 +107,7 @@ func RunAuthenticationFlow(ctx context.Context) (*FlowResult, error) {
 	fmt.Printf("[7] Agent created: ID=%s, Name=%s, AccountID=%s\n", agent.GetID(), agent.Name(), account.GetID())
 
 	// --- 8. CreateSession ---
-	session, err := svc.CreateSession(ctx, agent.GetID(), credential.GetID(), "192.168.1.1", "ExampleApp/1.0", 24*time.Hour)
+	session, err := svc.CreateSession(ctx, agent.GetID(), account.GetID(), credential.GetID(), "192.168.1.1", "ExampleApp/1.0", 24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("CreateSession: %w", err)
 	}

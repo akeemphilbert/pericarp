@@ -221,7 +221,7 @@ func TestAuthenticationFlow_SessionExpiry(t *testing.T) {
 	)
 
 	// Create a session that is already expired (zero duration)
-	session, err := svc.CreateSession(ctx, "agent-1", "cred-1", "127.0.0.1", "Test/1.0", 0)
+	session, err := svc.CreateSession(ctx, "agent-1", "", "cred-1", "127.0.0.1", "Test/1.0", 0)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}

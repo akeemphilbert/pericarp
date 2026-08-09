@@ -187,8 +187,15 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 
 	ipAddress := realIP(r)
 	userAgent := r.UserAgent()
+	// Scope the session to the account this sign-in just resolved. It is the
+	// only chance to record it: nothing downstream can recover the account an
+	// invited agent signed in under.
+	accountID := ""
+	if account != nil {
+		accountID = account.GetID()
+	}
 	authSession, err := h.cfg.AuthService.CreateSession(
-		ctx, agent.GetID(), credential.GetID(),
+		ctx, agent.GetID(), accountID, credential.GetID(),
 		ipAddress, userAgent, h.cfg.SessionDuration,
 	)
 	if err != nil {
@@ -203,9 +210,7 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now(),
 		ExpiresAt: authSession.ExpiresAt(),
 	}
-	if account != nil {
-		sessionData.AccountID = account.GetID()
-	}
+	sessionData.AccountID = accountID
 	if err := h.cfg.SessionManager.CreateHTTPSession(w, r, sessionData); err != nil {
 		h.cfg.Logger.Error(ctx, "HTTP session creation failed", "error", err)
 		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create HTTP session"})
@@ -213,11 +218,7 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Issue identity token if the AuthService supports it (non-fatal on failure).
-	activeAccountID := ""
-	if account != nil {
-		activeAccountID = account.GetID()
-	}
-	tokenString, issueErr := h.cfg.AuthService.IssueIdentityToken(ctx, agent, activeAccountID)
+	tokenString, issueErr := h.cfg.AuthService.IssueIdentityToken(ctx, agent, accountID)
 	if issueErr != nil {
 		h.cfg.Logger.Warn(ctx, "failed to issue identity token", "error", issueErr)
 	} else if tokenString != "" {

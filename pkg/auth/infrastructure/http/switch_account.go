@@ -6,6 +6,7 @@ import (
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
+	"github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/session"
 )
 
 // SwitchAccountOption configures the SwitchActiveAccountHandler.
@@ -56,9 +57,18 @@ type switchAccountRequest struct {
 // The accounts parameter is optional. When nil, membership is validated solely
 // against the JWT's AccountIDs claim. When non-nil, an authoritative
 // FindMemberRole check is performed.
+//
+// sessions and auth re-scope the caller's stored auth session so that
+// session-authenticated routes follow the switch too. Pass both as nil only if
+// the service serves no session-authenticated routes. A service that mounts
+// RequireAuth and passes nil will keep serving those routes in the account the
+// caller switched away from, while its RequireJWT routes act in the new one —
+// the same agent in two tenants at once.
 func SwitchActiveAccountHandler(
 	reissuer application.TokenReissuer,
 	accounts repositories.AccountRepository,
+	sessions session.SessionManager,
+	authService application.AuthenticationService,
 	opts ...SwitchAccountOption,
 ) http.Handler {
 	cfg := switchAccountConfig{
@@ -110,6 +120,21 @@ func SwitchActiveAccountHandler(
 			if role == "" {
 				writeJSONError(w, http.StatusForbidden, "not a member of the requested account")
 				return
+			}
+		}
+
+		// Re-scope the stored session before reissuing, so a failure here
+		// cannot leave the caller holding a new token over a session still
+		// pinned to the old account.
+		if sessions != nil && authService != nil {
+			sessionData, sessErr := sessions.GetHTTPSession(r)
+			if sessErr == nil && sessionData != nil && sessionData.SessionID != "" {
+				if scopeErr := authService.ScopeSessionToAccount(ctx, sessionData.SessionID, req.AccountID); scopeErr != nil {
+					cfg.logger.Error(ctx, "failed to re-scope session",
+						"session_id", sessionData.SessionID, "account_id", req.AccountID, "error", scopeErr)
+					writeJSONError(w, http.StatusInternalServerError, "failed to switch account")
+					return
+				}
 			}
 		}
 

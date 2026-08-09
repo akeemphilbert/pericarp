@@ -29,6 +29,10 @@ var (
 // middleware served the request; gate paid-tier features behind RequireJWT
 // or fetch subscription state explicitly under RequireAuth.
 // Unauthenticated requests receive a 401 JSON response.
+//
+// A session that is not scoped to an account is treated as unauthenticated.
+// Sessions stored before sessions carried an account are all unscoped, and
+// there is no backfill, so their holders are refused once and sign in again.
 func RequireAuth(
 	sm session.SessionManager,
 	as application.AuthenticationService,
@@ -47,10 +51,24 @@ func RequireAuth(
 				return
 			}
 
+			// An unscoped session cannot own resources, so admitting the
+			// request would only defer the failure to a handler that cannot
+			// explain it. Refuse at the door instead; the caller signs in
+			// again and gets a scoped session.
+			if sessionInfo.AccountID == "" {
+				writeJSONError(w, http.StatusUnauthorized, "not authenticated")
+				return
+			}
+
+			accountIDs := sessionInfo.AccountIDs
+			if len(accountIDs) == 0 {
+				accountIDs = []string{sessionInfo.AccountID}
+			}
+
 			ctx := context.WithValue(r.Context(), sessionContextKey, sessionInfo)
 			id := &auth.Identity{
 				AgentID:         sessionInfo.AgentID,
-				AccountIDs:      []string{sessionInfo.AccountID},
+				AccountIDs:      accountIDs,
 				ActiveAccountID: sessionInfo.AccountID,
 			}
 			ctx = auth.ContextWithAgent(ctx, id)

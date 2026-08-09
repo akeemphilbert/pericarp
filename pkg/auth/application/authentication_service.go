@@ -32,6 +32,7 @@ var (
 	ErrEmailAlreadyTaken            = errors.New("authentication: email already registered with a password")
 	ErrPasswordSupportNotConfigured = errors.New("authentication: password support not configured")
 	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
+	ErrAccountNotMember             = errors.New("authentication: agent is not a member of the account")
 	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
 	// no JWTService is wired. Distinct from IssueIdentityToken's
 	// ("", nil) shape because refresh's sole purpose is to mint a token —
@@ -69,9 +70,14 @@ type UserInfo struct {
 
 // SessionInfo represents validated session information returned to consumers.
 type SessionInfo struct {
-	SessionID   string
-	AgentID     string
-	AccountID   string
+	SessionID string
+	AgentID   string
+	// AccountID is the account the session is scoped to. Empty means the
+	// session is unscoped and cannot authorize a request.
+	AccountID string
+	// AccountIDs lists every account the agent belongs to, matching what JWT
+	// auth puts on an identity. Never contains an empty entry.
+	AccountIDs  []string
 	Permissions []Permission
 	ExpiresAt   time.Time
 }
@@ -169,8 +175,25 @@ type AuthenticationService interface {
 	// does not.
 	RefreshIdentityToken(ctx context.Context, agentID string, activeAccountID string) (string, error)
 
-	// CreateSession creates an authenticated session for an agent.
-	CreateSession(ctx context.Context, agentID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+	// CreateSession creates an authenticated session for an agent, scoped to
+	// accountID.
+	//
+	// accountID must be the account the sign-in itself resolved — the caller
+	// already holds it. Do not expect this method to look one up: agents who
+	// arrived by invite have no personal account, so a lookup here would leave
+	// exactly those agents unscoped.
+	//
+	// Pass "" only when no account could be resolved. The session is then
+	// stored unscoped and sign-in still succeeds, but every authenticated
+	// request made with it is refused. Passing an account the agent is not a
+	// member of returns ErrAccountNotMember and stores nothing.
+	CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+
+	// ScopeSessionToAccount re-scopes a stored session to another account the
+	// agent belongs to, and persists it. Returns ErrAccountNotMember if the
+	// session's agent is not a member of accountID, leaving the session as it
+	// was.
+	ScopeSessionToAccount(ctx context.Context, sessionID string, accountID string) error
 
 	// ValidateSession validates and returns session info.
 	ValidateSession(ctx context.Context, sessionID string) (*SessionInfo, error)
@@ -360,13 +383,10 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 			return nil, nil, nil, fmt.Errorf("failed to find agent for credential: agent %s not found", credential.AgentID())
 		}
 
-		// Look up personal account
-		var account *entities.Account
-		if s.accounts != nil {
-			account, err = s.accounts.FindPersonalByMember(ctx, agent.GetID())
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("failed to find personal account: %w", err)
-			}
+		// Resolve the account this sign-in acts in.
+		account, err := s.resolveActiveAccount(ctx, agent.GetID())
+		if err != nil {
+			return nil, nil, nil, err
 		}
 
 		// Mark credential as used
@@ -436,13 +456,20 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 	return agent, credential, account, nil
 }
 
-// CreateSession creates an authenticated session for an agent.
-func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+// CreateSession creates an authenticated session for an agent, scoped to
+// accountID. See the AuthenticationService interface for the contract.
+func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+	if accountID != "" {
+		if err := s.assertMember(ctx, accountID, agentID); err != nil {
+			return nil, err
+		}
+	}
+
 	sessionID := ksuid.New().String()
 	expiresAt := time.Now().Add(duration)
 
 	session := new(entities.AuthSession)
-	session, err := session.With(sessionID, agentID, credentialID, ipAddress, userAgent, expiresAt)
+	session, err := session.With(sessionID, agentID, accountID, credentialID, ipAddress, userAgent, expiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
@@ -452,6 +479,80 @@ func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentI
 	}
 
 	return session, nil
+}
+
+// ScopeSessionToAccount re-scopes a stored session to another account the
+// agent belongs to. See the AuthenticationService interface for the contract.
+func (s *DefaultAuthenticationService) ScopeSessionToAccount(ctx context.Context, sessionID string, accountID string) error {
+	session, err := s.sessions.FindByID(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrSessionNotFound, err)
+	}
+	if session == nil {
+		return ErrSessionNotFound
+	}
+
+	if err = s.assertMember(ctx, accountID, session.AgentID()); err != nil {
+		return err
+	}
+
+	if err = session.ScopeToAccount(accountID); err != nil {
+		return fmt.Errorf("failed to scope session to account: %w", err)
+	}
+	if err = s.sessions.Save(ctx, session); err != nil {
+		return fmt.Errorf("failed to save session: %w", err)
+	}
+	return nil
+}
+
+// assertMember returns ErrAccountNotMember unless agentID holds a membership
+// in accountID. Without an account repository membership cannot be checked, so
+// the scope is refused rather than trusted.
+func (s *DefaultAuthenticationService) assertMember(ctx context.Context, accountID, agentID string) error {
+	if s.accounts == nil {
+		return fmt.Errorf("%w: no account repository configured", ErrAccountNotMember)
+	}
+	role, err := s.accounts.FindMemberRole(ctx, accountID, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to verify account membership: %w", err)
+	}
+	if role == "" {
+		return fmt.Errorf("%w: agent %s in account %s", ErrAccountNotMember, agentID, accountID)
+	}
+	return nil
+}
+
+// resolveActiveAccount picks the account a sign-in should scope its session
+// to: the agent's personal account when it is active, otherwise the first
+// active account they belong to.
+//
+// Returns (nil, nil) when nothing active can be resolved. Sign-in stays
+// permissive in that case — a data anomaly must not break the login callback
+// — and the resulting unscoped session is refused at the request boundary
+// instead.
+func (s *DefaultAuthenticationService) resolveActiveAccount(ctx context.Context, agentID string) (*entities.Account, error) {
+	if s.accounts == nil {
+		return nil, nil
+	}
+	personal, err := s.accounts.FindPersonalByMember(ctx, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find personal account: %w", err)
+	}
+	if personal != nil && personal.Active() {
+		return personal, nil
+	}
+	// The personal account is missing or deactivated. Fall back to any other
+	// active membership rather than landing the agent in a dead tenant.
+	all, err := s.accounts.FindByMember(ctx, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find accounts for agent: %w", err)
+	}
+	for _, account := range all {
+		if account != nil && account.Active() {
+			return account, nil
+		}
+	}
+	return nil, nil
 }
 
 // ValidateSession validates and returns session info.
@@ -489,10 +590,27 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 		}
 	}
 
+	// List every membership so a session-derived identity matches a
+	// JWT-derived one. An account switcher reading the identity then behaves
+	// the same under either middleware.
+	var accountIDs []string
+	if s.accounts != nil {
+		accounts, listErr := s.accounts.FindByMember(ctx, session.AgentID())
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to list accounts for agent: %w", listErr)
+		}
+		for _, account := range accounts {
+			if account != nil && account.GetID() != "" {
+				accountIDs = append(accountIDs, account.GetID())
+			}
+		}
+	}
+
 	return &SessionInfo{
 		SessionID:   session.GetID(),
 		AgentID:     session.AgentID(),
 		AccountID:   session.AccountID(),
+		AccountIDs:  accountIDs,
 		Permissions: permissions,
 		ExpiresAt:   session.ExpiresAt(),
 	}, nil
@@ -772,12 +890,9 @@ func (s *DefaultAuthenticationService) VerifyPassword(ctx context.Context, email
 		return nil, nil, nil, fmt.Errorf("authentication: agent %s not found", credential.AgentID())
 	}
 
-	var account *entities.Account
-	if s.accounts != nil {
-		account, err = s.accounts.FindPersonalByMember(ctx, agent.GetID())
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("authentication: load personal account: %w", err)
-		}
+	account, err := s.resolveActiveAccount(ctx, agent.GetID())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("authentication: %w", err)
 	}
 
 	// Housekeeping writes (last-used / last-verified) are best-effort: the

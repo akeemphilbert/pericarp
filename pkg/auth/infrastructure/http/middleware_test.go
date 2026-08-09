@@ -102,6 +102,8 @@ func TestRequireAuth_ValidSession_InjectsSessionInfo(t *testing.T) {
 	expectedInfo := &application.SessionInfo{
 		SessionID: "sess-1",
 		AgentID:   "agent-1",
+		// A session must be account-scoped to authorize a request.
+		AccountID: "acct-1",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
 	svc := &mockAuthService{
