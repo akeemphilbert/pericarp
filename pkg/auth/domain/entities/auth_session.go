@@ -25,7 +25,11 @@ type AuthSession struct {
 }
 
 // With initializes a new AuthSession with the given parameters.
-func (s *AuthSession) With(id, agentID, credentialID, ipAddress, userAgent string, expiresAt time.Time) (*AuthSession, error) {
+//
+// accountID is the account the session is scoped to. It may be empty: sign-in
+// stays permissive so a missing account cannot break the login callback
+// itself. An unscoped session is refused later, at the request boundary.
+func (s *AuthSession) With(id, agentID, accountID, credentialID, ipAddress, userAgent string, expiresAt time.Time) (*AuthSession, error) {
 	if id == "" {
 		return nil, fmt.Errorf("session ID cannot be empty")
 	}
@@ -38,6 +42,7 @@ func (s *AuthSession) With(id, agentID, credentialID, ipAddress, userAgent strin
 
 	s.BaseEntity = ddd.NewBaseEntity(id)
 	s.agentID = agentID
+	s.accountID = accountID
 	s.credentialID = credentialID
 	s.active = true
 	s.createdAt = time.Now()
@@ -46,7 +51,7 @@ func (s *AuthSession) With(id, agentID, credentialID, ipAddress, userAgent strin
 	s.ipAddress = ipAddress
 	s.userAgent = userAgent
 
-	event := new(SessionCreated).With(agentID, id, credentialID, ipAddress, userAgent, expiresAt)
+	event := new(SessionCreated).With(agentID, id, accountID, credentialID, ipAddress, userAgent, expiresAt)
 	if err := s.RecordEvent(event, event.EventType()); err != nil {
 		return nil, fmt.Errorf("failed to record Session.Created event: %w", err)
 	}
@@ -161,6 +166,7 @@ func (s *AuthSession) ApplyEvent(ctx context.Context, envelope domain.EventEnvel
 	switch payload := envelope.Payload.(type) {
 	case SessionCreated:
 		s.agentID = payload.Subject
+		s.accountID = payload.AccountID
 		s.credentialID = payload.CredentialID
 		s.active = true
 		s.createdAt = payload.Timestamp

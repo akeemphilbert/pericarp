@@ -76,7 +76,7 @@ func TestAuthSession_With(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			sess, err := new(entities.AuthSession).With(tt.id, tt.agentID, tt.credentialID, tt.ipAddress, tt.userAgent, tt.expiresAt)
+			sess, err := new(entities.AuthSession).With(tt.id, tt.agentID, "", tt.credentialID, tt.ipAddress, tt.userAgent, tt.expiresAt)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -146,7 +146,7 @@ func TestAuthSession_With(t *testing.T) {
 func TestAuthSession_Touch(t *testing.T) {
 	t.Parallel()
 
-	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestAuthSession_Touch(t *testing.T) {
 func TestAuthSession_Revoke(t *testing.T) {
 	t.Parallel()
 
-	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestAuthSession_IsExpired(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", tt.expiresAt)
+			sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", tt.expiresAt)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -239,7 +239,7 @@ func TestAuthSession_IsExpired(t *testing.T) {
 func TestAuthSession_ScopeToAccount(t *testing.T) {
 	t.Parallel()
 
-	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestAuthSession_ScopeToAccount(t *testing.T) {
 func TestAuthSession_ScopeToAccount_EmptyID(t *testing.T) {
 	t.Parallel()
 
-	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestAuthSession_ApplyEvent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestAuthSession_ApplyEvent_Revoked(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestAuthSession_ApplyEvent_AccountScoped(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess, err := new(entities.AuthSession).With("sess-1", "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

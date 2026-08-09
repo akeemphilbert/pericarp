@@ -10,6 +10,10 @@ import (
 // Triple: (Agent, schema:session, Session)
 type SessionCreated struct {
 	domain.BasicTripleEvent
+	// AccountID is the account the session was scoped to at creation. Empty
+	// when the sign-in could not resolve one. Events recorded before sessions
+	// carried an account replay as empty, which is what they were.
+	AccountID    string    `json:"account_id"`
 	CredentialID string    `json:"credential_id"`
 	IPAddress    string    `json:"ip_address"`
 	UserAgent    string    `json:"user_agent"`
@@ -18,13 +22,14 @@ type SessionCreated struct {
 }
 
 // With creates a new SessionCreated event.
-func (e SessionCreated) With(agentID, sessionID, credentialID, ipAddress, userAgent string, expiresAt time.Time) SessionCreated {
+func (e SessionCreated) With(agentID, sessionID, accountID, credentialID, ipAddress, userAgent string, expiresAt time.Time) SessionCreated {
 	return SessionCreated{
 		BasicTripleEvent: domain.BasicTripleEvent{
 			Subject:   agentID,
 			Predicate: PredicateSession,
 			Object:    sessionID,
 		},
+		AccountID:    accountID,
 		CredentialID: credentialID,
 		IPAddress:    ipAddress,
 		UserAgent:    userAgent,

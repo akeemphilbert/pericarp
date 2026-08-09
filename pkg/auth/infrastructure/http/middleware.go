@@ -29,6 +29,10 @@ var (
 // middleware served the request; gate paid-tier features behind RequireJWT
 // or fetch subscription state explicitly under RequireAuth.
 // Unauthenticated requests receive a 401 JSON response.
+//
+// A session that is not scoped to an account is treated as unauthenticated.
+// Sessions stored before sessions carried an account are all unscoped, and
+// there is no backfill, so their holders are refused once and sign in again.
 func RequireAuth(
 	sm session.SessionManager,
 	as application.AuthenticationService,
@@ -47,10 +51,28 @@ func RequireAuth(
 				return
 			}
 
+			// An unscoped session cannot own resources, so admitting the
+			// request would only defer the failure to a handler that cannot
+			// explain it. Refuse at the door instead.
+			//
+			// This carries its own code because the remedy differs: an expired
+			// session is fixed by signing in again, an unscoped one is not —
+			// the agent has no active account, so a client that retries login
+			// on a bare 401 loops forever.
+			if sessionInfo.AccountID == "" {
+				writeJSONErrorCode(w, http.StatusUnauthorized, "not authenticated", "unscoped_session")
+				return
+			}
+
+			accountIDs := sessionInfo.AccountIDs
+			if len(accountIDs) == 0 {
+				accountIDs = []string{sessionInfo.AccountID}
+			}
+
 			ctx := context.WithValue(r.Context(), sessionContextKey, sessionInfo)
 			id := &auth.Identity{
 				AgentID:         sessionInfo.AgentID,
-				AccountIDs:      []string{sessionInfo.AccountID},
+				AccountIDs:      accountIDs,
 				ActiveAccountID: sessionInfo.AccountID,
 			}
 			ctx = auth.ContextWithAgent(ctx, id)
@@ -131,4 +153,12 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// writeJSONErrorCode writes an error carrying a stable machine-readable code,
+// for cases a client must tell apart from the generic one.
+func writeJSONErrorCode(w http.ResponseWriter, status int, msg, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
 }

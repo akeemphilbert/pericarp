@@ -27,7 +27,8 @@ type mockAuthService struct {
 	exchangeFunc           func(ctx context.Context, code, codeVerifier, provider, redirectURI string) (*application.AuthResult, error)
 	validateStateFunc      func(ctx context.Context, received, stored string) error
 	findOrCreateFunc       func(ctx context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
-	createSessionFunc      func(ctx context.Context, agentID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+	createSessionFunc      func(ctx context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+	scopeSessionFunc       func(ctx context.Context, sessionID, accountID string) error
 	validateSessFunc       func(ctx context.Context, sessionID string) (*application.SessionInfo, error)
 	revokeFunc             func(ctx context.Context, sessionID string) error
 	revokeAllFunc          func(ctx context.Context, agentID string) error
@@ -83,12 +84,19 @@ func (m *mockAuthService) FindOrCreateAgent(ctx context.Context, userInfo applic
 	return agent, cred, account, nil
 }
 
-func (m *mockAuthService) CreateSession(ctx context.Context, agentID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+func (m *mockAuthService) CreateSession(ctx context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
 	if m.createSessionFunc != nil {
-		return m.createSessionFunc(ctx, agentID, credentialID, ipAddress, userAgent, duration)
+		return m.createSessionFunc(ctx, agentID, accountID, credentialID, ipAddress, userAgent, duration)
 	}
-	sess, _ := new(entities.AuthSession).With("sess-1", agentID, credentialID, ipAddress, userAgent, time.Now().Add(duration))
+	sess, _ := new(entities.AuthSession).With("sess-1", agentID, accountID, credentialID, ipAddress, userAgent, time.Now().Add(duration))
 	return sess, nil
+}
+
+func (m *mockAuthService) ScopeSessionToAccount(ctx context.Context, sessionID, accountID string) error {
+	if m.scopeSessionFunc != nil {
+		return m.scopeSessionFunc(ctx, sessionID, accountID)
+	}
+	return nil
 }
 
 func (m *mockAuthService) ValidateSession(ctx context.Context, sessionID string) (*application.SessionInfo, error) {

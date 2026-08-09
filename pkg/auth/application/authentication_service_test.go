@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -251,6 +252,10 @@ type mockAccountRepo struct {
 	accounts    map[string]*entities.Account
 	byMember    map[string]*entities.Account // key: agentID -> personal account
 	memberRoles map[string]string            // key: "accountID:agentID" -> roleID
+
+	// findByMemberErr, when set, makes FindByMember fail — used to prove a
+	// membership-list outage does not fail the request.
+	findByMemberErr error
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -291,9 +296,26 @@ func (m *mockAccountRepo) FindByID(_ context.Context, id string) (*entities.Acco
 }
 
 func (m *mockAccountRepo) FindByMember(_ context.Context, agentID string) ([]*entities.Account, error) {
+	if m.findByMemberErr != nil {
+		return nil, m.findByMemberErr
+	}
 	var result []*entities.Account
+	seen := make(map[string]bool)
 	if account, ok := m.byMember[agentID]; ok {
 		result = append(result, account)
+		seen[account.GetID()] = true
+	}
+	// Include every account the agent holds a membership in, not just the
+	// personal one, so multi-account behaviour can be exercised.
+	for key, role := range m.memberRoles {
+		accountID, keyAgentID, found := strings.Cut(key, ":")
+		if !found || keyAgentID != agentID || role == "" || seen[accountID] {
+			continue
+		}
+		if account, ok := m.accounts[accountID]; ok {
+			result = append(result, account)
+			seen[accountID] = true
+		}
 	}
 	return result, nil
 }
@@ -645,7 +667,7 @@ func TestDefaultAuthenticationService_CreateSession(t *testing.T) {
 
 	svc, deps := newTestService()
 
-	session, err := svc.CreateSession(ctx, "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	session, err := svc.CreateSession(ctx, "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -679,7 +701,7 @@ func TestDefaultAuthenticationService_ValidateSession(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create a session first
-	session, err := svc.CreateSession(ctx, "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	session, err := svc.CreateSession(ctx, "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("CreateSession() error: %v", err)
 	}
@@ -723,7 +745,7 @@ func TestDefaultAuthenticationService_ValidateSession_Revoked(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create and revoke session
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	_ = session.Revoke()
 	deps.sessions.sessions["sess-1"] = session
 
@@ -743,7 +765,7 @@ func TestDefaultAuthenticationService_ValidateSession_Expired(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create expired session
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(-1*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(-1*time.Hour))
 	deps.sessions.sessions["sess-1"] = session
 
 	_, err := svc.ValidateSession(ctx, "sess-1")
@@ -761,7 +783,7 @@ func TestDefaultAuthenticationService_RevokeSession(t *testing.T) {
 
 	svc, deps := newTestService()
 
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	deps.sessions.sessions["sess-1"] = session
 
 	if err := svc.RevokeSession(ctx, "sess-1"); err != nil {
@@ -797,9 +819,9 @@ func TestDefaultAuthenticationService_RevokeAllSessions(t *testing.T) {
 	svc, deps := newTestService()
 
 	// Create multiple sessions for the same agent
-	sess1, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
-	sess2, _ := new(entities.AuthSession).With("sess-2", "agent-1", "cred-1", "192.168.1.2", "Chrome", time.Now().Add(24*time.Hour))
-	sess3, _ := new(entities.AuthSession).With("sess-3", "agent-2", "cred-2", "10.0.0.1", "Safari", time.Now().Add(24*time.Hour))
+	sess1, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	sess2, _ := new(entities.AuthSession).With("sess-2", "agent-1", "acct-1", "cred-1", "192.168.1.2", "Chrome", time.Now().Add(24*time.Hour))
+	sess3, _ := new(entities.AuthSession).With("sess-3", "agent-2", "acct-1", "cred-2", "10.0.0.1", "Safari", time.Now().Add(24*time.Hour))
 
 	deps.sessions.sessions["sess-1"] = sess1
 	deps.sessions.sessions["sess-2"] = sess2
@@ -1804,7 +1826,7 @@ func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 	ctx := context.Background()
 
 	sessions := newMockSessionRepo()
-	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
+	session, _ := new(entities.AuthSession).With("sess-1", "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", time.Now().Add(24*time.Hour))
 	session.ClearUncommittedEvents()
 	sessions.sessions["sess-1"] = session
 
@@ -1987,5 +2009,237 @@ func TestFindOrCreateAgent_DispatchHandlerErrorIsNonFatal(t *testing.T) {
 	}
 	if len(deps.agents.agents) != 1 {
 		t.Errorf("expected 1 saved agent, got %d", len(deps.agents.agents))
+	}
+}
+
+// --- Account scoping (#68) ---
+
+func newScopedAccount(t *testing.T, id, name, accountType string, active bool) *entities.Account {
+	t.Helper()
+	account, err := new(entities.Account).With(id, name, accountType)
+	if err != nil {
+		t.Fatalf("build account %s: %v", id, err)
+	}
+	if !active {
+		if err := account.Deactivate(); err != nil {
+			t.Fatalf("deactivate account %s: %v", id, err)
+		}
+	}
+	return account
+}
+
+func TestDefaultAuthenticationService_CreateSession_ScopesToAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	if session.AccountID() != "acct-1" {
+		t.Errorf("AccountID() = %q, want %q", session.AccountID(), "acct-1")
+	}
+}
+
+func TestDefaultAuthenticationService_CreateSession_RejectsNonMember(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	// agent-1 holds no membership in acct-1.
+
+	_, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if !errors.Is(err, application.ErrAccountNotMember) {
+		t.Fatalf("CreateSession() error = %v, want ErrAccountNotMember", err)
+	}
+	if len(deps.sessions.sessions) != 0 {
+		t.Errorf("expected no stored session, got %d", len(deps.sessions.sessions))
+	}
+}
+
+// Sign-in stays permissive: a missing account must not break the login
+// callback. The unscoped session it produces is refused at the request
+// boundary instead.
+func TestDefaultAuthenticationService_CreateSession_UnscopedIsAllowed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+
+	session, err := svc.CreateSession(ctx, "agent-1", "", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	if session.AccountID() != "" {
+		t.Errorf("AccountID() = %q, want empty", session.AccountID())
+	}
+	if len(deps.sessions.sessions) != 1 {
+		t.Errorf("expected 1 stored session, got %d", len(deps.sessions.sessions))
+	}
+}
+
+// A service built without an account repository does not manage accounts, so
+// there is no membership to verify. Refusing here broke first-time sign-in:
+// FindOrCreateAgent still mints a personal account and the caller passes it
+// straight back into CreateSession.
+func TestDefaultAuthenticationService_CreateSession_NoAccountRepo_Succeeds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
+		newMockAgentRepo(),
+		newMockCredentialRepo(),
+		newMockSessionRepo(),
+		nil,
+	)
+
+	agent, credential, account, err := svc.FindOrCreateAgent(ctx, application.UserInfo{
+		Provider: "google", ProviderUserID: "g-1", Email: "new@example.com", DisplayName: "New",
+	})
+	if err != nil {
+		t.Fatalf("FindOrCreateAgent() error: %v", err)
+	}
+	if account == nil {
+		t.Fatal("expected a personal account for a first-time user")
+	}
+
+	session, err := svc.CreateSession(ctx, agent.GetID(), account.GetID(), credential.GetID(), "1.2.3.4", "UA", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	if session.AccountID() != account.GetID() {
+		t.Errorf("AccountID() = %q, want %q", session.AccountID(), account.GetID())
+	}
+}
+
+func TestDefaultAuthenticationService_ScopeSessionToAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+	deps.accounts.memberRoles["acct-2:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	if err := svc.ScopeSessionToAccount(ctx, session.GetID(), "acct-2"); err != nil {
+		t.Fatalf("ScopeSessionToAccount() error: %v", err)
+	}
+
+	stored, err := deps.sessions.FindByID(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("FindByID() error: %v", err)
+	}
+	if stored.AccountID() != "acct-2" {
+		t.Errorf("AccountID() = %q, want %q", stored.AccountID(), "acct-2")
+	}
+}
+
+func TestDefaultAuthenticationService_ScopeSessionToAccount_RejectsNonMember(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	err = svc.ScopeSessionToAccount(ctx, session.GetID(), "acct-nope")
+	if !errors.Is(err, application.ErrAccountNotMember) {
+		t.Fatalf("ScopeSessionToAccount() error = %v, want ErrAccountNotMember", err)
+	}
+
+	stored, _ := deps.sessions.FindByID(ctx, session.GetID())
+	if stored.AccountID() != "acct-1" {
+		t.Errorf("AccountID() = %q, want it unchanged at %q", stored.AccountID(), "acct-1")
+	}
+}
+
+func TestDefaultAuthenticationService_ScopeSessionToAccount_SessionNotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, _ := newTestService()
+
+	err := svc.ScopeSessionToAccount(ctx, "missing", "acct-1")
+	if !errors.Is(err, application.ErrSessionNotFound) {
+		t.Fatalf("ScopeSessionToAccount() error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestDefaultAuthenticationService_ValidateSession_ListsEveryMembership(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Personal", entities.AccountTypePersonal, true)
+	deps.accounts.accounts["acct-2"] = newScopedAccount(t, "acct-2", "Acme", entities.AccountTypeOrganization, true)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+	deps.accounts.memberRoles["acct-2:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	info, err := svc.ValidateSession(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("ValidateSession() error: %v", err)
+	}
+	if info.AccountID != "acct-1" {
+		t.Errorf("AccountID = %q, want %q", info.AccountID, "acct-1")
+	}
+	got := append([]string(nil), info.AccountIDs...)
+	sort.Strings(got)
+	if len(got) != 2 || got[0] != "acct-1" || got[1] != "acct-2" {
+		t.Errorf("AccountIDs = %v, want [acct-1 acct-2]", got)
+	}
+	for _, id := range got {
+		if id == "" {
+			t.Error("AccountIDs contains an empty value")
+		}
+	}
+}
+
+// The membership list is a convenience for account switchers, never an
+// authorization input. Callers turn a validation error into 401, so a database
+// blip here would log every user out.
+func TestDefaultAuthenticationService_ValidateSession_MembershipOutageDegrades(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	deps.accounts.findByMemberErr = errors.New("database unavailable")
+
+	info, err := svc.ValidateSession(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("ValidateSession() error = %v, want the session to still validate", err)
+	}
+	if info.AccountID != "acct-1" {
+		t.Errorf("AccountID = %q, want %q", info.AccountID, "acct-1")
+	}
+	if len(info.AccountIDs) != 1 || info.AccountIDs[0] != "acct-1" {
+		t.Errorf("AccountIDs = %v, want it to fall back to [acct-1]", info.AccountIDs)
 	}
 }

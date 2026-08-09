@@ -81,7 +81,7 @@ func TestSwitchActiveAccount_NoClaims_Returns401(t *testing.T) {
 	t.Parallel()
 
 	svc, _ := newTestJWTService(t)
-	handler := authhttp.SwitchActiveAccountHandler(svc, nil)
+	handler := authhttp.SwitchActiveAccountHandler(svc, nil, nil, nil)
 
 	// No middleware wrapping — no claims in context.
 	r := httptest.NewRequest("POST", "/switch-account",
@@ -102,7 +102,7 @@ func TestSwitchActiveAccount_EmptyBody_Returns400(t *testing.T) {
 	token := issueMultiAccountToken(t, svc, "acc-1")
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, "")
 	if w.Code != http.StatusBadRequest {
@@ -117,7 +117,7 @@ func TestSwitchActiveAccount_MissingAccountID_Returns400(t *testing.T) {
 	token := issueMultiAccountToken(t, svc, "acc-1")
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":""}`)
 	if w.Code != http.StatusBadRequest {
@@ -132,7 +132,7 @@ func TestSwitchActiveAccount_NotMember_Returns403(t *testing.T) {
 	token := issueMultiAccountToken(t, svc, "acc-1")
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":"acc-999"}`)
 	if w.Code != http.StatusForbidden {
@@ -147,7 +147,7 @@ func TestSwitchActiveAccount_HappyPath_NilRepo(t *testing.T) {
 	token := issueMultiAccountToken(t, svc, "acc-1")
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":"acc-2"}`)
 	if w.Code != http.StatusOK {
@@ -176,7 +176,7 @@ func TestSwitchActiveAccount_HappyPath_RepoConfirms(t *testing.T) {
 	}
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, repo))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, repo, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":"acc-2"}`)
 	if w.Code != http.StatusOK {
@@ -197,7 +197,7 @@ func TestSwitchActiveAccount_RepoReturnsEmpty_Returns403(t *testing.T) {
 	}
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, repo))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, repo, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":"acc-2"}`)
 	if w.Code != http.StatusForbidden {
@@ -218,7 +218,7 @@ func TestSwitchActiveAccount_RepoError_Returns500(t *testing.T) {
 	}
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, repo))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, repo, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":"acc-2"}`)
 	if w.Code != http.StatusInternalServerError {
@@ -233,7 +233,7 @@ func TestSwitchActiveAccount_SetsCookie(t *testing.T) {
 	token := issueMultiAccountToken(t, svc, "acc-1")
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":"acc-2"}`)
 	if w.Code != http.StatusOK {
@@ -269,7 +269,7 @@ func TestSwitchActiveAccount_ReissuedTokenValid(t *testing.T) {
 	token := issueMultiAccountToken(t, svc, "acc-1")
 
 	middleware := authhttp.RequireJWT(svc, "")
-	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil))
+	handler := middleware(authhttp.SwitchActiveAccountHandler(svc, nil, nil, nil))
 
 	w := serveSwitchRequest(t, handler, token, `{"account_id":"acc-2"}`)
 	if w.Code != http.StatusOK {
