@@ -217,24 +217,36 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue identity token if the AuthService supports it (non-fatal on failure).
-	tokenString, issueErr := h.cfg.AuthService.IssueIdentityToken(ctx, agent, accountID)
-	if issueErr != nil {
-		h.cfg.Logger.Warn(ctx, "failed to issue identity token", "error", issueErr)
-	} else if tokenString != "" {
-		cookieName := h.cfg.JWTCookieName
-		if cookieName == "" {
-			cookieName = "pericarp_token"
+	// Issue identity token if the AuthService supports it (non-fatal on
+	// failure).
+	//
+	// Skipped when no account resolved. Sign-in stays permissive so a data
+	// anomaly cannot break the callback, but a token carrying no active
+	// account would reproduce this very defect on the JWT routes, which admit
+	// it where the session routes do not. Warn once here, where the cause is
+	// visible: the request boundary only ever sees an unscoped session.
+	if accountID == "" {
+		h.cfg.Logger.Warn(ctx, "sign-in resolved no active account; session is unscoped and authenticated requests will be refused",
+			"agent_id", agent.GetID())
+	} else {
+		tokenString, issueErr := h.cfg.AuthService.IssueIdentityToken(ctx, agent, accountID)
+		if issueErr != nil {
+			h.cfg.Logger.Warn(ctx, "failed to issue identity token", "error", issueErr)
+		} else if tokenString != "" {
+			cookieName := h.cfg.JWTCookieName
+			if cookieName == "" {
+				cookieName = "pericarp_token"
+			}
+			http.SetCookie(w, &http.Cookie{
+				Name:     cookieName,
+				Value:    tokenString,
+				Path:     "/",
+				MaxAge:   h.cfg.JWTCookieMaxAge,
+				HttpOnly: true,
+				Secure:   true,
+				SameSite: http.SameSiteLaxMode,
+			})
 		}
-		http.SetCookie(w, &http.Cookie{
-			Name:     cookieName,
-			Value:    tokenString,
-			Path:     "/",
-			MaxAge:   h.cfg.JWTCookieMaxAge,
-			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteLaxMode,
-		})
 	}
 
 	// Determine post-login redirect path from flow metadata.

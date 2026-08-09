@@ -53,10 +53,14 @@ func RequireAuth(
 
 			// An unscoped session cannot own resources, so admitting the
 			// request would only defer the failure to a handler that cannot
-			// explain it. Refuse at the door instead; the caller signs in
-			// again and gets a scoped session.
+			// explain it. Refuse at the door instead.
+			//
+			// This carries its own code because the remedy differs: an expired
+			// session is fixed by signing in again, an unscoped one is not —
+			// the agent has no active account, so a client that retries login
+			// on a bare 401 loops forever.
 			if sessionInfo.AccountID == "" {
-				writeJSONError(w, http.StatusUnauthorized, "not authenticated")
+				writeJSONErrorCode(w, http.StatusUnauthorized, "not authenticated", "unscoped_session")
 				return
 			}
 
@@ -149,4 +153,12 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// writeJSONErrorCode writes an error carrying a stable machine-readable code,
+// for cases a client must tell apart from the generic one.
+func writeJSONErrorCode(w http.ResponseWriter, status int, msg, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
 }

@@ -1,4 +1,4 @@
-@wip @auth @session-scoping
+@auth @session-scoping
 Feature: An authenticated request carries the caller's active account
 
   Session-authenticated requests build their identity from the stored session.

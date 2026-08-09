@@ -2,6 +2,7 @@ package authhttp
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/akeemphilbert/pericarp/pkg/auth/application"
@@ -128,26 +129,45 @@ func SwitchActiveAccountHandler(
 			}
 		}
 
-		// Re-scope the stored session before reissuing, so a failure here
-		// cannot leave the caller holding a new token over a session still
-		// pinned to the old account.
-		if sessions != nil && authService != nil {
-			sessionData, sessErr := sessions.GetHTTPSession(r)
-			if sessErr == nil && sessionData != nil && sessionData.SessionID != "" {
-				if scopeErr := authService.ScopeSessionToAccount(ctx, sessionData.SessionID, req.AccountID); scopeErr != nil {
-					cfg.logger.Error(ctx, "failed to re-scope session",
-						"session_id", sessionData.SessionID, "account_id", req.AccountID, "error", scopeErr)
-					writeJSONError(w, http.StatusInternalServerError, "failed to switch account")
-					return
-				}
-			}
-		}
-
+		// Mint the token first. It changes nothing that outlives this
+		// function, so a failure here leaves the caller wholly in the old
+		// account rather than half-switched. Only then move the session.
 		tokenString, err := reissuer.ReissueToken(ctx, claims, req.AccountID)
 		if err != nil {
 			cfg.logger.Error(ctx, "failed to issue token", "error", err)
 			writeJSONError(w, http.StatusInternalServerError, "failed to issue token")
 			return
+		}
+
+		// Move the stored session so session-authenticated routes follow the
+		// switch. Without this the browser acts in the new account over JWT
+		// routes and the old one over session routes.
+		var switched *session.SessionData
+		if sessions != nil && authService != nil {
+			sessionData, sessErr := sessions.GetHTTPSession(r)
+			if sessErr == nil && sessionData != nil && sessionData.SessionID != "" {
+				if scopeErr := authService.ScopeSessionToAccount(ctx, sessionData.SessionID, req.AccountID); scopeErr != nil {
+					if errors.Is(scopeErr, application.ErrAccountNotMember) {
+						writeJSONError(w, http.StatusForbidden, "not a member of the requested account")
+						return
+					}
+					cfg.logger.Error(ctx, "failed to re-scope session",
+						"session_id", sessionData.SessionID, "account_id", req.AccountID, "error", scopeErr)
+					writeJSONError(w, http.StatusInternalServerError, "failed to switch account")
+					return
+				}
+				switched = sessionData
+			}
+		}
+
+		// Keep the cookie's copy of the account in step with the row it
+		// mirrors, so anything reading GetHTTPSession sees the new account.
+		if switched != nil {
+			switched.AccountID = req.AccountID
+			if err := sessions.CreateHTTPSession(w, r, *switched); err != nil {
+				cfg.logger.Warn(ctx, "failed to refresh session cookie after switch",
+					"session_id", switched.SessionID, "error", err)
+			}
 		}
 
 		http.SetCookie(w, &http.Cookie{

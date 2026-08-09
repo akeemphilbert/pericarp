@@ -1,4 +1,4 @@
-@wip @auth @session-scoping
+@auth @session-scoping
 Feature: An auth session is scoped to an account when the agent signs in
 
   Every authenticated request needs to know which account (tenant) the caller is

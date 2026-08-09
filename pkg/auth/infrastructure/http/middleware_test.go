@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -670,5 +671,47 @@ func TestRequireAuth_ResourceOwnershipIsDerivable(t *testing.T) {
 	}
 	if ownership.AccountID != "acct-1" || ownership.CreatedByAgentID != "agent-1" {
 		t.Errorf("ownership = %+v, want account acct-1 created by agent-1", ownership)
+	}
+}
+
+// The remedy for an unscoped session differs from an expired one: signing in
+// again fixes an expiry and cannot fix a missing account. A client that retries
+// login on a bare 401 loops forever, so this case carries its own code.
+func TestRequireAuth_UnscopedSession_IsDistinguishable(t *testing.T) {
+	t.Parallel()
+
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+
+	unscoped := &mockAuthService{
+		validateSessFunc: func(_ context.Context, _ string) (*application.SessionInfo, error) {
+			return &application.SessionInfo{SessionID: "sess-1", AgentID: "agent-1", ExpiresAt: time.Now().Add(time.Hour)}, nil
+		},
+	}
+	expired := &mockAuthService{
+		validateSessFunc: func(_ context.Context, _ string) (*application.SessionInfo, error) {
+			return nil, application.ErrSessionExpired
+		},
+	}
+	noop := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	decode := func(svc *mockAuthService) map[string]string {
+		w := httptest.NewRecorder()
+		authhttp.RequireAuth(sm, svc)(noop).ServeHTTP(w, requestWithSessionCookie(t, sm, "sess-1", "agent-1"))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", w.Code)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		return body
+	}
+
+	if code := decode(unscoped)["code"]; code != "unscoped_session" {
+		t.Errorf("unscoped session code = %q, want %q", code, "unscoped_session")
+	}
+	if code := decode(expired)["code"]; code == "unscoped_session" {
+		t.Error("an expired session must not report itself as unscoped")
 	}
 }

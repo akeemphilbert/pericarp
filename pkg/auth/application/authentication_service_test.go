@@ -252,6 +252,10 @@ type mockAccountRepo struct {
 	accounts    map[string]*entities.Account
 	byMember    map[string]*entities.Account // key: agentID -> personal account
 	memberRoles map[string]string            // key: "accountID:agentID" -> roleID
+
+	// findByMemberErr, when set, makes FindByMember fail — used to prove a
+	// membership-list outage does not fail the request.
+	findByMemberErr error
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -292,6 +296,9 @@ func (m *mockAccountRepo) FindByID(_ context.Context, id string) (*entities.Acco
 }
 
 func (m *mockAccountRepo) FindByMember(_ context.Context, agentID string) ([]*entities.Account, error) {
+	if m.findByMemberErr != nil {
+		return nil, m.findByMemberErr
+	}
 	var result []*entities.Account
 	seen := make(map[string]bool)
 	if account, ok := m.byMember[agentID]; ok {
@@ -2204,5 +2211,35 @@ func TestDefaultAuthenticationService_ValidateSession_ListsEveryMembership(t *te
 		if id == "" {
 			t.Error("AccountIDs contains an empty value")
 		}
+	}
+}
+
+// The membership list is a convenience for account switchers, never an
+// authorization input. Callers turn a validation error into 401, so a database
+// blip here would log every user out.
+func TestDefaultAuthenticationService_ValidateSession_MembershipOutageDegrades(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	deps.accounts.findByMemberErr = errors.New("database unavailable")
+
+	info, err := svc.ValidateSession(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("ValidateSession() error = %v, want the session to still validate", err)
+	}
+	if info.AccountID != "acct-1" {
+		t.Errorf("AccountID = %q, want %q", info.AccountID, "acct-1")
+	}
+	if len(info.AccountIDs) != 1 || info.AccountIDs[0] != "acct-1" {
+		t.Errorf("AccountIDs = %v, want it to fall back to [acct-1]", info.AccountIDs)
 	}
 }

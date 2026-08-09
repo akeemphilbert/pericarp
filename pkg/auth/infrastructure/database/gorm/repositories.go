@@ -148,9 +148,13 @@ func (r *accountRepository) FindByID(ctx context.Context, id string) (*entities.
 
 func (r *accountRepository) FindByMember(ctx context.Context, agentID string) ([]*entities.Account, error) {
 	var records []models.AccountModel
+	// Ordered so the caller's "first active account" is stable. Without it the
+	// account a sign-in falls back to varies between logins, and the agent
+	// lands in a different tenant each time.
 	err := r.db.WithContext(ctx).
 		Joins("JOIN account_members ON account_members.account_id = accounts.id").
 		Where("account_members.agent_id = ?", agentID).
+		Order("accounts.created_at ASC, accounts.id ASC").
 		Find(&records).Error
 	if err != nil {
 		return nil, err

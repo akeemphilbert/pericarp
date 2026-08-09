@@ -486,7 +486,9 @@ func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentI
 func (s *DefaultAuthenticationService) ScopeSessionToAccount(ctx context.Context, sessionID string, accountID string) error {
 	session, err := s.sessions.FindByID(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrSessionNotFound, err)
+		// A lookup failure is an outage, not a missing session. Labelling it
+		// ErrSessionNotFound would have callers report it as a bad session.
+		return fmt.Errorf("failed to load session: %w", err)
 	}
 	if session == nil {
 		return ErrSessionNotFound
@@ -598,14 +600,27 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	// List every membership so a session-derived identity matches a
 	// JWT-derived one. An account switcher reading the identity then behaves
 	// the same under either middleware.
-	var accountIDs []string
+	//
+	// The list is a convenience for switchers, never an authorization input —
+	// authorization uses AccountID. So a lookup failure degrades to the
+	// session's own account rather than failing the request: callers map a
+	// validation error to 401, and a database blip must not log everyone out.
+	accountIDs := []string{}
+	if session.AccountID() != "" {
+		accountIDs = append(accountIDs, session.AccountID())
+	}
 	if s.accounts != nil {
 		accounts, listErr := s.accounts.FindByMember(ctx, session.AgentID())
 		if listErr != nil {
-			return nil, fmt.Errorf("failed to list accounts for agent: %w", listErr)
-		}
-		for _, account := range accounts {
-			if account != nil && account.GetID() != "" {
+			s.logger.Warn(ctx, "auth: failed to list accounts for session identity",
+				"agent_id", session.AgentID(), "error", listErr)
+		} else {
+			seen := map[string]bool{session.AccountID(): true}
+			for _, account := range accounts {
+				if account == nil || account.GetID() == "" || seen[account.GetID()] {
+					continue
+				}
+				seen[account.GetID()] = true
 				accountIDs = append(accountIDs, account.GetID())
 			}
 		}
