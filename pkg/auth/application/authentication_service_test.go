@@ -17,6 +17,7 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/entities"
 	"github.com/akeemphilbert/pericarp/pkg/auth/domain/repositories"
 	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
+	"github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/models"
 	esDomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 	esInfra "github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 )
@@ -2676,5 +2677,144 @@ func TestIssueIdentityToken_VouchedAccountSkipsTheReRead(t *testing.T) {
 
 	if _, err := svc.IssueIdentityToken(ctx, agent, "acct-1", application.AccountAlreadyVerified()); err != nil {
 		t.Fatalf("vouched IssueIdentityToken() error: %v", err)
+	}
+}
+
+// --- Session events are persisted (#73) ---
+
+func newServiceWithSessionEvents(t *testing.T) (*application.DefaultAuthenticationService, *testDeps, *esInfra.MemoryStore) {
+	t.Helper()
+	deps := &testDeps{
+		providers:   application.OAuthProviderRegistry{},
+		agents:      newMockAgentRepo(),
+		credentials: newMockCredentialRepo(),
+		sessions:    newMockSessionRepo(),
+		accounts:    newMockAccountRepo(),
+		tokens:      newMockTokenStore(),
+		authz:       &mockAuthorizationChecker{},
+	}
+	store := esInfra.NewMemoryStore()
+	svc := application.NewDefaultAuthenticationService(
+		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
+		application.WithTokenStore(deps.tokens),
+		application.WithEventStore(store),
+	)
+	return svc, deps, store
+}
+
+// The authentication timeline — created, re-scoped, revoked — is now durable
+// like every other aggregate's, so ApplyEvent stops being dead code.
+func TestDefaultAuthenticationService_SessionLifecycleIsPersisted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps, store := newServiceWithSessionEvents(t)
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Personal", entities.AccountTypePersonal, true)
+	deps.accounts.accounts["acct-2"] = newScopedAccount(t, "acct-2", "Acme", entities.AccountTypeOrganization, true)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+	deps.accounts.memberRoles["acct-2:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "1.2.3.4", "UA", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+
+	if err := svc.ScopeSessionToAccount(ctx, session.GetID(), "acct-2"); err != nil {
+		t.Fatalf("ScopeSessionToAccount() error: %v", err)
+	}
+	if err := svc.RevokeSession(ctx, session.GetID()); err != nil {
+		t.Fatalf("RevokeSession() error: %v", err)
+	}
+
+	events, err := store.GetEvents(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("GetEvents() error: %v", err)
+	}
+	var types []string
+	for _, e := range events {
+		types = append(types, e.EventType)
+	}
+	want := []string{
+		entities.EventTypeSessionCreated,
+		entities.EventTypeSessionAccountScoped,
+		entities.EventTypeSessionRevoked,
+	}
+	if len(types) != len(want) {
+		t.Fatalf("event types = %v, want %v", types, want)
+	}
+	for i := range want {
+		if types[i] != want[i] {
+			t.Errorf("event %d = %q, want %q", i, types[i], want[i])
+		}
+	}
+}
+
+// Touch fires on every authenticated request. Persisting it would grow the
+// event store with request volume rather than with session count.
+func TestDefaultAuthenticationService_TouchIsNotPersisted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps, store := newServiceWithSessionEvents(t)
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Personal", entities.AccountTypePersonal, true)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "1.2.3.4", "UA", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+
+	for range 3 {
+		if _, err := svc.ValidateSession(ctx, session.GetID()); err != nil {
+			t.Fatalf("ValidateSession() error: %v", err)
+		}
+	}
+
+	events, err := store.GetEvents(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("GetEvents() error: %v", err)
+	}
+	for _, e := range events {
+		if e.EventType == entities.EventTypeSessionTouched {
+			t.Fatalf("Session.Touched was persisted; events = %d", len(events))
+		}
+	}
+	if len(events) != 1 {
+		t.Errorf("event count = %d, want 1 (creation only)", len(events))
+	}
+}
+
+// A session restored from its projection must carry its version, or the next
+// commit fails its optimistic concurrency check.
+func TestDefaultAuthenticationService_RestoredSessionCanCommitAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps, store := newServiceWithSessionEvents(t)
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Personal", entities.AccountTypePersonal, true)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "1.2.3.4", "UA", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+
+	// Round-trip through the projection, as the repository does.
+	model := models.AuthSessionModelFromEntity(session)
+	restored, err := model.ToEntity()
+	if err != nil {
+		t.Fatalf("ToEntity() error: %v", err)
+	}
+	if restored.GetSequenceNo() != session.GetSequenceNo() {
+		t.Fatalf("restored sequence = %d, want %d", restored.GetSequenceNo(), session.GetSequenceNo())
+	}
+	deps.sessions.sessions[session.GetID()] = restored
+
+	if err := svc.RevokeSession(ctx, session.GetID()); err != nil {
+		t.Fatalf("RevokeSession() on a restored session: %v", err)
+	}
+	events, _ := store.GetEvents(ctx, session.GetID())
+	if len(events) != 2 {
+		t.Errorf("event count = %d, want 2", len(events))
 	}
 }

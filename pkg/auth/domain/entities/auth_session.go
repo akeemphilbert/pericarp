@@ -105,14 +105,19 @@ func (s *AuthSession) UserAgent() string {
 }
 
 // Restore restores an AuthSession from database values without recording events.
-func (s *AuthSession) Restore(id, agentID, accountID, credentialID, ipAddress, userAgent string, active bool, createdAt, expiresAt, lastAccessedAt time.Time) error {
+//
+// sequenceNo must be the aggregate's version in the event store, which the
+// projection carries. Restoring at 0 while the store already holds the
+// session's creation event would make the next commit fail its optimistic
+// concurrency check.
+func (s *AuthSession) Restore(id, agentID, accountID, credentialID, ipAddress, userAgent string, active bool, createdAt, expiresAt, lastAccessedAt time.Time, sequenceNo int) error {
 	if id == "" {
 		return fmt.Errorf("id cannot be empty")
 	}
 	if agentID == "" {
 		return fmt.Errorf("agent ID cannot be empty")
 	}
-	s.BaseEntity = ddd.NewBaseEntity(id)
+	s.BaseEntity = ddd.RestoreBaseEntity(id, sequenceNo)
 	s.agentID = agentID
 	s.accountID = accountID
 	s.credentialID = credentialID

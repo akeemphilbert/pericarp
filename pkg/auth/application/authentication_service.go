@@ -478,11 +478,36 @@ func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentI
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
+	if err = s.commitSessionEvents(ctx, session); err != nil {
+		return nil, err
+	}
 	if err = s.sessions.Save(ctx, session); err != nil {
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
 
 	return session, nil
+}
+
+// commitSessionEvents persists a session's uncommitted events through a unit
+// of work, so the authentication timeline — created, re-scoped, revoked — is
+// durable like every other aggregate's.
+//
+// Deliberately not called from ValidateSession. Touch fires on every
+// authenticated request, so persisting it would grow the event store with
+// request volume rather than with session count. Session.Touched stays an
+// in-memory signal; last-accessed lives in the projection.
+func (s *DefaultAuthenticationService) commitSessionEvents(ctx context.Context, session *entities.AuthSession) error {
+	if s.eventStore == nil {
+		return nil
+	}
+	uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
+	if err := uow.Track(session); err != nil {
+		return fmt.Errorf("failed to track session: %w", err)
+	}
+	if err := uow.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit session events: %w", err)
+	}
+	return nil
 }
 
 // ScopeSessionToAccount re-scopes a stored session to another account the
@@ -504,6 +529,9 @@ func (s *DefaultAuthenticationService) ScopeSessionToAccount(ctx context.Context
 
 	if err = session.ScopeToAccount(accountID); err != nil {
 		return fmt.Errorf("failed to scope session to account: %w", err)
+	}
+	if err = s.commitSessionEvents(ctx, session); err != nil {
+		return err
 	}
 	if err = s.sessions.Save(ctx, session); err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
@@ -762,6 +790,9 @@ func (s *DefaultAuthenticationService) RevokeSession(ctx context.Context, sessio
 		return fmt.Errorf("failed to revoke session: %w", revokeErr)
 	}
 
+	if commitErr := s.commitSessionEvents(ctx, session); commitErr != nil {
+		return commitErr
+	}
 	return s.sessions.Save(ctx, session)
 }
 
