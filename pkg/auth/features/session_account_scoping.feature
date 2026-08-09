@@ -93,6 +93,18 @@ Feature: An auth session is scoped to an account when the agent signs in
       And that session is not scoped to any account
 
     @security
+    Scenario: A session is never scoped to a deactivated account
+      # Sign-in already passes over a deactivated account. Accepting one when
+      # the caller names it explicitly would leave the only route into a
+      # suspended tenant open.
+      Given an organization account "acme" exists
+      And "ada" is also a "member" of the organization account "acme"
+      And the account "acme" is deactivated
+      When a session is requested for "ada" scoped to account "acme"
+      Then the request is rejected because the account "acme" is deactivated
+      And no session is stored for "ada"
+
+    @security
     Scenario: A session is never scoped to an account the agent does not belong to
       Given an organization account "acme" exists
       And "ada" is not a member of "acme"

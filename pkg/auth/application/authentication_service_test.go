@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2054,6 +2055,7 @@ func TestDefaultAuthenticationService_CreateSession_ScopesToAccount(t *testing.T
 	ctx := context.Background()
 
 	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "acct-1", entities.AccountTypeOrganization, true)
 	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
 
 	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
@@ -2142,7 +2144,9 @@ func TestDefaultAuthenticationService_ScopeSessionToAccount(t *testing.T) {
 	ctx := context.Background()
 
 	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "acct-1", entities.AccountTypeOrganization, true)
 	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+	deps.accounts.accounts["acct-2"] = newScopedAccount(t, "acct-2", "acct-2", entities.AccountTypeOrganization, true)
 	deps.accounts.memberRoles["acct-2:agent-1"] = entities.RoleMember
 
 	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
@@ -2169,6 +2173,7 @@ func TestDefaultAuthenticationService_ScopeSessionToAccount_RejectsNonMember(t *
 	ctx := context.Background()
 
 	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "acct-1", entities.AccountTypeOrganization, true)
 	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
 
 	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
@@ -2243,6 +2248,7 @@ func TestDefaultAuthenticationService_ValidateSession_MembershipOutageDegrades(t
 	ctx := context.Background()
 
 	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "acct-1", entities.AccountTypeOrganization, true)
 	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
 
 	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
@@ -2378,6 +2384,7 @@ func TestDefaultAuthenticationService_ValidateSession_MembershipOutageDoesNotRef
 	ctx := context.Background()
 
 	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "acct-1", entities.AccountTypeOrganization, true)
 	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
 
 	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
@@ -2490,4 +2497,114 @@ func newTokenAccountRepo(t *testing.T) *mockAccountRepo {
 	repo.accounts["account-1"] = newScopedAccount(t, "account-1", "Alice", entities.AccountTypePersonal, true)
 	repo.memberRoles["account-1:agent-1"] = entities.RoleOwner
 	return repo
+}
+
+// --- Deactivated accounts are an authorization boundary (#71) ---
+
+// Sign-in already passes over a deactivated account. Accepting one here left
+// the only route into a suspended tenant open: a member could still switch
+// into it and keep working.
+func TestDefaultAuthenticationService_ScopeSessionToAccount_RefusesDeactivated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Personal", entities.AccountTypePersonal, true)
+	deps.accounts.accounts["acct-2"] = newScopedAccount(t, "acct-2", "Suspended", entities.AccountTypeOrganization, false)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+	deps.accounts.memberRoles["acct-2:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	err = svc.ScopeSessionToAccount(ctx, session.GetID(), "acct-2")
+	if !errors.Is(err, application.ErrAccountDeactivated) {
+		t.Fatalf("ScopeSessionToAccount() error = %v, want ErrAccountDeactivated", err)
+	}
+
+	stored, _ := deps.sessions.FindByID(ctx, session.GetID())
+	if stored.AccountID() != "acct-1" {
+		t.Errorf("AccountID() = %q, want it unchanged at %q", stored.AccountID(), "acct-1")
+	}
+}
+
+func TestDefaultAuthenticationService_CreateSession_RefusesDeactivatedAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Suspended", entities.AccountTypeOrganization, false)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleMember
+
+	_, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if !errors.Is(err, application.ErrAccountDeactivated) {
+		t.Fatalf("CreateSession() error = %v, want ErrAccountDeactivated", err)
+	}
+	if len(deps.sessions.sessions) != 0 {
+		t.Errorf("expected no stored session, got %d", len(deps.sessions.sessions))
+	}
+}
+
+// Suspending an account must not depend on when its members last logged in.
+// Reported apart from revocation because the agent is still a member and the
+// remedy is an operator reactivating the account, not the user retrying.
+func TestDefaultAuthenticationService_ValidateSession_RefusesDeactivatedAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	account := newScopedAccount(t, "acct-1", "Acme", entities.AccountTypeOrganization, true)
+	deps.accounts.accounts["acct-1"] = account
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	if err := account.Deactivate(); err != nil {
+		t.Fatalf("Deactivate() error: %v", err)
+	}
+
+	_, err = svc.ValidateSession(ctx, session.GetID())
+	if !errors.Is(err, application.ErrSessionAccountDeactivated) {
+		t.Fatalf("ValidateSession() error = %v, want ErrSessionAccountDeactivated", err)
+	}
+	if errors.Is(err, application.ErrSessionAccountRevoked) {
+		t.Error("a suspended account must not be reported as a revoked membership")
+	}
+}
+
+// A switcher reading the identity must not offer a tenant that switching into
+// would be refused.
+func TestDefaultAuthenticationService_ValidateSession_OmitsDeactivatedFromAccountIDs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Personal", entities.AccountTypePersonal, true)
+	deps.accounts.accounts["acct-2"] = newScopedAccount(t, "acct-2", "Suspended", entities.AccountTypeOrganization, false)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+	deps.accounts.memberRoles["acct-2:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	info, err := svc.ValidateSession(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("ValidateSession() error: %v", err)
+	}
+	if slices.Contains(info.AccountIDs, "acct-2") {
+		t.Errorf("AccountIDs = %v, want the deactivated acct-2 omitted", info.AccountIDs)
+	}
+	if !slices.Contains(info.AccountIDs, "acct-1") {
+		t.Errorf("AccountIDs = %v, want it to include acct-1", info.AccountIDs)
+	}
 }

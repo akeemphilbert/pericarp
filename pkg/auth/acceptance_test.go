@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -186,6 +187,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the session info reports account "([^"]*)"$`, w.sessionInfoReportsAccount)
 	sc.Step(`^the session is still scoped to account "([^"]*)"$`, w.storedSessionStillScopedTo)
 	sc.Step(`^the request is rejected because "([^"]*)" is not a member of "([^"]*)"$`, w.rejectedAsNotMember)
+	sc.Step(`^the request is rejected because the account "([^"]*)" is deactivated$`, w.rejectedAsDeactivated)
 	sc.Step(`^the request succeeds$`, w.requestSucceeds)
 	sc.Step(`^the request is rejected as unauthenticated$`, w.requestRejectedUnauthenticated)
 	sc.Step(`^the refusal is coded "([^"]*)"$`, w.refusalIsCoded)
@@ -953,6 +955,16 @@ func (w *world) rejectedAsNotMember(agentID, accountID string) error {
 	}
 	if !isNotMemberError(w.lastErr) {
 		return fmt.Errorf("got error %v, want ErrAccountNotMember", w.lastErr)
+	}
+	return nil
+}
+
+func (w *world) rejectedAsDeactivated(accountID string) error {
+	if w.lastErr == nil {
+		return fmt.Errorf("expected the request to be refused for deactivated account %s, got no error", accountID)
+	}
+	if !errors.Is(w.lastErr, application.ErrAccountDeactivated) {
+		return fmt.Errorf("got error %v, want ErrAccountDeactivated", w.lastErr)
 	}
 	return nil
 }

@@ -35,6 +35,8 @@ var (
 	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
 	ErrAccountNotMember             = errors.New("authentication: agent is not a member of the account")
 	ErrSessionAccountRevoked        = errors.New("authentication: session is scoped to an account the agent no longer belongs to")
+	ErrAccountDeactivated           = errors.New("authentication: account is deactivated")
+	ErrSessionAccountDeactivated    = errors.New("authentication: session is scoped to a deactivated account")
 	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
 	// no JWTService is wired. Distinct from IssueIdentityToken's
 	// ("", nil) shape because refresh's sole purpose is to mint a token —
@@ -538,6 +540,22 @@ func (s *DefaultAuthenticationService) assertMember(ctx context.Context, account
 	if role == "" {
 		return fmt.Errorf("%w: agent %s in account %s", ErrAccountNotMember, agentID, accountID)
 	}
+
+	// Membership alone is not access. Sign-in already passes over a
+	// deactivated account, so accepting one here would leave the only route
+	// into a suspended tenant open — a member could still switch into it and
+	// keep working. Deactivation is an authorization boundary, not just a
+	// sign-in filter.
+	account, err := s.accounts.FindByID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to load account: %w", err)
+	}
+	if account == nil {
+		return fmt.Errorf("%w: account %s not found", ErrAccountNotMember, accountID)
+	}
+	if !account.Active() {
+		return fmt.Errorf("%w: account %s", ErrAccountDeactivated, accountID)
+	}
 	return nil
 }
 
@@ -600,7 +618,11 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	// lookup failed. The list is then not evidence of anything and must not be
 	// used to refuse: with no repository it is always empty, and callers turn
 	// a validation error into 401, so a database blip would log everyone out.
-	var memberships []string
+	// memberships is every account the agent belongs to; active is the subset
+	// they may actually act in. Keeping both apart lets a refusal say which
+	// happened — removed from the account, or the account was suspended —
+	// rather than reporting a suspension as a revoked membership.
+	var memberships, active []string
 	membershipsKnown := false
 	if s.accounts != nil {
 		accounts, listErr := s.accounts.FindByMember(ctx, session.AgentID())
@@ -616,6 +638,9 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 				}
 				seen[account.GetID()] = true
 				memberships = append(memberships, account.GetID())
+				if account.Active() {
+					active = append(active, account.GetID())
+				}
 			}
 		}
 	}
@@ -632,10 +657,20 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	// their own — a polling client re-fires this on every request — so a
 	// refused session must not keep looking freshly used to anyone auditing
 	// last-accessed times.
-	if membershipsKnown && session.AccountID() != "" && !slices.Contains(memberships, session.AccountID()) {
-		s.logger.Warn(ctx, "auth: session scoped to a revoked membership",
-			"agent_id", session.AgentID(), "session_id", session.GetID(), "account_id", session.AccountID())
-		return nil, ErrSessionAccountRevoked
+	if membershipsKnown && session.AccountID() != "" {
+		switch {
+		case !slices.Contains(memberships, session.AccountID()):
+			s.logger.Warn(ctx, "auth: session scoped to a revoked membership",
+				"agent_id", session.AgentID(), "session_id", session.GetID(), "account_id", session.AccountID())
+			return nil, ErrSessionAccountRevoked
+		case !slices.Contains(active, session.AccountID()):
+			// Still a member, but the account was suspended. Sign-in refuses
+			// to scope a new session to one, so letting an existing session
+			// carry on would make suspension depend on when you logged in.
+			s.logger.Warn(ctx, "auth: session scoped to a deactivated account",
+				"agent_id", session.AgentID(), "session_id", session.GetID(), "account_id", session.AccountID())
+			return nil, ErrSessionAccountDeactivated
+		}
 	}
 
 	// Touch the session to update last accessed time
@@ -656,12 +691,14 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	}
 
 	// Session's own account first, then the rest, so the ordering a caller
-	// sees does not depend on repository order.
+	// sees does not depend on repository order. Only active accounts are
+	// listed: an account switcher reading this identity must not offer a
+	// suspended tenant that switching into would be refused.
 	accountIDs := []string{}
 	if session.AccountID() != "" {
 		accountIDs = append(accountIDs, session.AccountID())
 	}
-	for _, id := range memberships {
+	for _, id := range active {
 		if id != session.AccountID() {
 			accountIDs = append(accountIDs, id)
 		}
