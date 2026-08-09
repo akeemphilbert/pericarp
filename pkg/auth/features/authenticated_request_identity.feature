@@ -109,6 +109,19 @@ Feature: An authenticated request carries the caller's active account
       And no identity is attached to the request
       And the stored session for "ada" is still active
 
+    @decision
+    Scenario: A session is refused once its account is deactivated
+      # Suspending an account must not depend on when its members last logged
+      # in. Coded apart from a revoked membership because the agent is still a
+      # member: the remedy is an operator reactivating the account, not the
+      # user signing in again.
+      Given "ada" has signed in and holds a session cookie
+      When the account "ada-personal" is deactivated
+      And "ada" calls the protected endpoint
+      Then the request is rejected as unauthenticated
+      And the refusal is coded "account_deactivated"
+      And no identity is attached to the request
+
     Scenario: A revoked session yields no identity
       Given "ada" has signed in and holds a session cookie
       And that session has been revoked

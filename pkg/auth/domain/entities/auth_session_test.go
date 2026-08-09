@@ -319,7 +319,7 @@ func TestAuthSession_Restore(t *testing.T) {
 			t.Parallel()
 			sess := &entities.AuthSession{}
 			now := time.Now()
-			err := sess.Restore(tt.id, tt.agentID, "account-1", "cred-1", "192.168.1.1", "Mozilla/5.0", true, now, now.Add(24*time.Hour), now)
+			err := sess.Restore(tt.id, tt.agentID, "account-1", "cred-1", "192.168.1.1", "Mozilla/5.0", true, now, now.Add(24*time.Hour), now, 0)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -365,7 +365,7 @@ func TestAuthSession_ApplyEvent(t *testing.T) {
 
 	// Reconstruct from events
 	restored := &entities.AuthSession{}
-	if err := restored.Restore("sess-1", "placeholder", "", "", "", "", false, time.Time{}, time.Time{}, time.Time{}); err != nil {
+	if err := restored.Restore("sess-1", "placeholder", "", "", "", "", false, time.Time{}, time.Time{}, time.Time{}, 0); err != nil {
 		t.Fatalf("Restore() error: %v", err)
 	}
 
@@ -401,7 +401,7 @@ func TestAuthSession_ApplyEvent_Revoked(t *testing.T) {
 
 	// Reconstruct
 	restored := &entities.AuthSession{}
-	if err := restored.Restore("sess-1", "placeholder", "", "", "", "", true, time.Time{}, time.Time{}, time.Time{}); err != nil {
+	if err := restored.Restore("sess-1", "placeholder", "", "", "", "", true, time.Time{}, time.Time{}, time.Time{}, 0); err != nil {
 		t.Fatalf("Restore() error: %v", err)
 	}
 
@@ -434,7 +434,7 @@ func TestAuthSession_ApplyEvent_AccountScoped(t *testing.T) {
 
 	// Reconstruct
 	restored := &entities.AuthSession{}
-	if err := restored.Restore("sess-1", "placeholder", "", "", "", "", true, time.Time{}, time.Time{}, time.Time{}); err != nil {
+	if err := restored.Restore("sess-1", "placeholder", "", "", "", "", true, time.Time{}, time.Time{}, time.Time{}, 0); err != nil {
 		t.Fatalf("Restore() error: %v", err)
 	}
 

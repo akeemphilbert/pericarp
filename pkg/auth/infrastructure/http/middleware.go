@@ -55,6 +55,12 @@ var (
 //	                                                       to — if they have one. If the
 //	                                                       retry answers unscoped_session,
 //	                                                       that is the terminal state.
+//	account_deactivated     the agent is still a member,   retry sign-in only helps if
+//	                        but the account is suspended   they belong to another ACTIVE
+//	                                                       account. Otherwise this is an
+//	                                                       operator problem — reactivate
+//	                                                       the account. Say so; do not
+//	                                                       tell the user to sign in again.
 //
 // An account_access_revoked refusal can be transient. It is recomputed per
 // request against live memberships, so a non-transactional membership rewrite,
@@ -90,6 +96,14 @@ func RequireAuth(
 				// they still belong to.
 				if errors.Is(err, application.ErrSessionAccountRevoked) {
 					writeJSONErrorCode(w, http.StatusUnauthorized, "not authenticated", "account_access_revoked")
+					return
+				}
+				// Distinct from revocation: the agent is still a member, the
+				// account itself is suspended. Signing in again cannot help
+				// unless they belong to another active account, and an
+				// operator debugging this needs to know which happened.
+				if errors.Is(err, application.ErrSessionAccountDeactivated) {
+					writeJSONErrorCode(w, http.StatusUnauthorized, "not authenticated", "account_deactivated")
 					return
 				}
 				writeJSONError(w, http.StatusUnauthorized, "not authenticated")

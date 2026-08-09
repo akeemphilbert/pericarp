@@ -497,3 +497,36 @@ func TestInviteService_AcceptInvite_EmptyDisplayName_KeepsEmail(t *testing.T) {
 		t.Errorf("agent Name() = %q, want %q", agent.Name(), "alice@example.com")
 	}
 }
+
+// An invite issued before the account was suspended would otherwise be a way
+// into it — the one route deactivation must not leave open (#71).
+func TestInviteService_AcceptInvite_RefusesDeactivatedAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newInviteTestService()
+	setupAccountWithAdmin(deps)
+
+	_, token, err := svc.CreateInvite(ctx, "account-1", "alice@example.com", entities.RoleMember, "admin-agent")
+	if err != nil {
+		t.Fatalf("CreateInvite() error: %v", err)
+	}
+
+	account := deps.accounts.accounts["account-1"]
+	if account == nil {
+		t.Fatal("expected account-1 in the fixture")
+	}
+	if err := account.Deactivate(); err != nil {
+		t.Fatalf("Deactivate() error: %v", err)
+	}
+
+	_, _, _, err = svc.AcceptInvite(ctx, token, application.UserInfo{
+		ProviderUserID: "google-user-alice",
+		Email:          "alice@example.com",
+		DisplayName:    "Alice Smith",
+		Provider:       "google",
+	})
+	if !errors.Is(err, application.ErrAccountDeactivated) {
+		t.Fatalf("AcceptInvite() error = %v, want ErrAccountDeactivated", err)
+	}
+}

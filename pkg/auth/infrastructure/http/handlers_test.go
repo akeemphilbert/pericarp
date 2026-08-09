@@ -84,7 +84,7 @@ func (m *mockAuthService) FindOrCreateAgent(ctx context.Context, userInfo applic
 	return agent, cred, account, nil
 }
 
-func (m *mockAuthService) CreateSession(ctx context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+func (m *mockAuthService) CreateSession(ctx context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration, _ ...application.AccountTrustOption) (*entities.AuthSession, error) {
 	if m.createSessionFunc != nil {
 		return m.createSessionFunc(ctx, agentID, accountID, credentialID, ipAddress, userAgent, duration)
 	}
@@ -131,7 +131,7 @@ func (m *mockAuthService) RefreshTokens(ctx context.Context, credentialID string
 	return &application.AuthResult{AccessToken: "new-token"}, nil
 }
 
-func (m *mockAuthService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
+func (m *mockAuthService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string, _ ...application.AccountTrustOption) (string, error) {
 	if m.issueIdentityTokenFunc != nil {
 		return m.issueIdentityTokenFunc(ctx, agent, activeAccountID)
 	}

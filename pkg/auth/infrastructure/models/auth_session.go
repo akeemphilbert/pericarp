@@ -18,6 +18,9 @@ type AuthSessionModel struct {
 	LastAccessedAt time.Time
 	IPAddress      string
 	UserAgent      string
+	// SequenceNo is the aggregate version in the event store, so a restored
+	// session can commit further events without a concurrency conflict.
+	SequenceNo int
 }
 
 func (AuthSessionModel) TableName() string {
@@ -30,7 +33,7 @@ func (m *AuthSessionModel) ToEntity() (*entities.AuthSession, error) {
 	err := e.Restore(
 		m.ID, m.AgentID, m.AccountID, m.CredentialID,
 		m.IPAddress, m.UserAgent, m.Active,
-		m.CreatedAt, m.ExpiresAt, m.LastAccessedAt,
+		m.CreatedAt, m.ExpiresAt, m.LastAccessedAt, m.SequenceNo,
 	)
 	if err != nil {
 		return nil, err
@@ -51,5 +54,6 @@ func AuthSessionModelFromEntity(e *entities.AuthSession) *AuthSessionModel {
 		LastAccessedAt: e.LastAccessedAt(),
 		IPAddress:      e.IPAddress(),
 		UserAgent:      e.UserAgent(),
+		SequenceNo:     e.GetSequenceNo(),
 	}
 }

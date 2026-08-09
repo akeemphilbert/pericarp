@@ -35,6 +35,8 @@ var (
 	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
 	ErrAccountNotMember             = errors.New("authentication: agent is not a member of the account")
 	ErrSessionAccountRevoked        = errors.New("authentication: session is scoped to an account the agent no longer belongs to")
+	ErrAccountDeactivated           = errors.New("authentication: account is deactivated")
+	ErrSessionAccountDeactivated    = errors.New("authentication: session is scoped to a deactivated account")
 	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
 	// no JWTService is wired. Distinct from IssueIdentityToken's
 	// ("", nil) shape because refresh's sole purpose is to mint a token —
@@ -160,7 +162,7 @@ type AuthenticationService interface {
 
 	// IssueIdentityToken issues a signed JWT for the given agent.
 	// Returns ("", nil) if no JWTService is configured.
-	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
+	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string, opts ...AccountTrustOption) (string, error)
 
 	// RefreshIdentityToken re-snapshots claims for an existing agent and
 	// returns a freshly signed JWT. Re-runs the ClaimsEnricher and
@@ -189,7 +191,7 @@ type AuthenticationService interface {
 	// stored unscoped and sign-in still succeeds, but every authenticated
 	// request made with it is refused. Passing an account the agent is not a
 	// member of returns ErrAccountNotMember and stores nothing.
-	CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+	CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration, opts ...AccountTrustOption) (*entities.AuthSession, error)
 
 	// ScopeSessionToAccount re-scopes a stored session to another account the
 	// agent belongs to, and persists it. Returns ErrAccountNotMember if the
@@ -460,8 +462,8 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 
 // CreateSession creates an authenticated session for an agent, scoped to
 // accountID. See the AuthenticationService interface for the contract.
-func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
-	if accountID != "" {
+func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration, opts ...AccountTrustOption) (*entities.AuthSession, error) {
+	if accountID != "" && !newAccountTrust(opts).verified {
 		if err := s.assertMember(ctx, accountID, agentID); err != nil {
 			return nil, err
 		}
@@ -476,11 +478,36 @@ func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentI
 		return nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
+	if err = s.commitSessionEvents(ctx, session); err != nil {
+		return nil, err
+	}
 	if err = s.sessions.Save(ctx, session); err != nil {
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
 
 	return session, nil
+}
+
+// commitSessionEvents persists a session's uncommitted events through a unit
+// of work, so the authentication timeline — created, re-scoped, revoked — is
+// durable like every other aggregate's.
+//
+// Deliberately not called from ValidateSession. Touch fires on every
+// authenticated request, so persisting it would grow the event store with
+// request volume rather than with session count. Session.Touched stays an
+// in-memory signal; last-accessed lives in the projection.
+func (s *DefaultAuthenticationService) commitSessionEvents(ctx context.Context, session *entities.AuthSession) error {
+	if s.eventStore == nil {
+		return nil
+	}
+	uow := esApplication.NewSimpleUnitOfWork(s.eventStore, s.dispatcher)
+	if err := uow.Track(session); err != nil {
+		return fmt.Errorf("failed to track session: %w", err)
+	}
+	if err := uow.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit session events: %w", err)
+	}
+	return nil
 }
 
 // ScopeSessionToAccount re-scopes a stored session to another account the
@@ -502,6 +529,9 @@ func (s *DefaultAuthenticationService) ScopeSessionToAccount(ctx context.Context
 
 	if err = session.ScopeToAccount(accountID); err != nil {
 		return fmt.Errorf("failed to scope session to account: %w", err)
+	}
+	if err = s.commitSessionEvents(ctx, session); err != nil {
+		return err
 	}
 	if err = s.sessions.Save(ctx, session); err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
@@ -537,6 +567,22 @@ func (s *DefaultAuthenticationService) assertMember(ctx context.Context, account
 	}
 	if role == "" {
 		return fmt.Errorf("%w: agent %s in account %s", ErrAccountNotMember, agentID, accountID)
+	}
+
+	// Membership alone is not access. Sign-in already passes over a
+	// deactivated account, so accepting one here would leave the only route
+	// into a suspended tenant open — a member could still switch into it and
+	// keep working. Deactivation is an authorization boundary, not just a
+	// sign-in filter.
+	account, err := s.accounts.FindByID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to load account: %w", err)
+	}
+	if account == nil {
+		return fmt.Errorf("%w: account %s not found", ErrAccountNotMember, accountID)
+	}
+	if !account.Active() {
+		return fmt.Errorf("%w: account %s", ErrAccountDeactivated, accountID)
 	}
 	return nil
 }
@@ -600,7 +646,11 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	// lookup failed. The list is then not evidence of anything and must not be
 	// used to refuse: with no repository it is always empty, and callers turn
 	// a validation error into 401, so a database blip would log everyone out.
-	var memberships []string
+	// memberships is every account the agent belongs to; active is the subset
+	// they may actually act in. Keeping both apart lets a refusal say which
+	// happened — removed from the account, or the account was suspended —
+	// rather than reporting a suspension as a revoked membership.
+	var memberships, active []string
 	membershipsKnown := false
 	if s.accounts != nil {
 		accounts, listErr := s.accounts.FindByMember(ctx, session.AgentID())
@@ -616,6 +666,9 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 				}
 				seen[account.GetID()] = true
 				memberships = append(memberships, account.GetID())
+				if account.Active() {
+					active = append(active, account.GetID())
+				}
 			}
 		}
 	}
@@ -632,10 +685,20 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	// their own — a polling client re-fires this on every request — so a
 	// refused session must not keep looking freshly used to anyone auditing
 	// last-accessed times.
-	if membershipsKnown && session.AccountID() != "" && !slices.Contains(memberships, session.AccountID()) {
-		s.logger.Warn(ctx, "auth: session scoped to a revoked membership",
-			"agent_id", session.AgentID(), "session_id", session.GetID(), "account_id", session.AccountID())
-		return nil, ErrSessionAccountRevoked
+	if membershipsKnown && session.AccountID() != "" {
+		switch {
+		case !slices.Contains(memberships, session.AccountID()):
+			s.logger.Warn(ctx, "auth: session scoped to a revoked membership",
+				"agent_id", session.AgentID(), "session_id", session.GetID(), "account_id", session.AccountID())
+			return nil, ErrSessionAccountRevoked
+		case !slices.Contains(active, session.AccountID()):
+			// Still a member, but the account was suspended. Sign-in refuses
+			// to scope a new session to one, so letting an existing session
+			// carry on would make suspension depend on when you logged in.
+			s.logger.Warn(ctx, "auth: session scoped to a deactivated account",
+				"agent_id", session.AgentID(), "session_id", session.GetID(), "account_id", session.AccountID())
+			return nil, ErrSessionAccountDeactivated
+		}
 	}
 
 	// Touch the session to update last accessed time
@@ -656,12 +719,14 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 	}
 
 	// Session's own account first, then the rest, so the ordering a caller
-	// sees does not depend on repository order.
+	// sees does not depend on repository order. Only active accounts are
+	// listed: an account switcher reading this identity must not offer a
+	// suspended tenant that switching into would be refused.
 	accountIDs := []string{}
 	if session.AccountID() != "" {
 		accountIDs = append(accountIDs, session.AccountID())
 	}
-	for _, id := range memberships {
+	for _, id := range active {
 		if id != session.AccountID() {
 			accountIDs = append(accountIDs, id)
 		}
@@ -725,6 +790,9 @@ func (s *DefaultAuthenticationService) RevokeSession(ctx context.Context, sessio
 		return fmt.Errorf("failed to revoke session: %w", revokeErr)
 	}
 
+	if commitErr := s.commitSessionEvents(ctx, session); commitErr != nil {
+		return commitErr
+	}
 	return s.sessions.Save(ctx, session)
 }
 
@@ -740,7 +808,7 @@ func (s *DefaultAuthenticationService) RevokeAllSessions(ctx context.Context, ag
 // login. When a ClaimsEnricher is wired its result is passed as extras
 // to JWTService.IssueToken; an enricher error fails token issuance
 // (contrast SubscriptionService, which is fail-open).
-func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
+func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string, opts ...AccountTrustOption) (string, error) {
 	if s.jwtService == nil {
 		return "", nil
 	}
@@ -763,7 +831,7 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 		//
 		// Only enforced when an account repository exists. Without one the
 		// list is always empty and this would refuse every token.
-		if activeAccountID != "" && !accountsContain(accounts, activeAccountID) {
+		if activeAccountID != "" && !newAccountTrust(opts).verified && !accountsContain(accounts, activeAccountID) {
 			return "", fmt.Errorf("%w: agent %s in account %s", ErrAccountNotMember, agent.GetID(), activeAccountID)
 		}
 	}

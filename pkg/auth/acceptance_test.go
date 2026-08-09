@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,7 @@ import (
 	authjwt "github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/jwt"
 	"github.com/akeemphilbert/pericarp/pkg/auth/infrastructure/session"
 	esdomain "github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+	esinfra "github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
 )
 
 // TestAcceptance runs the Gherkin acceptance contract in features/ against the
@@ -91,6 +93,7 @@ type world struct {
 
 	sess          *entities.AuthSession
 	sessionEvents []esdomain.EventEnvelope[any]
+	eventStore    *esinfra.MemoryStore
 	reloaded      *entities.AuthSession
 	rebuilt       *entities.AuthSession
 	info          *application.SessionInfo
@@ -186,6 +189,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the session info reports account "([^"]*)"$`, w.sessionInfoReportsAccount)
 	sc.Step(`^the session is still scoped to account "([^"]*)"$`, w.storedSessionStillScopedTo)
 	sc.Step(`^the request is rejected because "([^"]*)" is not a member of "([^"]*)"$`, w.rejectedAsNotMember)
+	sc.Step(`^the request is rejected because the account "([^"]*)" is deactivated$`, w.rejectedAsDeactivated)
 	sc.Step(`^the request succeeds$`, w.requestSucceeds)
 	sc.Step(`^the request is rejected as unauthenticated$`, w.requestRejectedUnauthenticated)
 	sc.Step(`^the refusal is coded "([^"]*)"$`, w.refusalIsCoded)
@@ -245,12 +249,17 @@ func (w *world) setup() error {
 	w.callbackCookies = nil
 	w.lastBody = nil
 
+	// A real event store, so session events are actually persisted and the
+	// rebuild scenario reads them back from storage rather than from the
+	// aggregate that produced them.
+	w.eventStore = esinfra.NewMemoryStore()
 	w.svc = application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": w.provider},
 		w.agents, w.credentials, w.sessions, w.accounts,
 		application.WithPasswordCredentialRepository(w.passwords),
 		application.WithJWTService(w.jwtSvc),
 		application.WithBcryptCost(bcrypt.MinCost),
+		application.WithEventStore(w.eventStore),
 	)
 
 	// The real invite service, acting as the callback's InviteAcceptor, so the
@@ -778,13 +787,21 @@ func (w *world) sessionIsReloaded() error {
 // field assigned without an event shows up as a rebuild that lost the account.
 func (w *world) sessionIsRebuiltFromEvents() error {
 	ctx := context.Background()
-	if len(w.sessionEvents) == 0 {
-		return fmt.Errorf("session recorded no events to rebuild from")
+	// Read the events back from the store rather than from the aggregate that
+	// produced them, so this proves a real round-trip and not just that
+	// ApplyEvent mirrors RecordEvent.
+	stored, err := w.eventStore.GetEvents(ctx, w.sess.GetID())
+	if err != nil {
+		return fmt.Errorf("load session events: %w", err)
 	}
+	if len(stored) == 0 {
+		return fmt.Errorf("no session events were persisted for %s", w.sess.GetID())
+	}
+	w.sessionEvents = stored
 	rebuilt := &entities.AuthSession{}
 	if err := rebuilt.Restore(
 		w.sess.GetID(), "placeholder", "", "", "", "", false,
-		time.Time{}, time.Time{}, time.Time{}); err != nil {
+		time.Time{}, time.Time{}, time.Time{}, 0); err != nil {
 		return fmt.Errorf("prepare rebuild: %w", err)
 	}
 	for i, event := range w.sessionEvents {
@@ -953,6 +970,16 @@ func (w *world) rejectedAsNotMember(agentID, accountID string) error {
 	}
 	if !isNotMemberError(w.lastErr) {
 		return fmt.Errorf("got error %v, want ErrAccountNotMember", w.lastErr)
+	}
+	return nil
+}
+
+func (w *world) rejectedAsDeactivated(accountID string) error {
+	if w.lastErr == nil {
+		return fmt.Errorf("expected the request to be refused for deactivated account %s, got no error", accountID)
+	}
+	if !errors.Is(w.lastErr, application.ErrAccountDeactivated) {
+		return fmt.Errorf("got error %v, want ErrAccountDeactivated", w.lastErr)
 	}
 	return nil
 }

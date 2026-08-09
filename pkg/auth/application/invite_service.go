@@ -201,6 +201,11 @@ func (s *InviteService) AcceptInvite(ctx context.Context, token string, userInfo
 	if account == nil {
 		return nil, nil, nil, fmt.Errorf("invite: account %s not found", invite.AccountID())
 	}
+	// An invite issued before the account was suspended would otherwise be a
+	// way into it, which is the one route deactivation must not leave open.
+	if !account.Active() {
+		return nil, nil, nil, fmt.Errorf("%w: account %s", ErrAccountDeactivated, invite.AccountID())
+	}
 
 	if err = account.AddMember(agent.GetID(), invite.RoleID()); err != nil {
 		return nil, nil, nil, fmt.Errorf("invite: failed to add member to account: %w", err)
