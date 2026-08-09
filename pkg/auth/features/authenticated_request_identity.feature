@@ -77,6 +77,7 @@ Feature: An authenticated request carries the caller's active account
       Given "ada" holds a session cookie for a stored session with no account
       When "ada" calls the protected endpoint
       Then the request is rejected as unauthenticated
+      And the refusal is coded "unscoped_session"
       And no identity is attached to the request
 
     @decision
@@ -89,6 +90,7 @@ Feature: An authenticated request carries the caller's active account
       And "orphan" has signed in and holds a session cookie
       When "orphan" calls the protected endpoint
       Then the request is rejected as unauthenticated
+      And the refusal is coded "unscoped_session"
       And no identity is attached to the request
       And the stored session for "orphan" is still active
 

@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -65,11 +67,22 @@ type world struct {
 	credentials repositories.CredentialRepository
 	sessions    repositories.AuthSessionRepository
 	passwords   repositories.PasswordCredentialRepository
+	invites     repositories.InviteRepository
 
-	svc    *application.DefaultAuthenticationService
-	jwtSvc *authjwt.RSAJWTService
-	sm     session.SessionManager
-	server *httptest.Server
+	svc       *application.DefaultAuthenticationService
+	inviteSvc *application.InviteService
+	jwtSvc    *authjwt.RSAJWTService
+	sm        session.SessionManager
+	server    *httptest.Server
+
+	// provider is the stand-in identity provider. signerProfile is the profile
+	// it hands back at code exchange — whoever the scenario is signing in.
+	provider      *stubOAuthProvider
+	signerProfile application.UserInfo
+	inviteToken   string
+
+	callbackStatus  int
+	callbackCookies []*http.Cookie
 
 	// emails maps a scenario-friendly agent name to its login email. Agent and
 	// account IDs are the friendly names themselves, so assertions read the
@@ -86,6 +99,7 @@ type world struct {
 	cookies    []*http.Cookie
 	lastErr    error
 	lastStatus int
+	lastBody   map[string]string
 
 	identity     *auth.Identity
 	ownership    auth.ResourceOwnership
@@ -122,6 +136,29 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^that session has been revoked$`, w.sessionHasBeenRevoked)
 	sc.Step(`^that session has expired$`, w.sessionHasExpired)
 
+	// Given — sign-in callback fixtures
+	sc.Step(`^an identity provider "([^"]*)" that returns the profile of whoever is signing in$`, w.identityProviderConfigured)
+	sc.Step(`^a sign-in callback mounted for "([^"]*)"$`, w.callbackMounted)
+	sc.Step(`^an active agent "([^"]*)" known to "([^"]*)" with email "([^"]*)"$`, w.agentKnownToProvider)
+	sc.Step(`^an agent "([^"]*)" not yet known to "([^"]*)"$`, w.agentNotYetKnownToProvider)
+	sc.Step(`^an organization account "([^"]*)" owned by "([^"]*)"$`, w.orgAccountOwnedBy)
+	sc.Step(`^"([^"]*)" holds a pending invite to "([^"]*)" as "([^"]*)"$`, w.holdsPendingInvite)
+	sc.Step(`^"([^"]*)" is not a member of any account$`, w.isNotAMemberOfAnyAccount)
+
+	// When — sign-in callback
+	sc.Step(`^"([^"]*)" completes the sign-in callback$`, w.completesCallback)
+	sc.Step(`^"([^"]*)" completes the sign-in callback with the invite$`, w.completesCallbackWithInvite)
+
+	// Then — sign-in callback
+	sc.Step(`^the callback completes successfully$`, w.callbackCompletes)
+	sc.Step(`^the session stored by the callback is scoped to account "([^"]*)"$`, w.callbackSessionScopedTo)
+	sc.Step(`^the session stored by the callback is not scoped to any account$`, w.callbackSessionUnscoped)
+	sc.Step(`^the callback creates an active personal account for "([^"]*)"$`, w.callbackCreatedPersonalAccount)
+	sc.Step(`^the session stored by the callback is scoped to that new account$`, w.callbackSessionScopedToNewAccount)
+	sc.Step(`^"([^"]*)" owns no personal account$`, w.ownsNoPersonalAccount)
+	sc.Step(`^the callback issues an identity token whose active account is "([^"]*)"$`, w.callbackTokenActiveAccount)
+	sc.Step(`^the callback issues no identity token$`, w.callbackIssuesNoToken)
+
 	// When — actions
 	sc.Step(`^"([^"]*)" signs in$`, w.signsIn)
 	sc.Step(`^"([^"]*)" signs in by accepting the invite$`, w.signsIn)
@@ -150,6 +187,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the request is rejected because "([^"]*)" is not a member of "([^"]*)"$`, w.rejectedAsNotMember)
 	sc.Step(`^the request succeeds$`, w.requestSucceeds)
 	sc.Step(`^the request is rejected as unauthenticated$`, w.requestRejectedUnauthenticated)
+	sc.Step(`^the refusal is coded "([^"]*)"$`, w.refusalIsCoded)
 	sc.Step(`^no identity is attached to the request$`, w.noIdentityAttached)
 	sc.Step(`^the identity on the request has agent "([^"]*)"$`, w.identityHasAgent)
 	sc.Step(`^the identity on the request has active account "([^"]*)"$`, w.identityHasActiveAccount)
@@ -198,13 +236,27 @@ func (w *world) setup() error {
 	w.rebuilt = nil
 	w.createdPerson = nil
 
+	w.invites = gorminfra.NewInviteRepository(db)
+	w.provider = &stubOAuthProvider{world: w}
+	w.signerProfile = application.UserInfo{}
+	w.inviteToken = ""
+	w.callbackStatus = 0
+	w.callbackCookies = nil
+	w.lastBody = nil
+
 	w.svc = application.NewDefaultAuthenticationService(
-		application.OAuthProviderRegistry{},
+		application.OAuthProviderRegistry{"google": w.provider},
 		w.agents, w.credentials, w.sessions, w.accounts,
 		application.WithPasswordCredentialRepository(w.passwords),
 		application.WithJWTService(w.jwtSvc),
 		application.WithBcryptCost(bcrypt.MinCost),
 	)
+
+	// The real invite service, acting as the callback's InviteAcceptor, so the
+	// invited-agent scenario exercises actual invite acceptance rather than a
+	// stand-in that returns whatever the test wants.
+	w.inviteSvc = application.NewInviteService(
+		w.invites, w.agents, w.accounts, w.credentials, w.jwtSvc)
 
 	w.sm = session.NewGorillaSessionManager(
 		"acceptance-session",
@@ -221,8 +273,55 @@ func (w *world) setup() error {
 		})))
 	mux.Handle("/switch", authhttp.RequireJWT(w.jwtSvc, jwtCookieName)(
 		authhttp.SwitchActiveAccountHandler(w.jwtSvc, w.accounts, w.sm, w.svc)))
+
+	handlers := authhttp.NewAuthHandlers(authhttp.HandlerConfig{
+		AuthService:     w.svc,
+		SessionManager:  w.sm,
+		Credentials:     w.credentials,
+		RedirectURI:     authhttp.RedirectURIConfig{CallbackPath: "/auth/callback"},
+		DefaultProvider: "google",
+		SessionDuration: 24 * time.Hour,
+		JWTCookieName:   jwtCookieName,
+		InviteAcceptor:  w.inviteSvc,
+	})
+	mux.HandleFunc("/auth/login", handlers.Login)
+	mux.HandleFunc("/auth/callback", handlers.Callback)
+
 	w.server = httptest.NewServer(mux)
 	return nil
+}
+
+// stubOAuthProvider stands in for the identity provider. Only the code
+// exchange matters here: it returns the profile of whoever the scenario is
+// signing in, which is what a real provider would hand back.
+type stubOAuthProvider struct {
+	world *world
+}
+
+func (p *stubOAuthProvider) Name() string { return "google" }
+
+func (p *stubOAuthProvider) AuthCodeURL(state, codeChallenge, nonce, redirectURI string) string {
+	return "https://provider.test/authorize?state=" + url.QueryEscape(state)
+}
+
+func (p *stubOAuthProvider) Exchange(_ context.Context, _, _, _ string) (*application.AuthResult, error) {
+	return &application.AuthResult{
+		AccessToken: "stub-access-token",
+		TokenType:   "Bearer",
+		ExpiresIn:   3600,
+		UserInfo:    p.world.signerProfile,
+	}, nil
+}
+
+func (p *stubOAuthProvider) RefreshToken(_ context.Context, _ string) (*application.AuthResult, error) {
+	return nil, fmt.Errorf("stub provider: refresh not supported")
+}
+
+func (p *stubOAuthProvider) RevokeToken(_ context.Context, _ string) error { return nil }
+
+func (p *stubOAuthProvider) ValidateIDToken(_ context.Context, _, _ string) (*application.UserInfo, error) {
+	profile := p.world.signerProfile
+	return &profile, nil
 }
 
 func (w *world) teardown() {
@@ -581,6 +680,11 @@ func (w *world) callsProtectedEndpoint(_ string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	w.lastStatus = resp.StatusCode
+	w.lastBody = nil
+	body := map[string]string{}
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&body); decodeErr == nil {
+		w.lastBody = body
+	}
 	return nil
 }
 
@@ -935,6 +1039,317 @@ func (w *world) accountsAreExactly(first, second string) error {
 		if !seen {
 			return fmt.Errorf("AccountIDs %v is missing %q", w.identity.AccountIDs, id)
 		}
+	}
+	return nil
+}
+
+// ------------------------------------------------- sign-in callback: fixtures
+
+func (w *world) identityProviderConfigured(name string) error {
+	if w.provider == nil || w.provider.Name() != name {
+		return fmt.Errorf("no identity provider %q configured", name)
+	}
+	return nil
+}
+
+func (w *world) callbackMounted(name string) error {
+	if w.server == nil {
+		return fmt.Errorf("no callback mounted for %q", name)
+	}
+	return nil
+}
+
+// agentKnownToProvider seeds an agent the provider already knows: an agent row
+// plus the provider credential a previous sign-in would have left behind.
+func (w *world) agentKnownToProvider(agentID, provider, email string) error {
+	ctx := context.Background()
+	agent, err := new(entities.Agent).With(agentID, agentID, entities.AgentTypePerson)
+	if err != nil {
+		return fmt.Errorf("build agent %s: %w", agentID, err)
+	}
+	if err := w.agents.Save(ctx, agent); err != nil {
+		return fmt.Errorf("save agent %s: %w", agentID, err)
+	}
+
+	providerUserID := agentID + "-oauth"
+	credential, err := new(entities.Credential).With(
+		agentID+"-cred", agentID, provider, providerUserID, email, agentID)
+	if err != nil {
+		return fmt.Errorf("build credential for %s: %w", agentID, err)
+	}
+	if err := w.credentials.Save(ctx, credential); err != nil {
+		return fmt.Errorf("save credential for %s: %w", agentID, err)
+	}
+
+	w.signerProfile = application.UserInfo{
+		ProviderUserID: providerUserID,
+		Email:          email,
+		DisplayName:    agentID,
+		Provider:       provider,
+	}
+	return nil
+}
+
+func (w *world) agentNotYetKnownToProvider(agentID, provider string) error {
+	providerUserID := agentID + "-oauth"
+	existing, err := w.credentials.FindByProvider(context.Background(), provider, providerUserID)
+	if err != nil {
+		return fmt.Errorf("check credential: %w", err)
+	}
+	if existing != nil {
+		return fmt.Errorf("precondition failed: %s is already known to %s", agentID, provider)
+	}
+	w.signerProfile = application.UserInfo{
+		ProviderUserID: providerUserID,
+		Email:          agentID + "@example.com",
+		DisplayName:    agentID,
+		Provider:       provider,
+	}
+	return nil
+}
+
+func (w *world) orgAccountOwnedBy(accountID, ownerID string) error {
+	ctx := context.Background()
+	owner, err := new(entities.Agent).With(ownerID, ownerID, entities.AgentTypePerson)
+	if err != nil {
+		return fmt.Errorf("build owner %s: %w", ownerID, err)
+	}
+	if err := w.agents.Save(ctx, owner); err != nil {
+		return fmt.Errorf("save owner %s: %w", ownerID, err)
+	}
+	if _, err := w.createAccount(accountID, entities.AccountTypeOrganization); err != nil {
+		return err
+	}
+	return w.addMember(accountID, ownerID, entities.RoleOwner)
+}
+
+// holdsPendingInvite issues a real invite through the real InviteService, so
+// the callback later accepts a genuine token rather than a fabricated one.
+func (w *world) holdsPendingInvite(agentID, accountID, role string) error {
+	email := agentID + "@example.com"
+	_, token, err := w.inviteSvc.CreateInvite(context.Background(), accountID, email, role, "owner")
+	if err != nil {
+		return fmt.Errorf("create invite for %s: %w", agentID, err)
+	}
+	w.inviteToken = token
+	w.signerProfile = application.UserInfo{
+		ProviderUserID: agentID + "-oauth",
+		Email:          email,
+		DisplayName:    agentID,
+		Provider:       "google",
+	}
+	return nil
+}
+
+func (w *world) isNotAMemberOfAnyAccount(agentID string) error {
+	accounts, err := w.accounts.FindByMember(context.Background(), agentID)
+	if err != nil {
+		return fmt.Errorf("list memberships: %w", err)
+	}
+	if len(accounts) != 0 {
+		return fmt.Errorf("precondition failed: %s belongs to %d accounts, want none", agentID, len(accounts))
+	}
+	return nil
+}
+
+// --------------------------------------------------- sign-in callback: action
+
+func (w *world) completesCallback(_ string) error {
+	return w.runCallback("")
+}
+
+func (w *world) completesCallbackWithInvite(_ string) error {
+	if w.inviteToken == "" {
+		return fmt.Errorf("no invite token was issued")
+	}
+	return w.runCallback(w.inviteToken)
+}
+
+// runCallback drives the real login and callback handlers over HTTP: start the
+// flow, take the state out of the provider redirect, come back with it.
+func (w *world) runCallback(inviteToken string) error {
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	loginURL := w.server.URL + "/auth/login"
+	if inviteToken != "" {
+		loginURL += "?invite_token=" + url.QueryEscape(inviteToken)
+	}
+	loginResp, err := client.Get(loginURL)
+	if err != nil {
+		return fmt.Errorf("start login flow: %w", err)
+	}
+	defer func() { _ = loginResp.Body.Close() }()
+	if loginResp.StatusCode != http.StatusFound {
+		return fmt.Errorf("login returned %d, want 302", loginResp.StatusCode)
+	}
+
+	authorizeURL, err := url.Parse(loginResp.Header.Get("Location"))
+	if err != nil {
+		return fmt.Errorf("parse provider redirect: %w", err)
+	}
+	state := authorizeURL.Query().Get("state")
+	if state == "" {
+		return fmt.Errorf("provider redirect carried no state: %s", loginResp.Header.Get("Location"))
+	}
+
+	callbackURL := fmt.Sprintf("%s/auth/callback?state=%s&code=stub-auth-code",
+		w.server.URL, url.QueryEscape(state))
+	req, err := http.NewRequest(http.MethodGet, callbackURL, nil)
+	if err != nil {
+		return fmt.Errorf("build callback request: %w", err)
+	}
+	for _, c := range loginResp.Cookies() {
+		req.AddCookie(c)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("call callback: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	w.callbackStatus = resp.StatusCode
+	w.callbackCookies = resp.Cookies()
+	w.cookies = resp.Cookies()
+	return nil
+}
+
+// ----------------------------------------------- sign-in callback: assertions
+
+func (w *world) callbackCompletes() error {
+	if w.callbackStatus != http.StatusFound {
+		return fmt.Errorf("callback returned %d, want 302", w.callbackStatus)
+	}
+	return nil
+}
+
+// callbackSession reads the session the callback stored, reached the way a
+// browser would: through the cookie it set.
+func (w *world) callbackSession() (*entities.AuthSession, error) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	for _, c := range w.callbackCookies {
+		req.AddCookie(c)
+	}
+	data, err := w.sm.GetHTTPSession(req)
+	if err != nil {
+		return nil, fmt.Errorf("read session cookie set by the callback: %w", err)
+	}
+	if data == nil || data.SessionID == "" {
+		return nil, fmt.Errorf("callback set no session cookie")
+	}
+	stored, err := w.sessions.FindByID(context.Background(), data.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load stored session: %w", err)
+	}
+	if stored == nil {
+		return nil, fmt.Errorf("session %s was not stored", data.SessionID)
+	}
+	w.sess = stored
+	return stored, nil
+}
+
+func (w *world) callbackSessionScopedTo(accountID string) error {
+	stored, err := w.callbackSession()
+	if err != nil {
+		return err
+	}
+	if got := stored.AccountID(); got != accountID {
+		return fmt.Errorf("session stored by the callback is scoped to %q, want %q", got, accountID)
+	}
+	return nil
+}
+
+func (w *world) callbackSessionUnscoped() error {
+	stored, err := w.callbackSession()
+	if err != nil {
+		return err
+	}
+	if got := stored.AccountID(); got != "" {
+		return fmt.Errorf("session stored by the callback is scoped to %q, want no account", got)
+	}
+	return nil
+}
+
+func (w *world) callbackCreatedPersonalAccount(agentID string) error {
+	stored, err := w.callbackSession()
+	if err != nil {
+		return err
+	}
+	personal, err := w.accounts.FindPersonalByMember(context.Background(), stored.AgentID())
+	if err != nil {
+		return fmt.Errorf("look up personal account: %w", err)
+	}
+	if personal == nil {
+		return fmt.Errorf("callback created no personal account for %s", agentID)
+	}
+	if !personal.Active() {
+		return fmt.Errorf("personal account %s for %s is not active", personal.GetID(), agentID)
+	}
+	w.createdPerson = personal
+	return nil
+}
+
+func (w *world) callbackSessionScopedToNewAccount() error {
+	if w.createdPerson == nil {
+		return fmt.Errorf("no account was created by the callback")
+	}
+	return w.callbackSessionScopedTo(w.createdPerson.GetID())
+}
+
+func (w *world) ownsNoPersonalAccount(agentID string) error {
+	stored, err := w.callbackSession()
+	if err != nil {
+		return err
+	}
+	personal, err := w.accounts.FindPersonalByMember(context.Background(), stored.AgentID())
+	if err != nil {
+		return fmt.Errorf("look up personal account: %w", err)
+	}
+	if personal != nil {
+		return fmt.Errorf("%s owns personal account %s, want none", agentID, personal.GetID())
+	}
+	return nil
+}
+
+func (w *world) callbackToken() string {
+	for _, c := range w.callbackCookies {
+		if c.Name == jwtCookieName {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+func (w *world) callbackTokenActiveAccount(accountID string) error {
+	token := w.callbackToken()
+	if token == "" {
+		return fmt.Errorf("callback issued no identity token")
+	}
+	claims, err := w.jwtSvc.ValidateToken(context.Background(), token)
+	if err != nil {
+		return fmt.Errorf("validate issued token: %w", err)
+	}
+	if claims.ActiveAccountID != accountID {
+		return fmt.Errorf("token active account %q, want %q", claims.ActiveAccountID, accountID)
+	}
+	return nil
+}
+
+func (w *world) callbackIssuesNoToken() error {
+	if token := w.callbackToken(); token != "" {
+		return fmt.Errorf("callback issued an identity token, want none")
+	}
+	return nil
+}
+
+func (w *world) refusalIsCoded(code string) error {
+	if w.lastBody == nil {
+		return fmt.Errorf("refusal carried no JSON body")
+	}
+	if got := w.lastBody["code"]; got != code {
+		return fmt.Errorf("refusal coded %q, want %q (body: %v)", got, code, w.lastBody)
 	}
 	return nil
 }
