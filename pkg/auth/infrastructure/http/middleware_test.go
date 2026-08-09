@@ -715,3 +715,42 @@ func TestRequireAuth_UnscopedSession_IsDistinguishable(t *testing.T) {
 		t.Error("an expired session must not report itself as unscoped")
 	}
 }
+
+// Signing in again DOES resolve a revoked membership — the next session is
+// scoped to an account the agent still belongs to — so this must not be
+// confused with unscoped_session, where signing in again never helps.
+func TestRequireAuth_RevokedMembership_IsCodedSeparately(t *testing.T) {
+	t.Parallel()
+
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+
+	svc := &mockAuthService{
+		validateSessFunc: func(_ context.Context, _ string) (*application.SessionInfo, error) {
+			return nil, application.ErrSessionAccountRevoked
+		},
+	}
+
+	reached := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	authhttp.RequireAuth(sm, svc)(next).ServeHTTP(w, requestWithSessionCookie(t, sm, "sess-1", "agent-1"))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	if reached {
+		t.Error("handler ran for a session whose membership was revoked")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["code"] != "account_access_revoked" {
+		t.Errorf("code = %q, want %q", body["code"], "account_access_revoked")
+	}
+}

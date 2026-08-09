@@ -94,6 +94,21 @@ Feature: An authenticated request carries the caller's active account
       And no identity is attached to the request
       And the stored session for "orphan" is still active
 
+    @decision
+    Scenario: A session is refused once its membership is revoked
+      # The session records its account at sign-in and never revisits it, so
+      # without this the agent keeps acting in an account they were removed
+      # from until the session expires. Coded apart from an unscoped session
+      # because here signing in again does help: the next session is scoped to
+      # an account they still belong to.
+      Given "ada" has signed in and holds a session cookie
+      When "ada" is removed from the account "ada-personal"
+      And "ada" calls the protected endpoint
+      Then the request is rejected as unauthenticated
+      And the refusal is coded "account_access_revoked"
+      And no identity is attached to the request
+      And the stored session for "ada" is still active
+
     Scenario: A revoked session yields no identity
       Given "ada" has signed in and holds a session cookie
       And that session has been revoked

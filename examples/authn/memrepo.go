@@ -248,6 +248,21 @@ func (m *MemoryAccountRepository) SaveMember(_ context.Context, accountID, agent
 	return nil
 }
 
+func (m *MemoryAccountRepository) RemoveMember(_ context.Context, accountID, agentID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.memberRoles, accountID+":"+agentID)
+	linked := m.memberAccounts[agentID]
+	kept := linked[:0]
+	for _, account := range linked {
+		if account.GetID() != accountID {
+			kept = append(kept, account)
+		}
+	}
+	m.memberAccounts[agentID] = kept
+	return nil
+}
+
 func (m *MemoryAccountRepository) FindAll(_ context.Context, _ string, _ int) (*repositories.PaginatedResponse[*entities.Account], error) {
 	return nil, nil
 }

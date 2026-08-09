@@ -90,6 +90,14 @@ type AccountRepository interface {
 	// SaveMember persists a membership between an account and an agent with a role.
 	SaveMember(ctx context.Context, accountID, agentID, roleID string) error
 
+	// RemoveMember revokes an agent's membership in an account. It is a
+	// single atomic delete, so callers never need a delete-all-then-reinsert
+	// rewrite to change a membership set — such a rewrite leaves a window in
+	// which a valid membership is invisible, and authentication refuses
+	// sessions scoped to accounts it cannot see. Removing a membership that
+	// does not exist is not an error.
+	RemoveMember(ctx context.Context, accountID, agentID string) error
+
 	// FindAll retrieves Account aggregates with cursor-based pagination.
 	FindAll(ctx context.Context, cursor string, limit int) (*PaginatedResponse[*entities.Account], error)
 }
