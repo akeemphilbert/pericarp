@@ -19,7 +19,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          # Read the version from go.mod rather than pinning a literal. A
+          # literal drifted to 1.21 while the module moved to 1.25, and Go's
+          # toolchain switch covered for it well enough to build while leaving
+          # `go tool covdata` unresolvable — so `-coverprofile` failed for the
+          # two packages that have no test files, with no FAIL line to show
+          # for it. Every release since v1.0.0-beta.1 failed that way.
+          go-version-file: go.mod
       
       - name: Verify module
         run: |
@@ -40,31 +46,40 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          # Semver treats anything with a hyphen as a pre-release. Every tag so
+          # far is one (-beta.N), and marking those as a full release would
+          # make "latest" point at a beta.
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+          echo "Version: $VERSION (prerelease: $([[ "$VERSION" == *-* ]] && echo true || echo false))"
+
+      - name: Build release notes from the tag annotation
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          # The annotated tag is where this project's release notes are
+          # written, so use them rather than restating a summary here.
+          {
+            git tag -l --format='%(contents:body)' "$VERSION"
+            echo
+            echo "### Installation"
+            echo
+            echo '```bash'
+            echo "go get github.com/akeemphilbert/pericarp@$VERSION"
+            echo '```'
+            echo
+            echo "[pkg.go.dev](https://pkg.go.dev/github.com/akeemphilbert/pericarp@$VERSION)"
+          } > "$RUNNER_TEMP/release-notes.md"
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ steps.version.outputs.version }}
-          body: |
-            ## Pericarp ${{ steps.version.outputs.version }}
-            
-            ### Installation
-            
-            ```bash
-            go get github.com/akeemphilbert/pericarp@${{ steps.version.outputs.version }}
-            ```
-            
-            ### Documentation
-            
-            - [pkg.go.dev](https://pkg.go.dev/github.com/akeemphilbert/pericarp@${{ steps.version.outputs.version }})
-            - [GitHub Repository](https://github.com/akeemphilbert/pericarp)
-            
-            ### Changes
-            
-            See [CHANGELOG.md](https://github.com/akeemphilbert/pericarp/blob/${{ steps.version.outputs.version }}/CHANGELOG.md) for details.
+          body_path: ${{ runner.temp }}/release-notes.md
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.version.outputs.prerelease }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
