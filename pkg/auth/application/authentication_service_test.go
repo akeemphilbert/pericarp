@@ -2608,3 +2608,73 @@ func TestDefaultAuthenticationService_ValidateSession_OmitsDeactivatedFromAccoun
 		t.Errorf("AccountIDs = %v, want it to include acct-1", info.AccountIDs)
 	}
 }
+
+// --- The caller can vouch for an account it just resolved (#72) ---
+
+// Sign-in writes the membership row and verifies it moments later in the same
+// request. On a read replica or an asynchronous read model that row may not be
+// visible yet, which would fail a brand-new user's very first sign-in. An
+// unseeded membership stands in for that invisibility.
+func TestDefaultAuthenticationService_CreateSession_VouchedAccountSkipsTheReRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	// Deliberately no membership row: the write has not become visible.
+
+	if _, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "1.2.3.4", "UA", time.Hour); !errors.Is(err, application.ErrAccountNotMember) {
+		t.Fatalf("unvouched CreateSession() = %v, want ErrAccountNotMember", err)
+	}
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "1.2.3.4", "UA", time.Hour,
+		application.AccountAlreadyVerified())
+	if err != nil {
+		t.Fatalf("vouched CreateSession() error: %v", err)
+	}
+	if session.AccountID() != "acct-1" {
+		t.Errorf("AccountID() = %q, want %q", session.AccountID(), "acct-1")
+	}
+	if len(deps.sessions.sessions) != 1 {
+		t.Errorf("expected 1 stored session, got %d", len(deps.sessions.sessions))
+	}
+}
+
+// Vouching is for the sign-in path only. An account that arrived from a client
+// is exactly what the check exists to catch, so the default stays strict.
+func TestDefaultAuthenticationService_CreateSession_UnvouchedStillChecked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Acme", entities.AccountTypeOrganization, true)
+	deps.accounts.memberRoles["acct-1:someone-else"] = entities.RoleOwner
+
+	_, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "1.2.3.4", "UA", time.Hour)
+	if !errors.Is(err, application.ErrAccountNotMember) {
+		t.Fatalf("CreateSession() = %v, want ErrAccountNotMember", err)
+	}
+	if len(deps.sessions.sessions) != 0 {
+		t.Errorf("expected no stored session, got %d", len(deps.sessions.sessions))
+	}
+}
+
+func TestIssueIdentityToken_VouchedAccountSkipsTheReRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		application.WithJWTService(jwtSvc),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "acct-1"); !errors.Is(err, application.ErrAccountNotMember) {
+		t.Fatalf("unvouched IssueIdentityToken() = %v, want ErrAccountNotMember", err)
+	}
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "acct-1", application.AccountAlreadyVerified()); err != nil {
+		t.Fatalf("vouched IssueIdentityToken() error: %v", err)
+	}
+}

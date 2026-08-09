@@ -162,7 +162,7 @@ type AuthenticationService interface {
 
 	// IssueIdentityToken issues a signed JWT for the given agent.
 	// Returns ("", nil) if no JWTService is configured.
-	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error)
+	IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string, opts ...AccountTrustOption) (string, error)
 
 	// RefreshIdentityToken re-snapshots claims for an existing agent and
 	// returns a freshly signed JWT. Re-runs the ClaimsEnricher and
@@ -191,7 +191,7 @@ type AuthenticationService interface {
 	// stored unscoped and sign-in still succeeds, but every authenticated
 	// request made with it is refused. Passing an account the agent is not a
 	// member of returns ErrAccountNotMember and stores nothing.
-	CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error)
+	CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration, opts ...AccountTrustOption) (*entities.AuthSession, error)
 
 	// ScopeSessionToAccount re-scopes a stored session to another account the
 	// agent belongs to, and persists it. Returns ErrAccountNotMember if the
@@ -462,8 +462,8 @@ func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, us
 
 // CreateSession creates an authenticated session for an agent, scoped to
 // accountID. See the AuthenticationService interface for the contract.
-func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
-	if accountID != "" {
+func (s *DefaultAuthenticationService) CreateSession(ctx context.Context, agentID string, accountID string, credentialID string, ipAddress string, userAgent string, duration time.Duration, opts ...AccountTrustOption) (*entities.AuthSession, error) {
+	if accountID != "" && !newAccountTrust(opts).verified {
 		if err := s.assertMember(ctx, accountID, agentID); err != nil {
 			return nil, err
 		}
@@ -777,7 +777,7 @@ func (s *DefaultAuthenticationService) RevokeAllSessions(ctx context.Context, ag
 // login. When a ClaimsEnricher is wired its result is passed as extras
 // to JWTService.IssueToken; an enricher error fails token issuance
 // (contrast SubscriptionService, which is fail-open).
-func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string) (string, error) {
+func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, agent *entities.Agent, activeAccountID string, opts ...AccountTrustOption) (string, error) {
 	if s.jwtService == nil {
 		return "", nil
 	}
@@ -800,7 +800,7 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 		//
 		// Only enforced when an account repository exists. Without one the
 		// list is always empty and this would refuse every token.
-		if activeAccountID != "" && !accountsContain(accounts, activeAccountID) {
+		if activeAccountID != "" && !newAccountTrust(opts).verified && !accountsContain(accounts, activeAccountID) {
 			return "", fmt.Errorf("%w: agent %s in account %s", ErrAccountNotMember, agent.GetID(), activeAccountID)
 		}
 	}

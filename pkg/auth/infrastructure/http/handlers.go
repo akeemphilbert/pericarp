@@ -194,9 +194,15 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 	if account != nil {
 		accountID = account.GetID()
 	}
+	// The account came from AcceptInvite or FindOrCreateAgent moments ago, so
+	// it is a member's and it is active by construction. Vouching for it skips
+	// a redundant read — and avoids failing a brand-new user's first sign-in
+	// on a read model that has not caught up with the membership row this
+	// same request just wrote.
 	authSession, err := h.cfg.AuthService.CreateSession(
 		ctx, agent.GetID(), accountID, credential.GetID(),
 		ipAddress, userAgent, h.cfg.SessionDuration,
+		application.AccountAlreadyVerified(),
 	)
 	if err != nil {
 		h.cfg.Logger.Error(ctx, "session creation failed", "error", err)
@@ -229,7 +235,7 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		h.cfg.Logger.Warn(ctx, "sign-in resolved no active account; session is unscoped and authenticated requests will be refused",
 			"agent_id", agent.GetID())
 	} else {
-		tokenString, issueErr := h.cfg.AuthService.IssueIdentityToken(ctx, agent, accountID)
+		tokenString, issueErr := h.cfg.AuthService.IssueIdentityToken(ctx, agent, accountID, application.AccountAlreadyVerified())
 		if issueErr != nil {
 			h.cfg.Logger.Warn(ctx, "failed to issue identity token", "error", issueErr)
 		} else if tokenString != "" {
