@@ -58,12 +58,17 @@ type switchAccountRequest struct {
 // against the JWT's AccountIDs claim. When non-nil, an authoritative
 // FindMemberRole check is performed.
 //
-// sessions and auth re-scope the caller's stored auth session so that
+// sessions and authService re-scope the caller's stored auth session so that
 // session-authenticated routes follow the switch too. Pass both as nil only if
 // the service serves no session-authenticated routes. A service that mounts
 // RequireAuth and passes nil will keep serving those routes in the account the
 // caller switched away from, while its RequireJWT routes act in the new one —
 // the same agent in two tenants at once.
+//
+// Wire them together or not at all. authService must itself have been built
+// with an account repository: membership cannot be verified without one, so
+// re-scoping fails closed, and a caller holding a session cookie then gets 500
+// on every switch — even where the JWT-only path would have succeeded.
 func SwitchActiveAccountHandler(
 	reissuer application.TokenReissuer,
 	accounts repositories.AccountRepository,

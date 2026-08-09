@@ -528,3 +528,147 @@ func TestRequireJWT_NoToken_NoIdentity(t *testing.T) {
 		t.Errorf("expected nil Identity for unauthenticated request, got %v", capturedID)
 	}
 }
+
+// --- Account scoping (#68) ---
+
+// requestWithSessionCookie mints a session cookie for sessionID and returns a
+// request carrying it.
+func requestWithSessionCookie(t *testing.T, sm session.SessionManager, sessionID, agentID string) *http.Request {
+	t.Helper()
+	seed := httptest.NewRequest("GET", "/protected", nil)
+	seed.Host = "example.com"
+	w := httptest.NewRecorder()
+	if err := sm.CreateHTTPSession(w, seed, session.SessionData{
+		SessionID: sessionID,
+		AgentID:   agentID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("CreateHTTPSession: %v", err)
+	}
+	r := httptest.NewRequest("GET", "/protected", nil)
+	for _, cookie := range w.Result().Cookies() {
+		r.AddCookie(cookie)
+	}
+	return r
+}
+
+// Sessions stored before sessions carried an account are unscoped, and there
+// is no backfill. They are refused so their holders sign in again.
+func TestRequireAuth_UnscopedSession_Rejected(t *testing.T) {
+	t.Parallel()
+
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+
+	svc := &mockAuthService{
+		validateSessFunc: func(_ context.Context, _ string) (*application.SessionInfo, error) {
+			return &application.SessionInfo{
+				SessionID: "sess-1",
+				AgentID:   "agent-1",
+				AccountID: "",
+				ExpiresAt: time.Now().Add(24 * time.Hour),
+			}, nil
+		},
+	}
+
+	reached := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	authhttp.RequireAuth(sm, svc)(next).ServeHTTP(w, requestWithSessionCookie(t, sm, "sess-1", "agent-1"))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+	if reached {
+		t.Error("handler ran for an unscoped session")
+	}
+}
+
+func TestRequireAuth_PopulatesEveryMembership(t *testing.T) {
+	t.Parallel()
+
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+
+	svc := &mockAuthService{
+		validateSessFunc: func(_ context.Context, _ string) (*application.SessionInfo, error) {
+			return &application.SessionInfo{
+				SessionID:  "sess-1",
+				AgentID:    "agent-1",
+				AccountID:  "acct-1",
+				AccountIDs: []string{"acct-1", "acct-2"},
+				ExpiresAt:  time.Now().Add(24 * time.Hour),
+			}, nil
+		},
+	}
+
+	var got *auth.Identity
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = auth.AgentFromCtx(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	authhttp.RequireAuth(sm, svc)(next).ServeHTTP(w, requestWithSessionCookie(t, sm, "sess-1", "agent-1"))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got == nil {
+		t.Fatal("expected an identity on the request")
+	}
+	if got.ActiveAccountID != "acct-1" {
+		t.Errorf("ActiveAccountID = %q, want %q", got.ActiveAccountID, "acct-1")
+	}
+	if len(got.AccountIDs) != 2 {
+		t.Fatalf("AccountIDs = %v, want two entries", got.AccountIDs)
+	}
+	for _, id := range got.AccountIDs {
+		if id == "" {
+			t.Error("AccountIDs contains an empty value")
+		}
+	}
+}
+
+// A handler must be able to derive resource ownership — the symptom reported
+// in #68 was ResourceOwnershipFromCtx failing with "empty ActiveAccountID".
+func TestRequireAuth_ResourceOwnershipIsDerivable(t *testing.T) {
+	t.Parallel()
+
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+
+	svc := &mockAuthService{
+		validateSessFunc: func(_ context.Context, _ string) (*application.SessionInfo, error) {
+			return &application.SessionInfo{
+				SessionID:  "sess-1",
+				AgentID:    "agent-1",
+				AccountID:  "acct-1",
+				AccountIDs: []string{"acct-1"},
+				ExpiresAt:  time.Now().Add(24 * time.Hour),
+			}, nil
+		},
+	}
+
+	var ownership auth.ResourceOwnership
+	var ownershipErr error
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ownership, ownershipErr = auth.ResourceOwnershipFromCtx(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	authhttp.RequireAuth(sm, svc)(next).ServeHTTP(w, requestWithSessionCookie(t, sm, "sess-1", "agent-1"))
+
+	if ownershipErr != nil {
+		t.Fatalf("ResourceOwnershipFromCtx() error: %v", ownershipErr)
+	}
+	if ownership.AccountID != "acct-1" || ownership.CreatedByAgentID != "agent-1" {
+		t.Errorf("ownership = %+v, want account acct-1 created by agent-1", ownership)
+	}
+}

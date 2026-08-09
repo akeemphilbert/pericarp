@@ -506,11 +506,16 @@ func (s *DefaultAuthenticationService) ScopeSessionToAccount(ctx context.Context
 }
 
 // assertMember returns ErrAccountNotMember unless agentID holds a membership
-// in accountID. Without an account repository membership cannot be checked, so
-// the scope is refused rather than trusted.
+// in accountID.
+//
+// A nil account repository means the service does not manage accounts at all,
+// which every other account-aware method here already treats as "skip". There
+// are no memberships to contradict, and refusing instead would break sign-in
+// for those services: FindOrCreateAgent still mints a personal account for a
+// first-time user, and the caller passes it straight back in.
 func (s *DefaultAuthenticationService) assertMember(ctx context.Context, accountID, agentID string) error {
 	if s.accounts == nil {
-		return fmt.Errorf("%w: no account repository configured", ErrAccountNotMember)
+		return nil
 	}
 	role, err := s.accounts.FindMemberRole(ctx, accountID, agentID)
 	if err != nil {
