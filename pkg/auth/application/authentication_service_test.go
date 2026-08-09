@@ -287,6 +287,14 @@ func (m *mockAccountRepo) SaveMember(_ context.Context, accountID, agentID strin
 	return nil
 }
 
+func (m *mockAccountRepo) RemoveMember(_ context.Context, accountID, agentID string) error {
+	delete(m.memberRoles, accountID+":"+agentID)
+	if account, ok := m.byMember[agentID]; ok && account.GetID() == accountID {
+		delete(m.byMember, agentID)
+	}
+	return nil
+}
+
 func (m *mockAccountRepo) FindByID(_ context.Context, id string) (*entities.Account, error) {
 	account, ok := m.accounts[id]
 	if !ok {
@@ -983,7 +991,7 @@ func TestIssueIdentityToken_Success(t *testing.T) {
 		agents:      newMockAgentRepo(),
 		credentials: newMockCredentialRepo(),
 		sessions:    newMockSessionRepo(),
-		accounts:    newMockAccountRepo(),
+		accounts:    newTokenAccountRepo(t),
 		tokens:      newMockTokenStore(),
 		authz:       &mockAuthorizationChecker{},
 	}
@@ -1038,7 +1046,7 @@ func TestIssueIdentityToken_NilAgent_ReturnsError(t *testing.T) {
 	jwtSvc := &mockJWTService{}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 	)
 
@@ -1079,7 +1087,7 @@ func TestIssueIdentityToken_NoClaimsEnricher_NilExtras(t *testing.T) {
 	jwtSvc := &mockJWTService{}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 	)
 	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
@@ -1102,7 +1110,7 @@ func TestIssueIdentityToken_ClaimsEnricher_PassesExtras(t *testing.T) {
 	}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithClaimsEnricher(enricher),
 	)
@@ -1133,7 +1141,7 @@ func TestIssueIdentityToken_ClaimsEnricher_ErrorFailsIssuance(t *testing.T) {
 	}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithClaimsEnricher(enricher),
 	)
@@ -1158,7 +1166,7 @@ func TestIssueIdentityToken_ClaimsEnricher_NilResult_NoExtras(t *testing.T) {
 	}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithClaimsEnricher(enricher),
 	)
@@ -1185,7 +1193,7 @@ func TestIssueIdentityToken_ClaimsEnricher_EmptyResult_NoExtras(t *testing.T) {
 	}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithClaimsEnricher(enricher),
 	)
@@ -1214,7 +1222,7 @@ func TestIssueIdentityToken_ClaimsEnricher_NilOption_Ignored(t *testing.T) {
 	jwtSvc := &mockJWTService{}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithClaimsEnricher(nil),
 	)
@@ -1241,7 +1249,7 @@ func TestIssueIdentityToken_SubscriptionAndEnricher_Coexist(t *testing.T) {
 	}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithSubscriptionService(subSvc),
 		application.WithClaimsEnricher(enricher),
@@ -1274,9 +1282,15 @@ func TestIssueIdentityToken_ClaimsEnricher_ReservedKeyRejected(t *testing.T) {
 	enricher := func(_ context.Context, _ *entities.Agent, _ []*entities.Account, _ string) (map[string]any, error) {
 		return map[string]any{"sub": "agent-spoof", "role": "admin"}, nil
 	}
+	// agent-1 must actually belong to account-1, or token issuance refuses
+	// the active account before the enricher — and its gate — ever runs.
+	accounts := newTokenAccountRepo(t)
+	accounts.accounts["account-1"] = newScopedAccount(t, "account-1", "Alice", entities.AccountTypePersonal, true)
+	accounts.memberRoles["account-1:agent-1"] = entities.RoleOwner
+
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), accounts,
 		application.WithJWTService(jwtSvc),
 		application.WithClaimsEnricher(enricher),
 	)
@@ -1321,7 +1335,7 @@ func TestIssueIdentityToken_ClaimsEnricher_EndToEnd(t *testing.T) {
 		agents:      newMockAgentRepo(),
 		credentials: newMockCredentialRepo(),
 		sessions:    newMockSessionRepo(),
-		accounts:    newMockAccountRepo(),
+		accounts:    newTokenAccountRepo(t),
 		tokens:      newMockTokenStore(),
 	}
 	svc := application.NewDefaultAuthenticationService(
@@ -1392,7 +1406,7 @@ func TestRefreshIdentityToken_EmptyAgentID_ReturnsError(t *testing.T) {
 	jwtSvc := &mockJWTService{}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 	)
 
@@ -1411,7 +1425,7 @@ func TestRefreshIdentityToken_AgentNotFound_ReturnsError(t *testing.T) {
 	jwtSvc := &mockJWTService{}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 	)
 
@@ -1433,7 +1447,7 @@ func TestRefreshIdentityToken_AgentLookupFails_ReturnsError(t *testing.T) {
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
 		&errorAgentRepo{err: wantErr},
-		newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 	)
 
@@ -1479,7 +1493,7 @@ func TestRefreshIdentityToken_RereadsEnricherAndSubscription(t *testing.T) {
 		agents:      newMockAgentRepo(),
 		credentials: newMockCredentialRepo(),
 		sessions:    newMockSessionRepo(),
-		accounts:    newMockAccountRepo(),
+		accounts:    newTokenAccountRepo(t),
 		tokens:      newMockTokenStore(),
 	}
 	svc := application.NewDefaultAuthenticationService(
@@ -1568,7 +1582,7 @@ func TestRefreshIdentityToken_SubscriptionLookupFails_FailOpen(t *testing.T) {
 		agents:      newMockAgentRepo(),
 		credentials: newMockCredentialRepo(),
 		sessions:    newMockSessionRepo(),
-		accounts:    newMockAccountRepo(),
+		accounts:    newTokenAccountRepo(t),
 	}
 	svc := application.NewDefaultAuthenticationService(
 		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
@@ -1607,7 +1621,7 @@ func TestRefreshIdentityToken_EnricherErrorFailsIssuance(t *testing.T) {
 		agents:      newMockAgentRepo(),
 		credentials: newMockCredentialRepo(),
 		sessions:    newMockSessionRepo(),
-		accounts:    newMockAccountRepo(),
+		accounts:    newTokenAccountRepo(t),
 	}
 	svc := application.NewDefaultAuthenticationService(
 		deps.providers, deps.agents, deps.credentials, deps.sessions, deps.accounts,
@@ -1652,7 +1666,7 @@ func TestIssueIdentityToken_NoSubscriptionService_OmitsClaim(t *testing.T) {
 	jwtSvc := &mockJWTService{}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 	)
 
@@ -1680,7 +1694,7 @@ func TestIssueIdentityToken_WithSubscriptionService_EmbedsClaim(t *testing.T) {
 
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithSubscriptionService(subSvc),
 	)
@@ -1717,7 +1731,7 @@ func TestIssueIdentityToken_NonNilInactiveClaim_EmbeddedAsIs(t *testing.T) {
 
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithSubscriptionService(subSvc),
 	)
@@ -1744,7 +1758,7 @@ func TestIssueIdentityToken_SubscriptionLookupError_TokenStillIssued(t *testing.
 
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithSubscriptionService(subSvc),
 	)
@@ -1770,7 +1784,7 @@ func TestWithSubscriptionService_NilNoOp(t *testing.T) {
 	jwtSvc := &mockJWTService{}
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{"google": &mockOAuthProvider{name: "google"}},
-		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newMockAccountRepo(),
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), newTokenAccountRepo(t),
 		application.WithJWTService(jwtSvc),
 		application.WithSubscriptionService(nil),
 	)
@@ -1817,6 +1831,7 @@ func (m *errorAccountRepo) FindMemberRole(_ context.Context, _, _ string) (strin
 	return "", nil
 }
 func (m *errorAccountRepo) SaveMember(_ context.Context, _, _, _ string) error { return nil }
+func (m *errorAccountRepo) RemoveMember(_ context.Context, _, _ string) error  { return nil }
 func (m *errorAccountRepo) FindAll(_ context.Context, _ string, _ int) (*repositories.PaginatedResponse[*entities.Account], error) {
 	return nil, nil
 }
@@ -1830,12 +1845,18 @@ func TestNewDefaultAuthenticationService_NilAuthorization(t *testing.T) {
 	session.ClearUncommittedEvents()
 	sessions.sessions["sess-1"] = session
 
+	// The session names acct-1, so the agent must hold that membership or
+	// validation refuses it as revoked.
+	accounts := newMockAccountRepo()
+	accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Personal", entities.AccountTypePersonal, true)
+	accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
 	svc := application.NewDefaultAuthenticationService(
 		application.OAuthProviderRegistry{},
 		newMockAgentRepo(),
 		newMockCredentialRepo(),
 		sessions,
-		newMockAccountRepo(),
+		accounts,
 		application.WithTokenStore(newMockTokenStore()),
 		// no authorization checker — should default to nil
 	)
@@ -2242,4 +2263,231 @@ func TestDefaultAuthenticationService_ValidateSession_MembershipOutageDegrades(t
 	if len(info.AccountIDs) != 1 || info.AccountIDs[0] != "acct-1" {
 		t.Errorf("AccountIDs = %v, want it to fall back to [acct-1]", info.AccountIDs)
 	}
+}
+
+// --- Revoked membership (#70) ---
+
+// The session's account is recorded at sign-in and never revisited, so without
+// this check a removed member keeps writing into the account they were removed
+// from until the session expires.
+func TestDefaultAuthenticationService_ValidateSession_RefusesRevokedMembership(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Acme", entities.AccountTypeOrganization, true)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	// Validation succeeds while the membership stands.
+	if _, err := svc.ValidateSession(ctx, session.GetID()); err != nil {
+		t.Fatalf("ValidateSession() before revocation: %v", err)
+	}
+
+	delete(deps.accounts.memberRoles, "acct-1:agent-1")
+
+	if _, err := svc.ValidateSession(ctx, session.GetID()); !errors.Is(err, application.ErrSessionAccountRevoked) {
+		t.Fatalf("ValidateSession() error = %v, want ErrSessionAccountRevoked", err)
+	}
+}
+
+// Detection is a read-path check and stays a pure read: nothing revokes the
+// session, so the row is untouched and the agent simply signs in again.
+func TestDefaultAuthenticationService_ValidateSession_RevokedMembershipLeavesSessionActive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Acme", entities.AccountTypeOrganization, true)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+	delete(deps.accounts.memberRoles, "acct-1:agent-1")
+
+	before := session.LastAccessedAt()
+
+	_, _ = svc.ValidateSession(ctx, session.GetID())
+
+	stored, err := deps.sessions.FindByID(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("FindByID() error: %v", err)
+	}
+	if !stored.Active() {
+		t.Error("session was revoked; detection must not change session state")
+	}
+	if stored.AccountID() != "acct-1" {
+		t.Errorf("AccountID() = %q, want it unchanged at %q", stored.AccountID(), "acct-1")
+	}
+	// A refusal never converges — a polling client re-fires it on every
+	// request — so a refused session must not keep looking freshly used to
+	// anyone auditing last-accessed times.
+	if !stored.LastAccessedAt().Equal(before) {
+		t.Errorf("LastAccessedAt moved from %v to %v; a refused request must not touch the session",
+			before, stored.LastAccessedAt())
+	}
+}
+
+// "Refuse but do not revoke" exists so the session survives a membership that
+// comes back — a non-transactional membership rewrite, replica lag, or an
+// async projection can make a valid membership momentarily invisible. Pinned
+// so a future "just revoke it" refactor cannot land silently.
+func TestDefaultAuthenticationService_ValidateSession_RecoversWhenMembershipReturns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Acme", entities.AccountTypeOrganization, true)
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleMember
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	delete(deps.accounts.memberRoles, "acct-1:agent-1")
+	if _, err := svc.ValidateSession(ctx, session.GetID()); !errors.Is(err, application.ErrSessionAccountRevoked) {
+		t.Fatalf("ValidateSession() during the gap = %v, want ErrSessionAccountRevoked", err)
+	}
+
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleMember
+
+	info, err := svc.ValidateSession(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("ValidateSession() after the membership returned = %v, want it to validate again", err)
+	}
+	if info.AccountID != "acct-1" {
+		t.Errorf("AccountID = %q, want %q", info.AccountID, "acct-1")
+	}
+}
+
+// An unreadable membership list is not evidence of revocation. Callers turn a
+// validation error into 401, so refusing on a database blip would log every
+// user out at once.
+func TestDefaultAuthenticationService_ValidateSession_MembershipOutageDoesNotRefuse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	svc, deps := newTestService()
+	deps.accounts.memberRoles["acct-1:agent-1"] = entities.RoleOwner
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	deps.accounts.findByMemberErr = errors.New("database unavailable")
+
+	info, err := svc.ValidateSession(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("ValidateSession() error = %v, want the session to still validate", err)
+	}
+	if info.AccountID != "acct-1" {
+		t.Errorf("AccountID = %q, want %q", info.AccountID, "acct-1")
+	}
+}
+
+// With no account repository there are no memberships to contradict, and the
+// list is empty for every session. Refusing on that would deny every request.
+func TestDefaultAuthenticationService_ValidateSession_NoAccountRepoDoesNotRefuse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	sessions := newMockSessionRepo()
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		newMockAgentRepo(),
+		newMockCredentialRepo(),
+		sessions,
+		nil,
+	)
+
+	session, err := svc.CreateSession(ctx, "agent-1", "acct-1", "cred-1", "192.168.1.1", "Mozilla/5.0", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession() error: %v", err)
+	}
+	session.ClearUncommittedEvents()
+
+	info, err := svc.ValidateSession(ctx, session.GetID())
+	if err != nil {
+		t.Fatalf("ValidateSession() error = %v, want the session to validate", err)
+	}
+	if info.AccountID != "acct-1" {
+		t.Errorf("AccountID = %q, want %q", info.AccountID, "acct-1")
+	}
+}
+
+// The active account is supplied by the caller, so without this a removed
+// agent could mint a fresh token — via RefreshIdentityToken, with no re-auth
+// — still scoped to the account they were removed from. That is the session
+// defect reappearing on the JWT routes, which admit what the session routes
+// now refuse.
+func TestIssueIdentityToken_RefusesAccountTheAgentLeft(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	accounts := newTokenAccountRepo(t)
+	accounts.accounts["acct-1"] = newScopedAccount(t, "acct-1", "Acme", entities.AccountTypeOrganization, true)
+	accounts.memberRoles["acct-1:agent-1"] = entities.RoleMember
+
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), accounts,
+		application.WithJWTService(jwtSvc),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "acct-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() while a member: %v", err)
+	}
+
+	if err := accounts.RemoveMember(ctx, "acct-1", "agent-1"); err != nil {
+		t.Fatalf("RemoveMember() error: %v", err)
+	}
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "acct-1"); !errors.Is(err, application.ErrAccountNotMember) {
+		t.Fatalf("IssueIdentityToken() after removal = %v, want ErrAccountNotMember", err)
+	}
+}
+
+// Without an account repository there are no memberships to check against, so
+// enforcing would refuse every token.
+func TestIssueIdentityToken_NoAccountRepoStillIssues(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	jwtSvc := &mockJWTService{}
+	svc := application.NewDefaultAuthenticationService(
+		application.OAuthProviderRegistry{},
+		newMockAgentRepo(), newMockCredentialRepo(), newMockSessionRepo(), nil,
+		application.WithJWTService(jwtSvc),
+	)
+	agent, _ := new(entities.Agent).With("agent-1", "Alice", entities.AgentTypePerson)
+
+	if _, err := svc.IssueIdentityToken(ctx, agent, "acct-1"); err != nil {
+		t.Fatalf("IssueIdentityToken() with no account repository: %v", err)
+	}
+}
+
+// newTokenAccountRepo seeds the agent-1 / account-1 pair the identity-token
+// tests use. Token issuance now verifies the caller-supplied active account
+// against real memberships, so a fixture without one is refused before the
+// behaviour under test runs.
+func newTokenAccountRepo(t *testing.T) *mockAccountRepo {
+	t.Helper()
+	repo := newMockAccountRepo()
+	repo.accounts["account-1"] = newScopedAccount(t, "account-1", "Alice", entities.AccountTypePersonal, true)
+	repo.memberRoles["account-1:agent-1"] = entities.RoleOwner
+	return repo
 }

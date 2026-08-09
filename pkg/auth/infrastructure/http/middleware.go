@@ -3,6 +3,7 @@ package authhttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -33,6 +34,42 @@ var (
 // A session that is not scoped to an account is treated as unauthenticated.
 // Sessions stored before sessions carried an account are all unscoped, and
 // there is no backfill, so their holders are refused once and sign in again.
+//
+// # Telling the 401s apart
+//
+// Three refusals share the 401 status and need opposite handling, so two of
+// them carry a "code" field in the JSON body. A client that treats every 401
+// the same will either loop forever or give up when retrying would have
+// worked.
+//
+//	code                    meaning                        what the client should do
+//	----------------------  -----------------------------  --------------------------------
+//	(none)                  no session, or it expired      sign in again
+//	                        or was revoked
+//	unscoped_session        the agent has no active        do NOT retry sign-in; it
+//	                        account to act in              produces another unscoped
+//	                        session. Surface it.
+//	account_access_revoked  the agent was removed from     retry sign-in; it MAY recover.
+//	                        the session's account          The next session is scoped to
+//	                                                       an account they still belong
+//	                                                       to — if they have one. If the
+//	                                                       retry answers unscoped_session,
+//	                                                       that is the terminal state.
+//
+// An account_access_revoked refusal can be transient. It is recomputed per
+// request against live memberships, so a non-transactional membership rewrite,
+// replica lag, or an asynchronous projection can briefly hide a valid
+// membership. The session is deliberately not revoked, so it starts working
+// again by itself once the membership is visible. Treat a single refusal as a
+// signal, not as proof the access is gone — and prefer
+// AccountRepository.RemoveMember, whose single-row delete has no such window,
+// over rewriting a membership set.
+//
+// The check is skipped entirely when memberships cannot be read — no account
+// repository is configured, or the lookup failed. That is deliberate, so a
+// database blip cannot log every user out at once, but it means a persistent
+// lookup failure silently disables revocation. The skip is logged; alarm on a
+// sustained rate if you rely on this enforcement.
 func RequireAuth(
 	sm session.SessionManager,
 	as application.AuthenticationService,
@@ -47,6 +84,14 @@ func RequireAuth(
 
 			sessionInfo, err := as.ValidateSession(r.Context(), sessionData.SessionID)
 			if err != nil {
+				// The session names an account the agent has since been
+				// removed from. Coded separately because signing in again
+				// does resolve it — the next session is scoped to an account
+				// they still belong to.
+				if errors.Is(err, application.ErrSessionAccountRevoked) {
+					writeJSONErrorCode(w, http.StatusUnauthorized, "not authenticated", "account_access_revoked")
+					return
+				}
 				writeJSONError(w, http.StatusUnauthorized, "not authenticated")
 				return
 			}

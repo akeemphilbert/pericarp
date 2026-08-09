@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ var (
 	ErrPasswordSupportNotConfigured = errors.New("authentication: password support not configured")
 	ErrPasswordCredentialMissing    = errors.New("authentication: password credential not found for agent")
 	ErrAccountNotMember             = errors.New("authentication: agent is not a member of the account")
+	ErrSessionAccountRevoked        = errors.New("authentication: session is scoped to an account the agent no longer belongs to")
 	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
 	// no JWTService is wired. Distinct from IssueIdentityToken's
 	// ("", nil) shape because refresh's sole purpose is to mint a token —
@@ -507,6 +509,16 @@ func (s *DefaultAuthenticationService) ScopeSessionToAccount(ctx context.Context
 	return nil
 }
 
+// accountsContain reports whether accountID is among accounts.
+func accountsContain(accounts []*entities.Account, accountID string) bool {
+	for _, account := range accounts {
+		if account != nil && account.GetID() == accountID {
+			return true
+		}
+	}
+	return false
+}
+
 // assertMember returns ErrAccountNotMember unless agentID holds a membership
 // in accountID.
 //
@@ -580,6 +592,52 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 		return nil, ErrSessionExpired
 	}
 
+	// Read the agent's live memberships. They serve two purposes: they let a
+	// session-derived identity match a JWT-derived one, and they are the only
+	// way to notice that the session's own account has been taken away.
+	//
+	// membershipsKnown stays false when there is no account repository or the
+	// lookup failed. The list is then not evidence of anything and must not be
+	// used to refuse: with no repository it is always empty, and callers turn
+	// a validation error into 401, so a database blip would log everyone out.
+	var memberships []string
+	membershipsKnown := false
+	if s.accounts != nil {
+		accounts, listErr := s.accounts.FindByMember(ctx, session.AgentID())
+		if listErr != nil {
+			s.logger.Warn(ctx, "auth: failed to list accounts for session identity",
+				"agent_id", session.AgentID(), "error", listErr)
+		} else {
+			membershipsKnown = true
+			seen := map[string]bool{}
+			for _, account := range accounts {
+				if account == nil || account.GetID() == "" || seen[account.GetID()] {
+					continue
+				}
+				seen[account.GetID()] = true
+				memberships = append(memberships, account.GetID())
+			}
+		}
+	}
+
+	// The session's account is recorded at sign-in and never revisited, so a
+	// membership revoked since then would otherwise keep authorizing writes
+	// into an account the agent has been removed from until the session
+	// expires. Refuse instead, and let the caller sign in again — unlike an
+	// unscoped session, signing in again does help here, which is why this
+	// gets its own error rather than reusing the unscoped one.
+	//
+	// Checked before the session is touched, so a refused request neither
+	// writes nor costs a permissions lookup. Refusals do not converge on
+	// their own — a polling client re-fires this on every request — so a
+	// refused session must not keep looking freshly used to anyone auditing
+	// last-accessed times.
+	if membershipsKnown && session.AccountID() != "" && !slices.Contains(memberships, session.AccountID()) {
+		s.logger.Warn(ctx, "auth: session scoped to a revoked membership",
+			"agent_id", session.AgentID(), "session_id", session.GetID(), "account_id", session.AccountID())
+		return nil, ErrSessionAccountRevoked
+	}
+
 	// Touch the session to update last accessed time
 	if touchErr := session.Touch(); touchErr != nil {
 		return nil, fmt.Errorf("failed to touch session: %w", touchErr)
@@ -597,32 +655,15 @@ func (s *DefaultAuthenticationService) ValidateSession(ctx context.Context, sess
 		}
 	}
 
-	// List every membership so a session-derived identity matches a
-	// JWT-derived one. An account switcher reading the identity then behaves
-	// the same under either middleware.
-	//
-	// The list is a convenience for switchers, never an authorization input —
-	// authorization uses AccountID. So a lookup failure degrades to the
-	// session's own account rather than failing the request: callers map a
-	// validation error to 401, and a database blip must not log everyone out.
+	// Session's own account first, then the rest, so the ordering a caller
+	// sees does not depend on repository order.
 	accountIDs := []string{}
 	if session.AccountID() != "" {
 		accountIDs = append(accountIDs, session.AccountID())
 	}
-	if s.accounts != nil {
-		accounts, listErr := s.accounts.FindByMember(ctx, session.AgentID())
-		if listErr != nil {
-			s.logger.Warn(ctx, "auth: failed to list accounts for session identity",
-				"agent_id", session.AgentID(), "error", listErr)
-		} else {
-			seen := map[string]bool{session.AccountID(): true}
-			for _, account := range accounts {
-				if account == nil || account.GetID() == "" || seen[account.GetID()] {
-					continue
-				}
-				seen[account.GetID()] = true
-				accountIDs = append(accountIDs, account.GetID())
-			}
+	for _, id := range memberships {
+		if id != session.AccountID() {
+			accountIDs = append(accountIDs, id)
 		}
 	}
 
@@ -712,6 +753,18 @@ func (s *DefaultAuthenticationService) IssueIdentityToken(ctx context.Context, a
 		accounts, err = s.accounts.FindByMember(ctx, agent.GetID())
 		if err != nil {
 			return "", fmt.Errorf("authentication: failed to fetch accounts for token: %w", err)
+		}
+
+		// The active account is supplied by the caller, so it has to be
+		// checked against the memberships just fetched. Without this a token
+		// can be minted — including by RefreshIdentityToken, with no re-auth
+		// — for an account the agent has been removed from, which is the
+		// session defect reappearing on the JWT routes.
+		//
+		// Only enforced when an account repository exists. Without one the
+		// list is always empty and this would refuse every token.
+		if activeAccountID != "" && !accountsContain(accounts, activeAccountID) {
+			return "", fmt.Errorf("%w: agent %s in account %s", ErrAccountNotMember, agent.GetID(), activeAccountID)
 		}
 	}
 	var subscription *auth.SubscriptionClaim

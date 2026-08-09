@@ -165,6 +165,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^"([^"]*)" signs in for the first time with a new credential$`, w.signsInFirstTime)
 	sc.Step(`^"([^"]*)" calls the protected endpoint$`, w.callsProtectedEndpoint)
 	sc.Step(`^"([^"]*)" switches the active account to "([^"]*)"$`, w.switchesActiveAccount)
+	sc.Step(`^"([^"]*)" is removed from the account "([^"]*)"$`, w.isRemovedFromAccount)
 	sc.Step(`^a session is requested for "([^"]*)" scoped to account "([^"]*)"$`, w.sessionRequestedScopedTo)
 	sc.Step(`^the session is scoped to account "([^"]*)"$`, w.sessionIsScopedTo)
 	sc.Step(`^the session is validated$`, w.sessionIsValidated)
@@ -684,6 +685,20 @@ func (w *world) callsProtectedEndpoint(_ string) error {
 	body := map[string]string{}
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&body); decodeErr == nil {
 		w.lastBody = body
+	}
+	return nil
+}
+
+func (w *world) isRemovedFromAccount(agentID, accountID string) error {
+	role, err := w.accounts.FindMemberRole(context.Background(), accountID, agentID)
+	if err != nil {
+		return fmt.Errorf("read membership of %q in %q: %w", agentID, accountID, err)
+	}
+	if role == "" {
+		return fmt.Errorf("%q held no membership in %q to revoke", agentID, accountID)
+	}
+	if err := w.accounts.RemoveMember(context.Background(), accountID, agentID); err != nil {
+		return fmt.Errorf("revoke membership of %q in %q: %w", agentID, accountID, err)
 	}
 	return nil
 }

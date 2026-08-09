@@ -135,6 +135,12 @@ func (r *accountRepository) SaveMember(ctx context.Context, accountID, agentID, 
 	return r.db.WithContext(ctx).Save(member).Error
 }
 
+func (r *accountRepository) RemoveMember(ctx context.Context, accountID, agentID string) error {
+	return r.db.WithContext(ctx).
+		Where("account_id = ? AND agent_id = ?", accountID, agentID).
+		Delete(&models.AccountMemberModel{}).Error
+}
+
 func (r *accountRepository) FindByID(ctx context.Context, id string) (*entities.Account, error) {
 	var m models.AccountModel
 	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&m).Error; err != nil {

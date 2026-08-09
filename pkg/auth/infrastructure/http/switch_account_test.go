@@ -31,6 +31,7 @@ func (m *mockAccountRepo) FindPersonalByMember(_ context.Context, _ string) (*en
 	return nil, nil
 }
 func (m *mockAccountRepo) SaveMember(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockAccountRepo) RemoveMember(_ context.Context, _, _ string) error  { return nil }
 func (m *mockAccountRepo) FindAll(_ context.Context, _ string, _ int) (*repositories.PaginatedResponse[*entities.Account], error) {
 	return nil, nil
 }
