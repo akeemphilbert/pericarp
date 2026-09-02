@@ -19,6 +19,8 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/ddd"
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/compaction"
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
+	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure"
+	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/migration"
 )
 
 const dateLayout = "2006-01-02"
@@ -38,7 +40,7 @@ func (w *world) registerSteps(sc *godog.ScenarioContext) {
 	sc.Step(`^a state provider that fails for "([^"]*)"$`, w.aProviderThatFailsFor)
 	sc.Step(`^a delete is recognised as any event type ending in "([^"]*)"$`, w.aDeleteIsRecognisedBySuffix)
 	sc.Step(`^compaction processes (\d+) events per batch$`, w.compactionProcessesPerBatch)
-	sc.Step(`^the store fails to delete the second batch$`, w.theStoreFailsToDeleteTheSecondBatch)
+	sc.Step(`^the store fails to delete the (first|second) batch$`, w.theStoreFailsToDeleteBatch)
 	sc.Step(`^Retain keeps events of type "([^"]*)"$`, w.retainKeepsType)
 	sc.Step(`^Retain keeps events created on or after "([^"]*)"$`, w.retainKeepsFrom)
 	sc.Step(`^the store has already been compacted up to position (\d+)$`, w.theStoreHasAlreadyBeenCompacted)
@@ -103,6 +105,10 @@ func (w *world) registerSteps(sc *godog.ScenarioContext) {
 	sc.Step(`^the archive is newline-delimited JSON with an export version header$`, w.archiveIsJSONLWithHeader)
 	sc.Step(`^each archived line carries the event's identifier, aggregate, type, payload, sequence_no and position$`, w.eachArchivedLineIsComplete)
 	sc.Step(`^the archived events are in ascending position order$`, w.archivedEventsAscending)
+	sc.Step(`^the archive has exactly one export version header, on its first line$`, w.archiveHasOneHeaderFirst)
+	sc.Step(`^no event identifier appears twice in the archive$`, w.noDuplicateArchivedIdentifiers)
+	sc.Step(`^the archive imports cleanly into a fresh store$`, w.archiveImportsCleanly)
+	sc.Step(`^every archived event is in that store with its original identifier, aggregate, sequence_no and position$`, w.importedEventsMatchTheArchive)
 	sc.Step(`^the archive was fsynced before the first event was deleted$`, w.archiveFsyncedBeforeDelete)
 	sc.Step(`^the compaction events were appended before the first event was deleted$`, w.appendedBeforeDelete)
 
@@ -201,12 +207,16 @@ func metadataInt64(metadata map[string]any, key string) (int64, bool) {
 	}
 }
 
-// archiveContents is a parsed archive file.
+// archiveContents is a parsed archive file. headerLines records where every
+// version header sits (1-based, counting non-empty lines) rather than just
+// that one exists: a header anywhere but the first line is a file no importer
+// will read past, which is exactly the failure worth catching.
 type archiveContents struct {
-	hasHeader bool
-	version   int
-	lines     [][]byte
-	events    []domain.EventEnvelope[any]
+	hasHeader   bool
+	version     int
+	headerLines []int
+	lines       [][]byte
+	events      []domain.EventEnvelope[any]
 }
 
 func (w *world) readArchive() (archiveContents, error) {
@@ -216,10 +226,12 @@ func (w *world) readArchive() (archiveContents, error) {
 	if err != nil {
 		return parsed, fmt.Errorf("read archive: %w", err)
 	}
+	lineNo := 0
 	for _, line := range bytes.Split(raw, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
+		lineNo++
 
 		var header struct {
 			PericarpExport int `json:"pericarp_export"`
@@ -227,6 +239,7 @@ func (w *world) readArchive() (archiveContents, error) {
 		if err := json.Unmarshal(line, &header); err == nil && header.PericarpExport != 0 {
 			parsed.hasHeader = true
 			parsed.version = header.PericarpExport
+			parsed.headerLines = append(parsed.headerLines, lineNo)
 			continue
 		}
 
@@ -381,11 +394,22 @@ func (w *world) compactionProcessesPerBatch(size int) error {
 	return nil
 }
 
-func (w *world) theStoreFailsToDeleteTheSecondBatch() error {
+func (w *world) theStoreFailsToDeleteBatch(which string) error {
 	if w.observed == nil {
 		return fmt.Errorf("the %s store cannot be made to fail a delete", w.kind)
 	}
-	w.observed.failDeleteOn = 2
+	// The refusal happens before the wrapper delegates, so the store never
+	// sees the call: that is the window between the archive's fsync and the
+	// delete committing, which is where an interrupted run leaves a segment
+	// nothing accounts for.
+	switch which {
+	case "first":
+		w.observed.failDeleteOn = 1
+	case "second":
+		w.observed.failDeleteOn = 2
+	default:
+		return fmt.Errorf("cannot fail the %q batch", which)
+	}
 	return nil
 }
 
@@ -1067,6 +1091,89 @@ func (w *world) archivedEventsAscending() error {
 
 func (w *world) indexIn(journal []string, what string) int {
 	return slices.Index(journal, what)
+}
+
+func (w *world) archiveHasOneHeaderFirst() error {
+	parsed, err := w.readArchive()
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(parsed.headerLines, []int{1}) {
+		return fmt.Errorf("expected one export version header on line 1, found headers on lines %v",
+			parsed.headerLines)
+	}
+	return nil
+}
+
+func (w *world) noDuplicateArchivedIdentifiers() error {
+	parsed, err := w.readArchive()
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, event := range parsed.events {
+		if seen[event.ID] {
+			return fmt.Errorf("event %s appears more than once in the archive", event.ID)
+		}
+		seen[event.ID] = true
+	}
+	return nil
+}
+
+// archiveImportsCleanly restores the archive the way an operator would, with
+// the real importer, into a store that has never seen any of it.
+func (w *world) archiveImportsCleanly(ctx context.Context) error {
+	file, err := os.Open(w.archivePath)
+	if err != nil {
+		return fmt.Errorf("open the archive for import: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	parsed, err := w.readArchive()
+	if err != nil {
+		return err
+	}
+
+	w.imported = infrastructure.NewMemoryStore()
+	report, err := migration.Import(ctx, w.imported, file, migration.ImportOptions{})
+	if err != nil {
+		return fmt.Errorf("the archive did not import: %w", err)
+	}
+	if int(report.Count) != len(parsed.events) {
+		return fmt.Errorf("expected the import to take all %d archived events, it took %d",
+			len(parsed.events), report.Count)
+	}
+	return nil
+}
+
+func (w *world) importedEventsMatchTheArchive(ctx context.Context) error {
+	if w.imported == nil {
+		return errors.New("no archive has been imported yet")
+	}
+	parsed, err := w.readArchive()
+	if err != nil {
+		return err
+	}
+
+	for _, archived := range parsed.events {
+		restored, err := w.imported.GetEventByID(ctx, archived.ID)
+		if err != nil {
+			return fmt.Errorf("event %s (position %d) is not in the imported store: %w",
+				archived.ID, archived.Position, err)
+		}
+		switch {
+		case restored.AggregateID != archived.AggregateID:
+			return fmt.Errorf("event %s came back under aggregate %q, not %q",
+				archived.ID, restored.AggregateID, archived.AggregateID)
+		case restored.SequenceNo != archived.SequenceNo:
+			return fmt.Errorf("event %s came back at sequence_no %d, not %d",
+				archived.ID, restored.SequenceNo, archived.SequenceNo)
+		case restored.Position != archived.Position:
+			return fmt.Errorf("event %s came back at position %d, not %d",
+				archived.ID, restored.Position, archived.Position)
+		}
+	}
+	return nil
 }
 
 func (w *world) archiveFsyncedBeforeDelete() error {

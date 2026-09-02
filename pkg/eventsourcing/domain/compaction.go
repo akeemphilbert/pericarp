@@ -12,6 +12,31 @@ import (
 // rather than archive history it will never remove.
 var ErrCompactionNotSupported = errors.New("event store does not support compaction")
 
+// MetadataSnapshot is the event-metadata key an event sets to declare that
+// its payload is the aggregate's complete state rather than a change to it.
+// Compaction sets it on every compaction event.
+//
+// It is what lets replay accept such an event above the sequence number it was
+// expecting. A snapshot's payload already folds in the effect of every event it
+// replaced, so the numbers it skips carry no information replay still needs —
+// which is not true of an ordinary event, where a skipped number means a lost
+// one.
+const MetadataSnapshot = "snapshot"
+
+// IsSnapshot reports whether an event's metadata declares it a full-state
+// snapshot. Metadata that has round-tripped through a SQL store arrives as
+// decoded JSON, so the flag is read leniently.
+func IsSnapshot(metadata map[string]any) bool {
+	switch v := metadata[MetadataSnapshot].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	default:
+		return false
+	}
+}
+
 // CompactionManifest describes one batch of events that a compaction run
 // archived and then deleted. It is the record that makes a run resumable: a
 // later run skips every position a recorded manifest already covers, so an

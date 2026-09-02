@@ -21,6 +21,11 @@ func TestApplyEventSnapshotStart(t *testing.T) {
 	event := func(sequenceNo int) domain.EventEnvelope[any] {
 		return domain.ToAnyEnvelope(domain.NewEventEnvelope("payload", "resource-1", "Resource.Compacted", sequenceNo))
 	}
+	snapshot := func(sequenceNo int) domain.EventEnvelope[any] {
+		e := event(sequenceNo)
+		e.Metadata = map[string]any{domain.MetadataSnapshot: true}
+		return e
+	}
 
 	t.Run("a fresh entity accepts a snapshot at any sequence number", func(t *testing.T) {
 		t.Parallel()
@@ -46,6 +51,54 @@ func TestApplyEventSnapshotStart(t *testing.T) {
 		}
 		if err := entity.ApplyEvent(ctx, event(5)); err != nil {
 			t.Fatalf("expected the next sequence number to be accepted, got %v", err)
+		}
+	})
+
+	t.Run("a snapshot may sit above the number replay expected", func(t *testing.T) {
+		t.Parallel()
+		// What retention leaves behind: a kept event, then compacted-away
+		// history, then the snapshot that replaced it.
+		entity := NewBaseEntity("resource-1")
+		if err := entity.ApplyEvent(ctx, event(2)); err != nil {
+			t.Fatalf("apply the retained event: %v", err)
+		}
+
+		if err := entity.ApplyEvent(ctx, snapshot(4)); err != nil {
+			t.Fatalf("expected a snapshot above the expected sequence to be accepted, got %v", err)
+		}
+		if got := entity.GetSequenceNo(); got != 4 {
+			t.Fatalf("expected the entity at version 4, got %d", got)
+		}
+		if err := entity.ApplyEvent(ctx, event(5)); err != nil {
+			t.Fatalf("expected history to continue from the snapshot, got %v", err)
+		}
+	})
+
+	t.Run("a snapshot may not go backwards", func(t *testing.T) {
+		t.Parallel()
+		entity := NewBaseEntity("resource-1")
+		if err := entity.ApplyEvent(ctx, event(4)); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+
+		if err := entity.ApplyEvent(ctx, snapshot(2)); !errors.Is(err, ErrInvalidEventSequenceNo) {
+			t.Fatalf("expected a snapshot below the current version to be refused, got %v", err)
+		}
+	})
+
+	t.Run("an ordinary event still may not skip, whatever it carries", func(t *testing.T) {
+		t.Parallel()
+		entity := NewBaseEntity("resource-1")
+		if err := entity.ApplyEvent(ctx, event(2)); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+
+		// Metadata present but not declaring a snapshot: still an ordinary
+		// event, so the gap is still a lost event.
+		notASnapshot := event(4)
+		notASnapshot.Metadata = map[string]any{"compacted_to": int64(9)}
+		if err := entity.ApplyEvent(ctx, notASnapshot); !errors.Is(err, ErrInvalidEventSequenceNo) {
+			t.Fatalf("expected an ordinary event to be refused for skipping, got %v", err)
 		}
 	})
 

@@ -129,7 +129,16 @@ func (e *BaseEntity) applyEventInternal(event domain.EventEnvelope[any]) error {
 			return fmt.Errorf("%w: expected at least 1, got %d", ErrInvalidEventSequenceNo, event.SequenceNo)
 		}
 	} else if expectedSequenceNo := e.sequenceNo + 1; event.SequenceNo != expectedSequenceNo {
-		return fmt.Errorf("%w: expected %d, got %d", ErrInvalidEventSequenceNo, expectedSequenceNo, event.SequenceNo)
+		// A full-state snapshot is allowed to sit above the number replay was
+		// expecting. Compaction retires the events in between and folds their
+		// effect into the snapshot's payload, so the numbers it skips carry no
+		// information left to lose — and retention can leave exactly that
+		// shape, an event kept back with compacted history on both sides of it.
+		// Only an event that declares itself a snapshot gets that latitude, and
+		// only forwards: for an ordinary event a gap still means a lost event.
+		if event.SequenceNo < expectedSequenceNo || !domain.IsSnapshot(event.Metadata) {
+			return fmt.Errorf("%w: expected %d, got %d", ErrInvalidEventSequenceNo, expectedSequenceNo, event.SequenceNo)
+		}
 	}
 
 	// Mark event as applied

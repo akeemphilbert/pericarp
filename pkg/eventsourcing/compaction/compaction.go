@@ -21,7 +21,19 @@
 // Deleting is transactional per batch, and each batch's archive segment is
 // recorded as a manifest in the same transaction, so an interrupted run
 // resumes at the first batch it never recorded instead of archiving and
-// compacting the same history twice.
+// compacting the same history twice. A batch that fails after its bytes are
+// already in the archive has them cut back off (see ArchiveFile), so the
+// archive holds only segments a manifest accounts for.
+//
+// One window stays open: a hard crash between a batch's fsync and its delete
+// commit leaves a durable segment that no manifest covers and no rollback
+// ever ran for. The next run resumes from the last recorded manifest and
+// archives those events again, so an archive that survived a crash can hold
+// an event twice. Restore such an archive with
+// migration.ImportOptions.SkipExisting, which skips an event already present
+// instead of colliding on its ID; the duplicated span is the one below the
+// first manifest's FromPosition, and each manifest's Checksum identifies the
+// segment it does account for.
 //
 // # What stays out
 //
@@ -39,6 +51,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -101,6 +114,25 @@ type Syncer interface {
 	Sync() error
 }
 
+// ArchiveFile is the optional ability of an archive to report its current
+// length and be cut back to a previous one. *os.File satisfies it, and an
+// archive that does buys two things a bare writer cannot have:
+//
+//   - the version header goes only into an archive that is empty, so a run
+//     appending to an archive an earlier run started never writes a second
+//     header into the middle of the file, where no importer would read it;
+//   - a batch that fails after its bytes are already down is rolled back, so
+//     the archive never keeps a segment that no manifest accounts for and a
+//     later run cannot archive the same events twice.
+//
+// Without it Compact falls back to deciding the header from the resume
+// position, and reports a failed batch's stray segment in the error instead of
+// removing it.
+type ArchiveFile interface {
+	Stat() (os.FileInfo, error)
+	Truncate(size int64) error
+}
+
 // Retain holds chosen events back from both compaction and the archive: a
 // retained event is neither archived nor deleted, and stays in the live store
 // below the compaction event. What to retain is policy set by the caller; this
@@ -144,13 +176,15 @@ type Options struct {
 	Watermark int64
 
 	// FromPosition resumes an archive that already holds the history up to
-	// this position: the run starts above it and, because the archive is being
-	// appended to rather than started, writes no version header. Leave it zero
-	// for a fresh archive.
+	// this position, so the run starts above it. Leave it zero for a fresh
+	// archive.
 	//
 	// It is a floor, not the whole resume story: recorded manifests raise the
 	// starting position further, so an interrupted run resumes correctly even
-	// when the caller passes nothing.
+	// when the caller passes nothing. It does not decide whether the archive
+	// gets a version header — that follows from whether the destination is
+	// empty (see ArchiveFile), so leaving this zero while resuming from a
+	// manifest cannot put a header in the middle of a file.
 	FromPosition int64
 
 	// EventType is the type given to every compaction event the run appends,
@@ -281,19 +315,27 @@ func Compact(ctx context.Context, store domain.EventStore, opts Options) (Report
 		return report, err
 	}
 
-	writeHeader := opts.FromPosition == 0
+	writeHeader, err := archiveNeedsHeader(opts.Archive, from)
+	if err != nil {
+		return report, err
+	}
+
 	for start := 0; start < len(retiring); start += batchSize {
 		end := min(start+batchSize, len(retiring))
 		batch := retiring[start:end]
 
+		// Where the archive ended before this batch, so a batch that fails
+		// after its bytes are down can be rolled back off the end of the file.
+		mark := archiveMark(opts.Archive)
+
 		segment, err := archiveBatch(opts.Archive, syncer, batch, writeHeader)
 		if err != nil {
-			return report, err
+			return report, rollbackArchive(opts.Archive, mark, err)
 		}
 		writeHeader = false
 
 		if err := appendCompactionEvents(ctx, compactable, batch, plans, opts); err != nil {
-			return report, err
+			return report, rollbackArchive(opts.Archive, mark, err)
 		}
 		report.CompactionEvents = countAppended(plans)
 
@@ -311,8 +353,8 @@ func Compact(ctx context.Context, store domain.EventStore, opts Options) (Report
 			CreatedAt:    time.Now().UTC(),
 		}
 		if err := compactable.RetireEvents(ctx, ids, manifest); err != nil {
-			return report, fmt.Errorf("retire events at positions %d-%d: %w",
-				manifest.FromPosition, manifest.ToPosition, err)
+			return report, rollbackArchive(opts.Archive, mark, fmt.Errorf(
+				"retire events at positions %d-%d: %w", manifest.FromPosition, manifest.ToPosition, err))
 		}
 
 		report.Manifests = append(report.Manifests, manifest)
@@ -321,6 +363,71 @@ func Compact(ctx context.Context, store domain.EventStore, opts Options) (Report
 	}
 
 	return report, nil
+}
+
+// archiveNeedsHeader decides whether this run writes the export version
+// header. The header is the first line of an export file and is meaningless
+// anywhere else — an importer reads it only there — so it belongs to an
+// archive that is empty, not to a run that happens to start at position zero.
+// An archive that cannot report its length falls back to the resolved resume
+// position, which folds in the recorded manifests rather than trusting
+// Options.FromPosition alone.
+func archiveNeedsHeader(w io.Writer, from int64) (bool, error) {
+	file, ok := w.(ArchiveFile)
+	if !ok {
+		return from == 0, nil
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false, fmt.Errorf("archive: inspect destination: %w", err)
+	}
+	return info.Size() == 0, nil
+}
+
+// archiveMark records how long the archive is now, or -1 when it cannot say.
+func archiveMark(w io.Writer) int64 {
+	file, ok := w.(ArchiveFile)
+	if !ok {
+		return -1
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return -1
+	}
+	return info.Size()
+}
+
+// rollbackArchive cuts a failed batch's bytes back off the archive and returns
+// cause unchanged (wrapped only where the rollback itself had something to
+// report).
+//
+// The bytes are already fsynced by the time most of these failures happen —
+// that is the point of the ordering — so without this the archive would keep a
+// segment that no manifest accounts for, and the next run, resuming from the
+// last recorded manifest, would archive the same events a second time. Cutting
+// them off loses nothing: the events they describe are still live in the store,
+// which is exactly why the batch is being abandoned.
+//
+// It closes the window for every failure the process survives, which is every
+// failure that returns an error. A hard crash between the fsync and the
+// delete's commit runs no rollback, so a stray segment can still outlive the
+// run; see the package documentation on restoring with SkipExisting.
+func rollbackArchive(w io.Writer, mark int64, cause error) error {
+	file, ok := w.(ArchiveFile)
+	if !ok || mark < 0 {
+		return fmt.Errorf("%w (the archive keeps this batch's segment, which no manifest covers: "+
+			"restore it with migration.ImportOptions.SkipExisting)", cause)
+	}
+
+	if err := file.Truncate(mark); err != nil {
+		return fmt.Errorf("%w (and rolling the archive back to %d bytes failed: %v)", cause, mark, err)
+	}
+	if syncer, ok := w.(Syncer); ok {
+		if err := syncer.Sync(); err != nil {
+			return fmt.Errorf("%w (and fsyncing the rolled-back archive failed: %v)", cause, err)
+		}
+	}
+	return cause
 }
 
 // collect reads the events the run will retire: everything above from and at
@@ -579,6 +686,11 @@ func appendCompactionEvents(
 		envelope := domain.NewEventEnvelope[any](plan.state, event.AggregateID, opts.EventType, plan.currentVersion+1)
 		envelope.Metadata[MetadataCompactedFrom] = plan.lowest
 		envelope.Metadata[MetadataCompactedTo] = opts.Watermark
+		// Declares the payload to be the aggregate's whole state, which is what
+		// lets replay accept this event above the sequence number it expected —
+		// retention can leave a survivor below it with retired history in
+		// between. See domain.MetadataSnapshot.
+		envelope.Metadata[domain.MetadataSnapshot] = true
 
 		if err := store.Append(ctx, event.AggregateID, plan.currentVersion, envelope); err != nil {
 			return fmt.Errorf("append compaction event for %s: %w", event.AggregateID, err)

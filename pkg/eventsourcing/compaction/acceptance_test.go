@@ -118,6 +118,10 @@ type world struct {
 
 	rebuilt  *resource
 	applyErr error
+
+	// imported is the store the archive was restored into, kept so the step
+	// after the import can check what landed in it.
+	imported *infrastructure.MemoryStore
 }
 
 func initializeScenario(kind string) func(*godog.ScenarioContext) {
@@ -309,6 +313,13 @@ func (a *archiveFile) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+// Stat and Truncate forward the real file's capabilities, so the run under
+// test makes its header and rollback decisions against the actual archive
+// rather than falling back to the writer-only path.
+func (a *archiveFile) Stat() (os.FileInfo, error) { return a.file.Stat() }
+
+func (a *archiveFile) Truncate(size int64) error { return a.file.Truncate(size) }
 
 func (a *archiveFile) Sync() error {
 	if a.failSync {
