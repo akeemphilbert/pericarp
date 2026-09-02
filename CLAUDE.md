@@ -48,6 +48,8 @@ pkg/
 │   │   └── file_eventstore.go        # File-based JSON store (development)
 │   ├── application/                  # UnitOfWork
 │   │   └── unit_of_work.go           # SimpleUnitOfWork — tracks entities, atomic commit
+│   ├── compaction/                   # Collapse history to one full-state event per aggregate
+│   │   └── compaction.go             # Compact() — archive, fsync, append snapshot, then delete
 │   └── subscriptions/                # Opt-in crash-safe background subscriber runtime
 │       ├── subscriber.go             # Subscriber loop over EventStore.ReadAfter
 │       ├── checkpoint.go             # CheckpointStore/Batch interfaces
@@ -65,6 +67,8 @@ pkg/
 **EventStore** (`domain/eventstore.go`) — Interface for persistence. `Append()` uses optimistic concurrency (`expectedVersion`). Two implementations: `MemoryStore` (tests) and `FileStore` (dev).
 
 **SimpleUnitOfWork** (`application/unit_of_work.go`) — Tracks multiple entities, commits their uncommitted events atomically to an EventStore. Optionally dispatches events to an EventDispatcher after commit.
+
+**Compact** (`compaction/compaction.go`) — Collapses an event store's history at or below a watermark into one full-state event per surviving aggregate and moves the retired events to a JSONL archive. Per batch: write the archive, fsync, append the compaction events, then delete-and-record-the-manifest in one transaction. Stores opt in via `domain.CompactableEventStore` (`MemoryStore` and `GormEventStore` do; `FileStore` and `DynamoEventStore` do not, and are refused).
 
 **EventDispatcher** (`domain/event_dispatcher.go`) — Subscribe to event types with pattern matching (`user.created`, `user.*`, `*.created`, `*.*`). Handlers run in parallel via `errgroup`.
 
