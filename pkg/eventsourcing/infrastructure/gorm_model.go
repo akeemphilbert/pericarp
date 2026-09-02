@@ -63,3 +63,23 @@ type GormEventModel struct {
 func (GormEventModel) TableName() string {
 	return "events"
 }
+
+// GormCompactionModel is the GORM model for the compactions table — one row
+// per batch a compaction run archived and deleted. The row is written in the
+// same transaction as the batch's delete, so it is the durable record that
+// makes a run resumable: a later run skips every position an existing row
+// already covers.
+type GormCompactionModel struct {
+	ID           string    `gorm:"primaryKey;column:id"`
+	FromPosition int64     `gorm:"column:from_position;index"`
+	ToPosition   int64     `gorm:"column:to_position;index"`
+	Watermark    int64     `gorm:"column:watermark"`
+	EventCount   int       `gorm:"column:event_count"`
+	Checksum     string    `gorm:"column:checksum"`
+	CreatedAt    time.Time `gorm:"column:created_at"`
+}
+
+// TableName returns the table name for the compaction model.
+func (GormCompactionModel) TableName() string {
+	return "compactions"
+}
