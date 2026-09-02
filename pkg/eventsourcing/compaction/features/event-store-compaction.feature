@@ -263,6 +263,28 @@ Feature: Compacting an event store to one full-state event per live aggregate
       And "resource-2" has exactly one event left, of type "Resource.Compacted"
       And 2 compactions are recorded
 
+    Scenario: Two runs appending to the same archive leave one importable file
+      # The second run is told nothing about where to resume; it works that out
+      # from the compactions the first run recorded. Resuming that way still
+      # continues an export that already exists, so the file keeps the one
+      # header it started with — a header anywhere but the first line is a file
+      # no importer can read, which would strand every event in it.
+      Given a SQLite-backed event store
+      And the event store holds:
+        | aggregate  | event type       | position |
+        | resource-1 | Resource.Created | 1        |
+        | resource-1 | Resource.Renamed | 2        |
+      When the store is compacted up to position 2
+      And the event store then holds:
+        | aggregate  | event type       | position |
+        | resource-2 | Resource.Created | 7        |
+        | resource-2 | Resource.Renamed | 8        |
+      And the store is compacted up to position 8
+      Then the archive holds the 4 retired events
+      And the archive has exactly one export version header, on its first line
+      And the archive imports cleanly into a fresh store
+      And every archived event is in that store with its original identifier, aggregate, sequence_no and position
+
     Scenario: A batch that fails to delete records nothing and leaves earlier batches recorded
       Given a SQLite-backed event store
       And compaction processes 2 events per batch
@@ -280,6 +302,27 @@ Feature: Compacting an event store to one full-state event per live aggregate
       And exactly one compaction is recorded, covering positions 1 through 2
       And a rerun compacts only the events at positions 3 and 4
 
+    Scenario: A run interrupted between the archive fsync and the delete does not archive the same batch twice
+      # The window the ordering opens on purpose: the segment is already durable
+      # when the delete that would have recorded its manifest never commits, so
+      # the rerun meets a segment in the archive that nothing accounts for. It
+      # may recognise that segment or work around it; what it may not do is
+      # leave the aggregate with two snapshots or the archive unrestorable.
+      Given a SQLite-backed event store
+      And the event store holds:
+        | aggregate  | event type       | position |
+        | resource-1 | Resource.Created | 1        |
+        | resource-1 | Resource.Renamed | 2        |
+        | resource-2 | Resource.Created | 3        |
+      And the store fails to delete the first batch
+      When the store is compacted up to position 3
+      And the store is compacted up to position 3 again
+      Then compaction succeeds
+      And "resource-1" has exactly one event left, of type "Resource.Compacted"
+      And "resource-2" has exactly one event left, of type "Resource.Compacted"
+      And no event identifier appears twice in the archive
+      And the archive imports cleanly into a fresh store
+
   Rule: Retention holds chosen events back from both compaction and the archive
 
     Scenario: Events of a retained type stay in the live store
@@ -294,6 +337,25 @@ Feature: Compacting an event store to one full-state event per live aggregate
       And the archive does not hold the "Resource.Audited" event
       And the archive holds the 2 events at positions 1 and 3
 
+    Scenario: A retained event in the middle of history still rehydrates the aggregate
+      # The retained event survives with history compacted away on both sides of
+      # it, so the live story is the retained event followed by the compaction
+      # event. Replay accepts a snapshot as its first event but refuses a hole
+      # after one, so those two have to meet. Nothing here says which of the two
+      # gives ground, so nothing here asserts a version.
+      Given Retain keeps events of type "Resource.Audited"
+      And the event store holds:
+        | aggregate  | event type       | position |
+        | resource-1 | Resource.Created | 1        |
+        | resource-1 | Resource.Audited | 2        |
+        | resource-1 | Resource.Renamed | 3        |
+      And the provider reports "resource-1" as named "final name" and tagged "archived"
+      When the store is compacted up to position 3
+      And "resource-1" is rebuilt from the events in the store
+      Then the rebuilt aggregate is named "final name" and tagged "archived"
+      And the "Resource.Audited" event is still in the store at position 2
+      And the archive does not hold the "Resource.Audited" event
+
     Scenario: A retained event stays below the compaction event
       Given Retain keeps events of type "Resource.Audited"
       And the event store holds:
@@ -303,6 +365,20 @@ Feature: Compacting an event store to one full-state event per live aggregate
       When the store is compacted up to position 2
       Then "resource-1" has 2 events left
       And the retained event comes before the compaction event in position order
+
+    Scenario: An aggregate whose newest event is retained still rehydrates
+      Given Retain keeps events of type "Resource.Audited"
+      And the event store holds:
+        | aggregate  | event type       | position |
+        | resource-1 | Resource.Created | 1        |
+        | resource-1 | Resource.Audited | 2        |
+      And the provider reports "resource-1" as named "final name" and tagged "archived"
+      When the store is compacted up to position 2
+      And "resource-1" is rebuilt from the events in the store
+      Then the rebuilt aggregate is named "final name" and tagged "archived"
+      And the rebuilt aggregate is at version 3
+      And the "Resource.Audited" event is still in the store at position 2
+      And the archive does not hold the "Resource.Audited" event
 
     Scenario: Events newer than the retention time stay in the live store
       Given Retain keeps events created on or after "2026-08-01"
@@ -314,6 +390,19 @@ Feature: Compacting an event store to one full-state event per live aggregate
       Then the event at position 2 is still in the store
       And the archive holds only the event at position 1
 
+    Scenario: An aggregate holding an event retained by its date still rehydrates
+      Given Retain keeps events created on or after "2026-08-01"
+      And the event store holds:
+        | aggregate  | event type       | position | created    |
+        | resource-1 | Resource.Created | 1        | 2026-06-01 |
+        | resource-1 | Resource.Renamed | 2        | 2026-08-15 |
+      And the provider reports "resource-1" as named "final name" and tagged "archived"
+      When the store is compacted up to position 2
+      And "resource-1" is rebuilt from the events in the store
+      Then the rebuilt aggregate is named "final name" and tagged "archived"
+      And the rebuilt aggregate is at version 3
+      And the event at position 2 is still in the store
+
     Scenario: An aggregate whose every event is retained is not compacted at all
       Given Retain keeps events of type "Resource.Audited"
       And the event store holds:
@@ -324,6 +413,26 @@ Feature: Compacting an event store to one full-state event per live aggregate
       Then "resource-1" still has its original 2 events
       And no compaction event was appended for "resource-1"
       And nothing was written to the archive
+
+    Scenario: A compacted aggregate that kept a retained event goes on recording new history
+      # Compaction is not the end of the aggregate's life. Whatever version the
+      # run leaves it at has to be the version the next event builds on, or the
+      # first thing the aggregate does after being compacted breaks its replay.
+      # The rebuilt name comes from the new event and the tag from the
+      # compaction event, so both are proved to have been applied, in order.
+      Given Retain keeps events of type "Resource.Audited"
+      And the event store holds:
+        | aggregate  | event type       | position |
+        | resource-1 | Resource.Created | 1        |
+        | resource-1 | Resource.Renamed | 2        |
+        | resource-1 | Resource.Audited | 3        |
+      And the provider reports "resource-1" as named "final name" and tagged "archived"
+      When the store is compacted up to position 3
+      And "resource-1" records a "Resource.Renamed" event
+      And "resource-1" is rebuilt from the events in the store
+      Then the rebuilt aggregate is named "resource-1" and tagged "archived"
+      And the rebuilt aggregate is at version 5
+      And the "Resource.Audited" event is still in the store at position 3
 
   Rule: A compacted store reads back like any other store
 
