@@ -282,8 +282,13 @@ Feature: Compacting an event store to one full-state event per live aggregate
       And the store is compacted up to position 8
       Then the archive holds the 4 retired events
       And the archive has exactly one export version header, on its first line
+      And the archived events are still at their original positions 1, 2, 7 and 8
       And the archive imports cleanly into a fresh store
-      And every archived event is in that store with its original identifier, aggregate, sequence_no and position
+      And every archived event is in that store with its original identifier, aggregate and sequence_no
+      # The original positions live in the archive file, which is what a resumed
+      # run reads them back from. Importing is a replay, not a restore of the
+      # global feed: the destination assigns positions of its own, so the ones
+      # the archive carries are asserted there and not in the imported store.
 
     Scenario: A batch that fails to delete records nothing and leaves earlier batches recorded
       Given a SQLite-backed event store

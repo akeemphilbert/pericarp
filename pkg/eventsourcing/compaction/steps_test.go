@@ -108,7 +108,8 @@ func (w *world) registerSteps(sc *godog.ScenarioContext) {
 	sc.Step(`^the archive has exactly one export version header, on its first line$`, w.archiveHasOneHeaderFirst)
 	sc.Step(`^no event identifier appears twice in the archive$`, w.noDuplicateArchivedIdentifiers)
 	sc.Step(`^the archive imports cleanly into a fresh store$`, w.archiveImportsCleanly)
-	sc.Step(`^every archived event is in that store with its original identifier, aggregate, sequence_no and position$`, w.importedEventsMatchTheArchive)
+	sc.Step(`^the archived events are still at their original positions (\d+), (\d+), (\d+) and (\d+)$`, w.archivedPositionsAre)
+	sc.Step(`^every archived event is in that store with its original identifier, aggregate and sequence_no$`, w.importedEventsMatchTheArchive)
 	sc.Step(`^the archive was fsynced before the first event was deleted$`, w.archiveFsyncedBeforeDelete)
 	sc.Step(`^the compaction events were appended before the first event was deleted$`, w.appendedBeforeDelete)
 
@@ -969,6 +970,18 @@ func (w *world) archiveHoldsOnlyPosition(position int64) error {
 	return expectPositions(positions, position)
 }
 
+// archivedPositionsAre checks the positions the archive file itself carries.
+// That is where they survive — an import replays the events and the
+// destination assigns positions of its own — and it is what a resumed run
+// reads them back from.
+func (w *world) archivedPositionsAre(first, second, third, fourth int64) error {
+	positions, err := w.archivePositions()
+	if err != nil {
+		return err
+	}
+	return expectPositions(positions, first, second, third, fourth)
+}
+
 func (w *world) archiveHoldsNothingFor(aggregate string) error {
 	parsed, err := w.readArchive()
 	if err != nil {
@@ -1168,9 +1181,6 @@ func (w *world) importedEventsMatchTheArchive(ctx context.Context) error {
 		case restored.SequenceNo != archived.SequenceNo:
 			return fmt.Errorf("event %s came back at sequence_no %d, not %d",
 				archived.ID, restored.SequenceNo, archived.SequenceNo)
-		case restored.Position != archived.Position:
-			return fmt.Errorf("event %s came back at position %d, not %d",
-				archived.ID, restored.Position, archived.Position)
 		}
 	}
 	return nil
