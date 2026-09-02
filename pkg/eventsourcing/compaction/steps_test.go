@@ -662,20 +662,45 @@ func (w *world) aggregateStillHasOriginalEvents(ctx context.Context, aggregate s
 	return nil
 }
 
+// allOriginalEventsStillPresent counts the survivors aggregate by aggregate
+// rather than through the global feed. This is the step the unsupported-store
+// outline reaches, and a store that cannot retire events may equally have no
+// global ordering — DynamoEventStore has neither, and asking it for the feed
+// fails with ErrGlobalOrderingNotSupported before the assertion is even made.
+// GetEvents is on the EventStore interface itself, so every kind answers it,
+// and compaction never invents an aggregate, so the aggregates the scenario
+// seeded are the whole store.
 func (w *world) allOriginalEventsStillPresent(ctx context.Context, want int) error {
-	events, err := w.feed(ctx)
-	if err != nil {
-		return err
-	}
-	if len(events) != want {
-		return fmt.Errorf("expected all %d original events to survive, the store holds %d", want, len(events))
-	}
-	for _, event := range events {
-		if event.EventType == w.eventType {
-			return fmt.Errorf("the store holds a %s event, so it was not left untouched", w.eventType)
+	total := 0
+	for _, aggregateID := range w.seededAggregates() {
+		events, err := w.base().GetEvents(ctx, aggregateID)
+		if err != nil {
+			return fmt.Errorf("read the history of %s: %w", aggregateID, err)
 		}
+		for _, event := range events {
+			if event.EventType == w.eventType {
+				return fmt.Errorf("%s holds a %s event, so the store was not left untouched",
+					aggregateID, w.eventType)
+			}
+		}
+		total += len(events)
+	}
+	if total != want {
+		return fmt.Errorf("expected all %d original events to survive, the store holds %d", want, total)
 	}
 	return nil
+}
+
+// seededAggregates lists the aggregates the scenario declared, in the order
+// they first appear in its tables.
+func (w *world) seededAggregates() []string {
+	var ids []string
+	for _, row := range w.pending {
+		if !slices.Contains(ids, row.aggregate) {
+			ids = append(ids, row.aggregate)
+		}
+	}
+	return ids
 }
 
 func (w *world) countCompactionEvents(ctx context.Context) (int, error) {
