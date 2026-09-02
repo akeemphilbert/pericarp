@@ -35,6 +35,16 @@
 // first manifest's FromPosition, and each manifest's Checksum identifies the
 // segment it does account for.
 //
+// # Compaction does not consult subscriber checkpoints
+//
+// Compact deletes the history below its watermark whether or not a background
+// subscriber has read it. A subscriber whose checkpoint is below the watermark
+// never sees the retired events: its next ReadAfter skips straight over the
+// gap they left, and it then receives the compaction events as ordinary feed
+// entries carrying the caller's own event type. Choose a watermark below every
+// live subscriber's checkpoint, or make those handlers treat the compaction
+// event type as a full-state replacement.
+//
 // # What stays out
 //
 // What to retain is policy, and this package only provides the hook (Retain)
@@ -207,8 +217,16 @@ type Options struct {
 	// to the archive only. Defaults to DefaultIsDelete.
 	IsDelete func(event domain.EventEnvelope[any]) bool
 
-	// BatchSize is how many retiring events one batch handles. Values <= 0 use
-	// DefaultBatchSize.
+	// BatchSize is how many retiring events one batch archives, appends for,
+	// and deletes together — and so how much of a run is lost when one batch
+	// fails. Values <= 0 use DefaultBatchSize.
+	//
+	// It does not bound the run's memory: Compact reads every event in scope
+	// before it writes anything, because the whole plan (each aggregate's
+	// state included) has to exist before the first byte is archived for a
+	// failure to leave the store untouched. Memory therefore scales with the
+	// number of events at or below the watermark, not with BatchSize; compact
+	// a long history in several runs with rising watermarks rather than one.
 	BatchSize int
 }
 

@@ -43,7 +43,10 @@ func (j *JSONB) Scan(value any) error {
 // Position is the global, cross-aggregate commit order used by ReadAfter. On
 // Postgres it is assigned by the events_position_seq sequence (the column is
 // omitted from inserts); on single-writer engines like SQLite it is computed
-// as MAX(position)+1 inside the write transaction. Postgres deployments also
+// inside the write transaction as one above the store's high-water mark, which
+// is the greater of this table's maximum and the highest position compaction
+// has retired (see highWaterPosition) — surviving rows alone would let a
+// position be handed out twice. Postgres deployments also
 // carry an xact_id xid8 column (managed by raw migration SQL, not by this
 // struct) used to withhold rows whose inserting transaction may not have
 // committed yet.
