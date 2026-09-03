@@ -2,6 +2,10 @@
 
 .PHONY: help build build-cli test test-unit test-integration clean deps fmt lint
 
+# The one golangci-lint version this repository runs, locally and in CI.
+# Bump it here and in .github/workflows/ci.yml in the same commit.
+GOLANGCI_LINT_VERSION ?= v2.11.3
+
 # Default target
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -21,7 +25,7 @@ build-cli: ## Build the pericarp CLI (migration tool) into bin/
 test: test-unit ## Run all tests
 
 test-unit: ## Run unit tests
-	go test -v -race -coverprofile=coverage.out ./pkg/...
+	go test -v -race -coverprofile=coverage.out ./...
 
 test-integration: ## Run integration tests
 	go test -v -tags=integration ./test/integration/...
@@ -39,12 +43,14 @@ deps: ## Download and tidy dependencies
 fmt: ## Format code
 	go fmt ./...
 
-lint: ## Run linter (requires golangci-lint)
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
-	else \
-		echo "golangci-lint not installed. Run: make install-tools"; \
+lint: ## Run linter (requires golangci-lint $(GOLANGCI_LINT_VERSION))
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint is not installed. Run: make install-tools"; \
+		exit 1; \
 	fi
+	@golangci-lint --version | grep -q "$(patsubst v%,%,$(GOLANGCI_LINT_VERSION))" || \
+		echo "warning: golangci-lint is not $(GOLANGCI_LINT_VERSION) (CI runs that version). Run: make install-tools"
+	golangci-lint run
 
 # Clean targets
 clean: ## Clean build artifacts
@@ -61,7 +67,7 @@ ci: deps fmt lint test ## Run CI pipeline
 
 # Install tools
 install-tools: ## Install development tools
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 # Version targets
 version: ## Show version information

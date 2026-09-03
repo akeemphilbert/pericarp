@@ -44,7 +44,9 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         if: matrix.go-version == '1.25'
         with:
-          version: latest
+          # Pinned: an upstream release must not turn this build red on its
+          # own. Bump here and in the Makefile's GOLANGCI_LINT_VERSION together.
+          version: v2.11.3
       
       - name: Upload coverage
         uses: codecov/codecov-action@v4

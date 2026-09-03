@@ -1,6 +1,6 @@
 # Pericarp Constitution
 
-**Version:** 1.0.0 &nbsp;|&nbsp; **Ratified:** 2026-09-03 &nbsp;|&nbsp; **Last amended:** 2026-09-03
+**Version:** 1.1.0 &nbsp;|&nbsp; **Ratified:** 2026-09-03 &nbsp;|&nbsp; **Last amended:** 2026-09-03
 
 This document states the non-negotiable rules for `pericarp` — the Event Sourcing
 and DDD library the vine-os services build on. Every contributor is bound by it,
@@ -50,10 +50,17 @@ AWS SDK. Infrastructure implements the interfaces the domain declares.
 network. An inward-pointing import graph is what keeps that true, and it is what
 lets a consumer depend on the event contract without inheriting a driver.
 
-**How this is enforced. (ASPIRATIONAL)** Review. The tree satisfies this today —
-no non-test file under `domain/` or `ddd/` imports an outer layer. There is no
-`.golangci.yml`, so no `depguard` rule holds the line; adding one is the gate that
-retires this marker.
+**How this is enforced.** The `depguard` linter, through its
+`article-ii-domain-points-inward` rule in `.golangci.yml`, run by `make lint` and
+the CI linter step. A file under `pkg/eventsourcing/domain/` or `pkg/ddd/` may
+import the standard library, those two packages, `segmentio/ksuid`, and
+`golang.org/x/sync`. Every other import fails, and the likeliest mistakes — the
+outer layers, GORM, pgx, the AWS SDK — fail with a message naming this article.
+
+Test files are exempt, with a reason: `package domain_test` is a separate,
+external package that consumes the domain, and exercising the `EventStore`
+contract against `MemoryStore` is what it is for. The rule binds the compiled
+domain package, which is the non-test files.
 
 ---
 
@@ -129,8 +136,10 @@ _ = f.Close()
 quiet missing event, and a missing event is a wrong answer forever after.
 
 **How this is enforced.** The `errcheck` linter, through `make lint` and the CI
-linter step. Review catches the uncommented `_ =`. The tree carries no `//nolint`
-directives today; a new one names its linter and gives its reason.
+linter step. Review catches the uncommented `_ =`. At amendment 1.1.0 the tree
+carried three `//nolint` directives and three `#nosec` annotations, each naming its
+check and its reason — a snapshot for the record, not a live count. `nolintlint`
+is the gate on the `//nolint` form; review is the gate on `#nosec`.
 
 ---
 
@@ -164,11 +173,9 @@ two goroutines, a dispatcher fanning out through `errgroup`, a subscriber advanc
 a checkpoint. Only `-race` and parallel tests find them before a service does.
 
 **How this is enforced.** `make test`, which runs `go test -v -race
--coverprofile=coverage.out ./pkg/...`, and the CI `Test` job that runs it.
-
-One gap is recorded: `make test` covers `./pkg/...` only, so the tests under
-`cmd/pericarp/` and `examples/` run in no gate. Run them by hand when you touch
-either tree.
+-coverprofile=coverage.out ./...`, and the CI `Test` job that runs it. The target
+covered `./pkg/...` only until amendment 1.1.0, which left the tests under
+`cmd/pericarp/` and `examples/` in no gate; it now covers the whole module.
 
 ---
 
@@ -248,24 +255,44 @@ entry on any pull request that adds a package or changes a contract.
 
 ## Article XIII — Code is formatted and lints clean
 
-**Rule.** Code passes `go fmt` and `golangci-lint run` with no findings. A
-`//nolint` directive names its linter and carries a comment giving the reason.
+**Rule.** Code passes `gofmt` and `golangci-lint run` with no findings. The
+enabled set is the ten linters in `.golangci.yml`:
+
+| Linter | Catches |
+|---|---|
+| `errcheck` | Unhandled errors |
+| `govet` | Suspect constructs the compiler allows |
+| `ineffassign` | Assignments nothing reads |
+| `staticcheck` | Bugs, dead code, and misuse |
+| `unused` | Unreachable identifiers |
+| `misspell` | Misspellings (US locale) |
+| `gocritic` | Diagnostic and style defects |
+| `gosec` | Weak permissions, unsafe paths, hardcoded secrets |
+| `depguard` | Article II — imports that point outward from `domain/` and `ddd/` |
+| `nolintlint` | A `//nolint` that names no linter or gives no reason |
+
+A `//nolint` directive names its linter and carries a comment giving the reason.
+An exclusion rule in `.golangci.yml` carries its reason in the config, next to the
+rule.
 
 **Reason.** A consistent format removes formatting from review. A lint finding is a
 concrete, reproducible line a reviewer can point at, which is the difference
 between grounded feedback and opinion.
 
 **How this is enforced.** `make lint` and the CI linter step in
-`.github/workflows/ci.yml`.
+`.github/workflows/ci.yml`, both running golangci-lint at the one version the
+Makefile pins (`GOLANGCI_LINT_VERSION`) — so a new upstream check cannot turn the
+build red without a deliberate bump. Bump the Makefile and the workflow in the same
+commit. `make lint` fails, with the install command, when the binary is missing; it
+no longer exits 0 having linted nothing. Findings are uncapped, so a clean run means
+every instance is clean, not the first three.
 
-Two gaps are recorded. The repository has no `.golangci.yml`, so the enabled set is
-golangci-lint's default — `errcheck`, `govet`, `ineffassign`, `staticcheck`,
-`unused` — and no article of this constitution is machine-enforced by a linter.
-CI runs `golangci-lint-action@v7` at `version: latest`, so a new upstream check can
-turn the build red without a deliberate bump. And `make lint` prints an install
-hint and exits 0 when the binary is missing, so a local `make dev-test` can pass
-having linted nothing. Closing all three is one pull request, and it retires the
-aspirational marker on Article II.
+Four exclusions exist, each with its reason in `.golangci.yml`: `gosec` and
+`depguard` are relaxed in `_test.go` files, and `gosec`'s `G101` is relaxed in
+`pkg/auth/domain/entities/ontology.go`, `pkg/auth/infrastructure/providers/`, and
+`examples/`, where it matches vocabulary constants, OAuth endpoint URLs, and
+placeholder credentials on the word "credential" or "token". Do not add an
+exclusion without its reason.
 
 ---
 
@@ -334,3 +361,4 @@ request that lands it.
 | Version | Date | Change |
 |---|---|---|
 | 1.0.0 | 2026-09-03 | Ratified |
+| 1.1.0 | 2026-09-03 | Article II gains its machine gate: `.golangci.yml` lands with a `depguard` rule that names the article in its finding. Article XIII gains the pinned linter version, the ten-linter table, and a `make lint` that fails when the binary is missing. Article VIII's target now covers the whole module. The aspirational marker on Article II is removed. |

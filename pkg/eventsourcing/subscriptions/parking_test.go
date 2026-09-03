@@ -32,7 +32,7 @@ func (h *capturingLogHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func (h *capturingLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
-func (h *capturingLogHandler) WithGroup(name string) slog.Handler      { return h }
+func (h *capturingLogHandler) WithGroup(name string) slog.Handler       { return h }
 
 func (h *capturingLogHandler) hasErrorRecord(messageSubstring string) bool {
 	h.mu.Lock()

@@ -136,17 +136,18 @@ func getMatchingPatterns(eventType string) []string {
 	}
 
 	// Build patterns based on number of parts
-	if len(parts) == 1 {
+	switch {
+	case len(parts) == 1:
 		// Single part: "user" -> ["user", "*"]
 		patterns = append(patterns, "*")
-	} else if len(parts) == 2 {
+	case len(parts) == 2:
 		// Two parts: "user.created" -> ["user.created", "user.*", "*.created", "*.*"]
 		patterns = append(patterns,
 			parts[0]+".*", // "user.*"
 			"*."+parts[1], // "*.created"
 			"*.*",         // "*.*"
 		)
-	} else {
+	default:
 		// For more complex patterns, build wildcard variants
 		// "user.account.created" -> ["user.account.created", "user.account.*", "user.*.created", "user.*.*", "*.account.created", etc.
 		for i := 0; i < len(parts); i++ {

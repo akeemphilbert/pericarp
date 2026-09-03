@@ -202,6 +202,8 @@ func main() {
 
 	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
+		//nolint:gocritic // exitAfterDefer: the deferred stop() only unregisters
+		// the signal handler; this example exits on any setup failure.
 		log.Fatalf("load aws config: %v", err)
 	}
 	ddb := dynamodb.NewFromConfig(awsCfg)

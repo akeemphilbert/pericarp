@@ -45,6 +45,8 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "pericarp: unknown subcommand %q\n\n", os.Args[1])
 		usage()
+		//nolint:gocritic // exitAfterDefer: the deferred stop() only unregisters
+		// the signal handler; nothing is flushed or released by skipping it.
 		os.Exit(2)
 	}
 

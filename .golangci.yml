@@ -1,0 +1,102 @@
+# golangci-lint configuration for pericarp.
+#
+# The enabled set is the gate named in Article XIII of CONSTITUTION.md, and
+# `depguard` is the machine gate for Article II (dependencies point inward).
+# Run it with `make lint`, which pins the same version CI runs.
+version: "2"
+
+issues:
+  # Report every finding. A capped gate hides the second instance of a defect
+  # and makes a clean run mean less than it says.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - depguard # Article II — imports that point outward from domain/
+    - gocritic
+    - gosec
+    - misspell
+    - nolintlint
+
+  settings:
+    depguard:
+      rules:
+        # Article II — pkg/eventsourcing/domain and pkg/ddd are the inner ring.
+        # They may import the standard library, each other, and the two core
+        # dependencies. Everything else points outward and is denied.
+        article-ii-domain-points-inward:
+          list-mode: strict
+          files:
+            - "**/pkg/eventsourcing/domain/**"
+            - "**/pkg/ddd/**"
+          allow:
+            - $gostd
+            - github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain
+            - github.com/akeemphilbert/pericarp/pkg/ddd
+            - github.com/segmentio/ksuid
+            - golang.org/x/sync
+          deny:
+            - pkg: github.com/akeemphilbert/pericarp/pkg/eventsourcing/application
+              desc: "Article II: the domain does not import the application layer. Declare an interface in domain/ and implement it outward."
+            - pkg: github.com/akeemphilbert/pericarp/pkg/eventsourcing/infrastructure
+              desc: "Article II: the domain does not import infrastructure. Declare an interface in domain/ and implement it in infrastructure/."
+            - pkg: github.com/akeemphilbert/pericarp/pkg/eventsourcing/compaction
+              desc: "Article II: the domain does not import compaction. The capability interface (CompactableEventStore) lives in domain/; the algorithm does not."
+            - pkg: github.com/akeemphilbert/pericarp/pkg/eventsourcing/subscriptions
+              desc: "Article II: the domain does not import the subscriber runtime."
+            - pkg: gorm.io
+              desc: "Article II: no persistence driver in the domain. GORM belongs in infrastructure/."
+            - pkg: github.com/jackc/pgx
+              desc: "Article II: no database driver in the domain. pgx belongs in infrastructure/ and subscriptions/."
+            - pkg: github.com/aws/aws-sdk-go-v2
+              desc: "Article II: no cloud SDK in the domain. The AWS SDK belongs in infrastructure/."
+
+    nolintlint:
+      # Article VI/XIII — a waiver names its linter and says why.
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test files reach for fixtures the way tests do: a temp path built from
+      # a variable, a 0644 fixture file, a hardcoded fake credential. gosec's
+      # findings there are noise, not exposure.
+      - path: '_test\.go'
+        linters:
+          - gosec
+      # Vocabulary constants, not secrets: ontology.go declares the RDF
+      # predicates, event types, and LIKE globs for the Credential aggregate.
+      # G101 matches every one of them on the word "credential".
+      - path: 'pkg/auth/domain/entities/ontology\.go'
+        linters:
+          - gosec
+        text: 'G101'
+      # OAuth token-endpoint URLs are public addresses, not secrets. G101
+      # matches every provider constant on the words "token" and
+      # "access_token".
+      - path: 'pkg/auth/infrastructure/providers/'
+        linters:
+          - gosec
+        text: 'G101'
+      # Runnable examples carry obvious placeholder credentials
+      # ("your-netsuite-client-secret") so a reader sees what to replace.
+      - path: '^examples/'
+        linters:
+          - gosec
+        text: 'G101'
+      # An external test package (`package domain_test`) is not the domain
+      # package — it is a consumer of it, and exercising the EventStore
+      # contract against MemoryStore is exactly what it is for. Article II
+      # binds the compiled domain package, which is the non-test files.
+      - path: '_test\.go'
+        linters:
+          - depguard
+
+formatters:
+  enable:
+    - gofmt
