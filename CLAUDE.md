@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Pericarp is a Go library implementing Event Sourcing and DDD primitives. It provides base types for aggregates, event envelopes, event stores, a unit of work, and an event dispatcher. It is the core library used by vine-os microservices.
 
+## Constitution
+
+[`CONSTITUTION.md`](CONSTITUTION.md) holds the non-negotiable rules for this repository.
+On conflict, an article of the constitution outranks this file, `CONTRIBUTING.md`, `docs/`,
+the journal, and any skill. Read it before an architectural change, and name the article
+when you must work against one.
+
 ## Commands
 
 ```bash
