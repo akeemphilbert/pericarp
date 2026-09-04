@@ -18,6 +18,30 @@
 // positions are never reused: a retired position becomes a permanent gap in
 // the global feed rather than a number a later event might claim.
 //
+// As a sequence (mermaid; rendered in docs/decisions/0011):
+//
+//	sequenceDiagram
+//	    participant C as Compact
+//	    participant P as StateProvider
+//	    participant A as Archive (JSONL)
+//	    participant S as CompactableEventStore
+//	    Note over C: Build the whole plan first. A provider failure aborts here.
+//	    loop every aggregate in the plan
+//	        C->>P: state(aggregateID)
+//	        P-->>C: full state
+//	    end
+//	    loop every batch
+//	        C->>A: 1. write retired events
+//	        C->>A: 2. fsync
+//	        C->>S: 3. Append(compaction event, snapshot metadata)
+//	        rect rgb(235, 245, 255)
+//	            Note right of S: one transaction
+//	            C->>S: 4. RetireEvents(ids, manifest)
+//	            S->>S: delete retired rows
+//	            S->>S: record manifest
+//	        end
+//	    end
+//
 // Deleting is transactional per batch, and each batch's archive segment is
 // recorded as a manifest in the same transaction, so an interrupted run
 // resumes at the first batch it never recorded instead of archiving and

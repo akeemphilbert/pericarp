@@ -51,6 +51,81 @@ exists in neither the store nor a durable archive. The whole plan — including
 every `StateProvider` call — is built before the first write, so a provider failure
 aborts with nothing archived and nothing appended.
 
+```mermaid
+sequenceDiagram
+    participant C as Compact
+    participant P as StateProvider
+    participant A as Archive (JSONL)
+    participant S as CompactableEventStore
+
+    Note over C: Build the whole plan first.<br/>A provider failure aborts here.
+    loop every aggregate in the plan
+        C->>P: state(aggregateID)
+        P-->>C: full state
+    end
+    loop every batch
+        C->>A: 1. write retired events
+        C->>A: 2. fsync
+        C->>S: 3. Append(compaction event, snapshot metadata)
+        rect rgb(235, 245, 255)
+            Note right of S: one transaction
+            C->>S: 4. RetireEvents(ids, manifest)
+            S->>S: delete retired rows
+            S->>S: record manifest
+        end
+    end
+```
+
+Every failure the process survives — a write, the fsync, an append, the delete —
+returns through `rollbackArchive`, which truncates the archive back to where the
+batch began. What each failure leaves behind:
+
+```mermaid
+flowchart TD
+    W[1. write archive] --> F[2. fsync]
+    F --> AP[3. append compaction events<br/>one per aggregate in the batch]
+    AP --> D[4. delete + manifest<br/>one transaction]
+    D --> OK([batch done])
+
+    W -. fails .-> R1[Store unchanged.<br/>Archive segment cut back.]
+    F -. fails .-> R1
+    AP -. fails part way .-> R2[Archive segment cut back.<br/>Compaction events already appended stay.<br/>Old events still present.<br/>Next run writes no second snapshot.]
+    D -. fails .-> R3[Archive segment cut back.<br/>All compaction events appended.<br/>Old events still present.<br/>Next run retries the delete.]
+    F -. hard crash before 4 commits .-> R4[Durable segment, no manifest.<br/>Next run archives it again.<br/>Restore with SkipExisting.]
+
+    R1 & R2 & R3 -. archive is not an ArchiveFile .-> R5[Segment stays.<br/>Error names SkipExisting.]
+
+    classDef safe fill:#e6f4ea,stroke:#2e7d32;
+    classDef warn fill:#fff4e5,stroke:#ef6c00;
+    class R1,R2,R3 safe;
+    class R4,R5 warn;
+```
+
+The rollback needs the archive to implement `ArchiveFile` (`Truncate`); an
+`*os.File` does, a plain `io.Writer` does not, and then the segment stays and the
+error says to restore with `SkipExisting`.
+
+One aggregate, before and after, showing the permanent gap and the snapshot at
+`max + 1`. Event `seq 4` sits above the watermark and survives; the snapshot still
+carries the state as of now, including `seq 4`, because replay applies the
+compaction event last:
+
+```mermaid
+flowchart LR
+    subgraph before [Before: aggregate A, watermark = position 40]
+        direction LR
+        e1["seq 1<br/>pos 12"] --> e2["seq 2<br/>pos 19"] --> e3["seq 3<br/>pos 33"] --> e4["seq 4<br/>pos 57"]
+    end
+    subgraph after [After]
+        direction LR
+        g1["pos 12, 19, 33<br/>retired to archive<br/>(permanent gap in the feed)"]
+        s["seq 5, pos 61<br/>compaction event<br/>snapshot = true<br/>compacted_from = 12<br/>compacted_to = 40"]
+        e4b["seq 4<br/>pos 57"]
+        g1 -.-> e4b --> s
+    end
+    before ==> after
+```
+
 The decisions that hang off the ordering:
 
 - **Positions are never reused.** Deleting rows made `MAX(position)+1` fall back
