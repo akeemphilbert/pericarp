@@ -1,8 +1,15 @@
-# Pericarp Journal
+# Pericarp Journal (frozen 2026-09-03)
+
+**This journal is closed.** Architectural decisions are recorded as ADRs in
+[`docs/decisions/`](../docs/decisions/index.md) from 2026-09-03 on; see
+Constitution Article XII. Do not append here.
+
+The entries below are kept as history. The load-bearing decisions among them were
+reconstructed into records 0001–0011; the rest — feature logs, review fixes,
+provider additions — remain readable here and nowhere else.
 
 Append-only log of major changes to Pericarp. Each entry records what changed,
-why, and any key design decisions. Claude Code reads this at the start of major
-tasks to maintain context across sessions. Entries are never edited or removed.
+why, and any key design decisions. Entries are never edited or removed.
 
 ---
 

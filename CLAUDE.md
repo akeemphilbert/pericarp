@@ -108,15 +108,14 @@ Core: `github.com/segmentio/ksuid` (event IDs) and `golang.org/x/sync` (errgroup
 - Tests colocated with source files
 - `MemoryStore` used as the default test EventStore
 
-## Project Journal
+## Architecture Decision Records
 
-An append-only journal at `.claude/journal.md` tracks major changes to Pericarp.
+Architectural decisions are recorded as MADR documents in `docs/decisions/`, indexed in `docs/decisions/index.md`. Constitution Article XII says when one is required.
 
-**When to read it:** At the start of any major task (new feature, architectural change, new package) to understand recent context and avoid contradicting prior decisions.
+**When to read them:** At the start of any major task (new feature, architectural change, new package) read the index and the records that touch the packages you will change, so you do not contradict a prior decision. When you must reverse one, write a new record that supersedes it — do not edit the old one.
 
-**When to append:** After completing a major change — new packages, architectural decisions, significant feature additions, design pivots, or scope changes. Do not log routine bug fixes, test additions, or minor refactors.
+**When to write one:** A new package, a change to the event or store contract, a new store capability, a swapped foundational dependency, a breaking change to the exported surface, or a reversed decision. Not for routine bug fixes, test additions, or minor refactors.
 
-**Entry format:**
-- Heading: `### YYYY-MM-DD: Short description`
-- A few bullets covering what changed, why, and key design decisions
-- Keep entries concise (3-6 bullets)
+**How:** Copy `docs/decisions/0000-adr-template.md` to the next number, fill every section — a record with one considered option is a note, not a decision — add the index row, and name the record in the pull request body. Status is `proposed` while the PR is open and `accepted` when it merges.
+
+The former journal at `.claude/journal.md` is frozen history; do not append to it.

@@ -1,6 +1,6 @@
 # Pericarp Constitution
 
-**Version:** 1.1.0 &nbsp;|&nbsp; **Ratified:** 2026-09-03 &nbsp;|&nbsp; **Last amended:** 2026-09-03
+**Version:** 1.2.0 &nbsp;|&nbsp; **Ratified:** 2026-09-03 &nbsp;|&nbsp; **Last amended:** 2026-09-03
 
 This document states the non-negotiable rules for `pericarp` — the Event Sourcing
 and DDD library the vine-os services build on. Every contributor is bound by it,
@@ -203,8 +203,8 @@ request shows the `.feature` file first, or explains why not.
 **Rule.** An exported type, function, method signature, or interface in `pkg/` is a
 promise to every consumer. Changing one — including adding a method to an interface
 consumers implement — is a breaking change. A breaking change is deliberate: it is
-named in the pull request body, recorded in `.claude/journal.md`, and released
-under a version bump that says so.
+named in the pull request body, recorded in an ADR under `docs/decisions/`
+(Article XII), and released under a version bump that says so.
 
 **Reason.** vine-os services and outside consumers `go get` this module by tag. A
 signature changed without a bump breaks their build with no warning and no way back
@@ -236,20 +236,27 @@ private credentials, and review of the `go.mod` diff.
 
 ---
 
-## Article XII — A major change is recorded in the journal
+## Article XII — An architectural decision is recorded as an ADR
 
-**Rule.** A new package, an architectural change, a significant feature, a design
-pivot, or a reversed decision is appended to `.claude/journal.md`: what changed,
-why, and the key design decisions. The journal is append-only — entries are never
-edited or removed. Routine fixes, test additions, and minor refactors are not
-logged.
+**Rule.** A new package, a change to the event or store contract, a new store
+capability, a swapped foundational dependency, a breaking change to the exported
+surface, or a reversed decision gets a record in `docs/decisions/` and a row in
+`docs/decisions/index.md`, in the same pull request. The record follows
+`0000-adr-template.md`: the problem, the drivers, every option actually weighed,
+the outcome, and its consequences. An accepted record is never edited; a change
+of mind is a new record that supersedes it. Routine fixes, test additions, and
+minor refactors get no record.
 
-**Reason.** This repository keeps no `docs/decisions/` tree, so the journal is the
-only record of which options were rejected and why. That reasoning decays faster
-than the code, and six months later it is unrecoverable from the diff.
+**Reason.** The reasoning behind a decision decays faster than the code. Six
+months on, the record is the only thing that says which options were rejected and
+why, and a reader who disagrees with a decision needs the drivers it answered
+before they can argue with it. The append-only journal this replaced recorded
+what changed; it did not reliably record what else was considered.
 
-**How this is enforced. (ASPIRATIONAL)** Review. The reviewer checks for a journal
-entry on any pull request that adds a package or changes a contract.
+**How this is enforced. (ASPIRATIONAL)** Review. The reviewer asks for the record
+on any pull request that meets the rule, and refuses a record with one considered
+option. The former journal at `.claude/journal.md` is frozen; a new entry there is
+a violation.
 
 ---
 
@@ -331,8 +338,8 @@ push today, so this article rests on review and habit until one is configured.
 ## Governance
 
 **Precedence.** On conflict, an article of this constitution outranks `CLAUDE.md`,
-`CONTRIBUTING.md`, `docs/`, `.claude/journal.md`, and any skill or agent
-instruction.
+`CONTRIBUTING.md`, `docs/` (the ADRs included), the frozen journal, and any skill
+or agent instruction.
 
 **Amendment.** Amend an article through a pull request that edits this file and
 bumps the version in the same commit. State the reason for the amendment in the
@@ -362,3 +369,4 @@ request that lands it.
 |---|---|---|
 | 1.0.0 | 2026-09-03 | Ratified |
 | 1.1.0 | 2026-09-03 | Article II gains its machine gate: `.golangci.yml` lands with a `depguard` rule that names the article in its finding. Article XIII gains the pinned linter version, the ten-linter table, and a `make lint` that fails when the binary is missing. Article VIII's target now covers the whole module. The aspirational marker on Article II is removed. |
+| 1.2.0 | 2026-09-03 | Article XII redefined: the decision record moves from the append-only journal to MADR records in `docs/decisions/`, with the eleven load-bearing decisions reconstructed as 0001–0011 and the journal frozen. Article X's breaking-change record now points at an ADR. |
