@@ -95,6 +95,13 @@ func (e *BaseEntity) ClearUncommittedEvents() {
 	e.uncommittedEvents = make([]domain.EventEnvelope[any], 0)
 }
 
+// hasState reports whether anything has been applied to or recorded on this
+// entity yet. A restored entity (RestoreBaseEntity) counts as having state
+// even before it applies an event: its sequence number came from the store.
+func (e *BaseEntity) hasState() bool {
+	return e.sequenceNo > 0 || len(e.appliedEventIDs) > 0
+}
+
 // applyEventInternal performs the actual event application logic.
 // It assumes the caller holds the lock.
 func (e *BaseEntity) applyEventInternal(event domain.EventEnvelope[any]) error {
@@ -108,10 +115,30 @@ func (e *BaseEntity) applyEventInternal(event domain.EventEnvelope[any]) error {
 		return fmt.Errorf("%w: event ID %s", ErrDuplicateEvent, event.ID)
 	}
 
-	// Validate event sequence number matches expected sequence number
-	expectedSequenceNo := e.sequenceNo + 1
-	if event.SequenceNo != expectedSequenceNo {
-		return fmt.Errorf("%w: expected %d, got %d", ErrInvalidEventSequenceNo, expectedSequenceNo, event.SequenceNo)
+	// Validate event sequence number matches expected sequence number.
+	//
+	// An entity with no state yet accepts any sequence number >= 1 as its
+	// first event: on a compacted store the aggregate's earliest surviving
+	// event is the compaction event, whose sequence number is the retired
+	// history's maximum plus one. Refusing it would make a compacted
+	// aggregate unrehydratable. The relaxation stops there — once an event
+	// has been applied, a skipped sequence number is still refused, because
+	// past that point a gap means a lost event rather than a snapshot start.
+	if !e.hasState() {
+		if event.SequenceNo < 1 {
+			return fmt.Errorf("%w: expected at least 1, got %d", ErrInvalidEventSequenceNo, event.SequenceNo)
+		}
+	} else if expectedSequenceNo := e.sequenceNo + 1; event.SequenceNo != expectedSequenceNo {
+		// A full-state snapshot is allowed to sit above the number replay was
+		// expecting. Compaction retires the events in between and folds their
+		// effect into the snapshot's payload, so the numbers it skips carry no
+		// information left to lose — and retention can leave exactly that
+		// shape, an event kept back with compacted history on both sides of it.
+		// Only an event that declares itself a snapshot gets that latitude, and
+		// only forwards: for an ordinary event a gap still means a lost event.
+		if event.SequenceNo < expectedSequenceNo || !domain.IsSnapshot(event.Metadata) {
+			return fmt.Errorf("%w: expected %d, got %d", ErrInvalidEventSequenceNo, expectedSequenceNo, event.SequenceNo)
+		}
 	}
 
 	// Mark event as applied

@@ -51,12 +51,12 @@ func migrateEventPositions(db *gorm.DB) error {
 		}
 
 		// Backfill rows that predate the position column. The offset keeps
-		// backfilled positions above any already-assigned ones.
-		var offset int64
-		if err := tx.Model(&GormEventModel{}).
-			Select("COALESCE(MAX(position), 0)").
-			Scan(&offset).Error; err != nil {
-			return fmt.Errorf("failed to read max position: %w", err)
+		// backfilled positions above any already-assigned ones — including the
+		// ones compaction has already retired, which the events table no longer
+		// remembers but the compactions table does.
+		offset, err := highWaterPosition(tx)
+		if err != nil {
+			return err
 		}
 		if err := tx.Exec(
 			`UPDATE events SET position = sub.rn + ? `+
@@ -80,12 +80,19 @@ func migrateEventPositions(db *gorm.DB) error {
 		if err := tx.Raw("SELECT is_called FROM events_position_seq").Scan(&isCalled).Error; err != nil {
 			return fmt.Errorf("failed to inspect position sequence: %w", err)
 		}
+		// The high-water mark is the greater of the surviving rows' maximum and
+		// the highest position compaction retired. Reading only the events
+		// table would rewind the sequence past positions the feed has already
+		// delivered whenever compaction had deleted the rows that held them.
+		const highWaterSQL = `GREATEST(COALESCE((SELECT MAX(position) FROM events), 0), ` +
+			`COALESCE((SELECT MAX(to_position) FROM compactions), 0))`
 		if !isCalled {
-			if err := tx.Exec("SELECT setval('events_position_seq', COALESCE((SELECT MAX(position) FROM events), 0) + 1, false)").Error; err != nil {
+			if err := tx.Exec("SELECT setval('events_position_seq', " + highWaterSQL + " + 1, false)").Error; err != nil {
 				return fmt.Errorf("failed to initialize position sequence: %w", err)
 			}
 		} else {
-			if err := tx.Exec("SELECT setval('events_position_seq', GREATEST((SELECT last_value FROM events_position_seq), COALESCE((SELECT MAX(position) FROM events), 1)), true)").Error; err != nil {
+			if err := tx.Exec("SELECT setval('events_position_seq', GREATEST((SELECT last_value FROM events_position_seq), " +
+				highWaterSQL + ", 1), true)").Error; err != nil {
 				return fmt.Errorf("failed to advance position sequence: %w", err)
 			}
 		}

@@ -47,7 +47,7 @@ func runServe(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve data dir: %w", err)
 	}
-	if err := os.MkdirAll(absDir, 0o755); err != nil {
+	if err := os.MkdirAll(absDir, 0o750); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
 
@@ -63,7 +63,10 @@ func runServe(ctx context.Context, args []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Shut down gracefully when the process is signalled.
+	// Shut down gracefully when the process is signalled. The shutdown
+	// deadline deliberately does not derive from ctx: this goroutine runs
+	// because ctx is already done, so a child of it would expire at once.
+	//nolint:gosec // G118: see above — ctx is cancelled by the time this runs.
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -224,6 +227,8 @@ func (s *migrateServer) runExportJob(id string, spec StoreSpec, outPath string, 
 	}
 	defer func() { _ = closeStore() }()
 
+	// #nosec G304 -- outPath comes from resolvePath, which rejects any
+	// client path that escapes the server data directory.
 	f, err := os.Create(outPath)
 	if err != nil {
 		s.jobs.fail(id, fmt.Errorf("create output file: %w", err))
@@ -255,6 +260,8 @@ func (s *migrateServer) runImportJob(id string, spec StoreSpec, inPath string, s
 	}
 	defer func() { _ = closeStore() }()
 
+	// #nosec G304 -- inPath comes from resolvePath, which rejects any
+	// client path that escapes the server data directory.
 	f, err := os.Open(inPath)
 	if err != nil {
 		s.jobs.fail(id, fmt.Errorf("open input file: %w", err))

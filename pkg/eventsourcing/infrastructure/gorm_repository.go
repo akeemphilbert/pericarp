@@ -40,7 +40,8 @@ func (r *GormEventRepository) SaveEvents(ctx context.Context, events []GormEvent
 // assigning each a global position. On Postgres the position column is
 // omitted from the insert so the events_position_seq default assigns it
 // (safe under concurrent writers). On single-writer engines like SQLite the
-// position is computed as MAX(position)+1 inside the write transaction.
+// position is computed inside the write transaction as one above the store's
+// high-water mark (see highWaterPosition).
 func (r *GormEventRepository) insertEventsTx(tx *gorm.DB, events []GormEventModel) error {
 	if r.postgres {
 		if err := tx.Omit("Position").Create(&events).Error; err != nil {
@@ -59,17 +60,39 @@ func (r *GormEventRepository) insertEventsTx(tx *gorm.DB, events []GormEventMode
 		return nil
 	}
 
-	var maxPos int64
-	if err := tx.Model(&GormEventModel{}).
-		Select("COALESCE(MAX(position), 0)").
-		Scan(&maxPos).Error; err != nil {
-		return fmt.Errorf("failed to read max position: %w", err)
+	maxPos, err := highWaterPosition(tx)
+	if err != nil {
+		return err
 	}
 	for i := range events {
 		maxPos++
 		events[i].Position = maxPos
 	}
 	return tx.Create(&events).Error
+}
+
+// highWaterPosition returns the highest position the store has ever assigned,
+// which is not the same as the highest position it still holds: compaction
+// deletes events, and MAX(position) over the surviving rows would fall back
+// down to a position the feed has already delivered. Recorded compactions
+// remember how far the deleted history reached, so the two maxima together
+// give a mark that only ever rises and positions are never reused.
+func highWaterPosition(tx *gorm.DB) (int64, error) {
+	var maxPos int64
+	if err := tx.Model(&GormEventModel{}).
+		Select("COALESCE(MAX(position), 0)").
+		Scan(&maxPos).Error; err != nil {
+		return 0, fmt.Errorf("failed to read max position: %w", err)
+	}
+
+	var maxRetired int64
+	if err := tx.Model(&GormCompactionModel{}).
+		Select("COALESCE(MAX(to_position), 0)").
+		Scan(&maxRetired).Error; err != nil {
+		return 0, fmt.Errorf("failed to read max retired position: %w", err)
+	}
+
+	return max(maxPos, maxRetired), nil
 }
 
 // GetEventsAfterPosition retrieves committed events with position greater than

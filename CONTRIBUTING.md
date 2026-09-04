@@ -2,6 +2,13 @@
 
 Thank you for your interest in contributing to Pericarp! This document provides guidelines and instructions for contributing to the project.
 
+## Constitution
+
+[`CONSTITUTION.md`](CONSTITUTION.md) states the non-negotiable rules for this repository —
+the event-store contract, the layering rule, the test and lint gates, and how work lands.
+Where it conflicts with this guide, the constitution wins. Read it before your first pull
+request, and amend it through the procedure in its Governance section rather than around it.
+
 ## Getting Started
 
 1. Fork the repository

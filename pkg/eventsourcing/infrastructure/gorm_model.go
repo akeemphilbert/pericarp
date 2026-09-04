@@ -43,7 +43,10 @@ func (j *JSONB) Scan(value any) error {
 // Position is the global, cross-aggregate commit order used by ReadAfter. On
 // Postgres it is assigned by the events_position_seq sequence (the column is
 // omitted from inserts); on single-writer engines like SQLite it is computed
-// as MAX(position)+1 inside the write transaction. Postgres deployments also
+// inside the write transaction as one above the store's high-water mark, which
+// is the greater of this table's maximum and the highest position compaction
+// has retired (see highWaterPosition) — surviving rows alone would let a
+// position be handed out twice. Postgres deployments also
 // carry an xact_id xid8 column (managed by raw migration SQL, not by this
 // struct) used to withhold rows whose inserting transaction may not have
 // committed yet.
@@ -62,4 +65,24 @@ type GormEventModel struct {
 // TableName returns the table name for the event model.
 func (GormEventModel) TableName() string {
 	return "events"
+}
+
+// GormCompactionModel is the GORM model for the compactions table — one row
+// per batch a compaction run archived and deleted. The row is written in the
+// same transaction as the batch's delete, so it is the durable record that
+// makes a run resumable: a later run skips every position an existing row
+// already covers.
+type GormCompactionModel struct {
+	ID           string    `gorm:"primaryKey;column:id"`
+	FromPosition int64     `gorm:"column:from_position;index"`
+	ToPosition   int64     `gorm:"column:to_position;index"`
+	Watermark    int64     `gorm:"column:watermark"`
+	EventCount   int       `gorm:"column:event_count"`
+	Checksum     string    `gorm:"column:checksum"`
+	CreatedAt    time.Time `gorm:"column:created_at"`
+}
+
+// TableName returns the table name for the compaction model.
+func (GormCompactionModel) TableName() string {
+	return "compactions"
 }

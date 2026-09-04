@@ -10,6 +10,7 @@ Documentation is organized using the [Diataxis framework](https://diataxis.fr/):
 | [How-To Guides](how-to.md) | Task-oriented recipes — pattern matching, concurrency control, OAuth flows, Casbin and PDP authorization |
 | [Reference](reference.md) | Complete API documentation — every exported type, function, and interface, including Casbin |
 | [Explanation](explanation.md) | Design decisions — generics strategy, Watchable pattern, ontology choices, BFF security, ODRL-to-Casbin mapping |
+| [Decisions](decisions/index.md) | Architecture Decision Records — what was decided, the options weighed, and what each choice costs |
 
 ## Quick Start
 
