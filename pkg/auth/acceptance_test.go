@@ -147,6 +147,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^an organization account "([^"]*)" owned by "([^"]*)"$`, w.orgAccountOwnedBy)
 	sc.Step(`^"([^"]*)" holds a pending invite to "([^"]*)" as "([^"]*)"$`, w.holdsPendingInvite)
 	sc.Step(`^"([^"]*)" is not a member of any account$`, w.isNotAMemberOfAnyAccount)
+	sc.Step(`^"([^"]*)" has not verified the email of "([^"]*)"$`, w.providerHasNotVerifiedEmail)
 
 	// When — sign-in callback
 	sc.Step(`^"([^"]*)" completes the sign-in callback$`, w.completesCallback)
@@ -161,6 +162,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^"([^"]*)" owns no personal account$`, w.ownsNoPersonalAccount)
 	sc.Step(`^the callback issues an identity token whose active account is "([^"]*)"$`, w.callbackTokenActiveAccount)
 	sc.Step(`^the callback issues no identity token$`, w.callbackIssuesNoToken)
+	sc.Step(`^the callback refuses the sign-in because the email is not verified$`, w.callbackRefusedUnverifiedEmail)
+	sc.Step(`^no credential is stored for "([^"]*)"$`, w.noCredentialStoredFor)
+	sc.Step(`^the callback stores no session$`, w.callbackStoresNoSession)
 
 	// When — actions
 	sc.Step(`^"([^"]*)" signs in$`, w.signsIn)
@@ -1126,6 +1130,7 @@ func (w *world) agentKnownToProvider(agentID, provider, email string) error {
 	w.signerProfile = application.UserInfo{
 		ProviderUserID: providerUserID,
 		Email:          email,
+		EmailVerified:  true,
 		DisplayName:    agentID,
 		Provider:       provider,
 	}
@@ -1144,6 +1149,7 @@ func (w *world) agentNotYetKnownToProvider(agentID, provider string) error {
 	w.signerProfile = application.UserInfo{
 		ProviderUserID: providerUserID,
 		Email:          agentID + "@example.com",
+		EmailVerified:  true,
 		DisplayName:    agentID,
 		Provider:       provider,
 	}
@@ -1177,6 +1183,7 @@ func (w *world) holdsPendingInvite(agentID, accountID, role string) error {
 	w.signerProfile = application.UserInfo{
 		ProviderUserID: agentID + "-oauth",
 		Email:          email,
+		EmailVerified:  true,
 		DisplayName:    agentID,
 		Provider:       "google",
 	}
@@ -1191,6 +1198,20 @@ func (w *world) isNotAMemberOfAnyAccount(agentID string) error {
 	if len(accounts) != 0 {
 		return fmt.Errorf("precondition failed: %s belongs to %d accounts, want none", agentID, len(accounts))
 	}
+	return nil
+}
+
+// providerHasNotVerifiedEmail makes the provider hand back the agent signing in
+// with an email it has not verified, the way Google or Apple report an address
+// the person never proved they control.
+func (w *world) providerHasNotVerifiedEmail(provider, agentID string) error {
+	if w.provider == nil || w.provider.Name() != provider {
+		return fmt.Errorf("no identity provider %q configured", provider)
+	}
+	if w.signerProfile.ProviderUserID != agentID+"-oauth" {
+		return fmt.Errorf("precondition failed: %s is not the agent signing in", agentID)
+	}
+	w.signerProfile.EmailVerified = false
 	return nil
 }
 
@@ -1255,6 +1276,11 @@ func (w *world) runCallback(inviteToken string) error {
 	w.callbackStatus = resp.StatusCode
 	w.callbackCookies = resp.Cookies()
 	w.cookies = resp.Cookies()
+	w.lastBody = nil
+	body := map[string]string{}
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&body); decodeErr == nil {
+		w.lastBody = body
+	}
 	return nil
 }
 
@@ -1382,6 +1408,44 @@ func (w *world) callbackTokenActiveAccount(accountID string) error {
 func (w *world) callbackIssuesNoToken() error {
 	if token := w.callbackToken(); token != "" {
 		return fmt.Errorf("callback issued an identity token, want none")
+	}
+	return nil
+}
+
+func (w *world) callbackRefusedUnverifiedEmail() error {
+	if w.callbackStatus != http.StatusForbidden {
+		return fmt.Errorf("callback returned %d, want 403", w.callbackStatus)
+	}
+	return w.refusalIsCoded("email_not_verified")
+}
+
+func (w *world) noCredentialStoredFor(agentID string) error {
+	credential, err := w.credentials.FindByProvider(context.Background(), w.provider.Name(), agentID+"-oauth")
+	if err != nil {
+		return fmt.Errorf("look up credential for %s: %w", agentID, err)
+	}
+	if credential != nil {
+		return fmt.Errorf("a credential was stored for %s, want none", agentID)
+	}
+	return nil
+}
+
+// callbackStoresNoSession checks the cookie the browser holds and the session
+// table both, so a session persisted but never handed back still fails.
+func (w *world) callbackStoresNoSession() error {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	for _, c := range w.callbackCookies {
+		req.AddCookie(c)
+	}
+	if data, err := w.sm.GetHTTPSession(req); err == nil && data != nil && data.SessionID != "" {
+		return fmt.Errorf("callback set a cookie for session %s, want none", data.SessionID)
+	}
+	var count int64
+	if err := w.db.Raw("SELECT COUNT(*) FROM auth_sessions").Scan(&count).Error; err != nil {
+		return fmt.Errorf("count sessions: %w", err)
+	}
+	if count != 0 {
+		return fmt.Errorf("%d sessions stored, want none", count)
 	}
 	return nil
 }

@@ -147,6 +147,18 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Checked before both paths below, because each writes a credential, and
+	// a credential's email is what invites and account binding trust.
+	if authResult.UserInfo.HasUnverifiedEmail() {
+		h.cfg.Logger.Warn(ctx, "OAuth callback: identity provider has not verified the email address",
+			"provider", authResult.UserInfo.Provider)
+		h.writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "email address not verified by the identity provider",
+			"code":  "email_not_verified",
+		})
+		return
+	}
+
 	var agent *entities.Agent
 	var credential *entities.Credential
 	var account *entities.Account

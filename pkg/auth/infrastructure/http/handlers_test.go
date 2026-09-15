@@ -58,6 +58,7 @@ func (m *mockAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, 
 		UserInfo: application.UserInfo{
 			ProviderUserID: "google-123",
 			Email:          "user@example.com",
+			EmailVerified:  true,
 			DisplayName:    "Test User",
 			Provider:       provider,
 		},
@@ -515,6 +516,157 @@ func TestCallback_WithPostLoginRedirect(t *testing.T) {
 	}
 	if loc := w.Header().Get("Location"); loc != "/settings" {
 		t.Errorf("Location = %q, want %q", loc, "/settings")
+	}
+}
+
+// --- Unverified provider email ---
+
+type callbackOutcome struct {
+	rec             *httptest.ResponseRecorder
+	wroteCredential bool
+	createdSession  bool
+}
+
+// callbackForProfile drives the callback for a flow whose provider exchange
+// returns a profile from provider with the given email and verification. A
+// non-empty inviteToken sends the flow down the invite path. The outcome
+// records whether the callback reached a credential-writing call —
+// FindOrCreateAgent or AcceptInvite — and whether it created a session.
+func callbackForProfile(t *testing.T, provider, email string, emailVerified bool, inviteToken string) callbackOutcome {
+	t.Helper()
+
+	var out callbackOutcome
+	svc := &mockAuthService{
+		exchangeFunc: func(_ context.Context, _, _, _, _ string) (*application.AuthResult, error) {
+			return &application.AuthResult{
+				AccessToken: "access-token",
+				UserInfo: application.UserInfo{
+					ProviderUserID: provider + "-123",
+					Email:          email,
+					EmailVerified:  emailVerified,
+					DisplayName:    "Test User",
+					Provider:       provider,
+				},
+			}, nil
+		},
+		findOrCreateFunc: func(_ context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+			out.wroteCredential = true
+			agent, _ := new(entities.Agent).With("agent-1", userInfo.DisplayName, entities.AgentTypePerson)
+			cred, _ := new(entities.Credential).With("cred-1", "agent-1", userInfo.Provider, userInfo.ProviderUserID, userInfo.Email, userInfo.DisplayName)
+			account, _ := new(entities.Account).With("account-1", "Test User's Account", entities.AccountTypePersonal)
+			return agent, cred, account, nil
+		},
+		createSessionFunc: func(_ context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+			out.createdSession = true
+			return new(entities.AuthSession).With("sess-1", agentID, accountID, credentialID, ipAddress, userAgent, time.Now().Add(duration))
+		},
+	}
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+			out.wroteCredential = true
+			agent, _ := new(entities.Agent).With("invited-agent", userInfo.DisplayName, entities.AgentTypePerson)
+			cred, _ := new(entities.Credential).With("invited-cred", "invited-agent", userInfo.Provider, userInfo.ProviderUserID, userInfo.Email, userInfo.DisplayName)
+			account, _ := new(entities.Account).With("team-account", "Team Account", entities.AccountTypeTeam)
+			return agent, cred, account, nil
+		},
+	}
+	handlers, sm := newTestHandlersWithInvite(svc, nil, acceptor)
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	if err := sm.SetFlowData(flowW, r, session.FlowData{
+		State:       "s",
+		Provider:    provider,
+		CreatedAt:   time.Now(),
+		InviteToken: inviteToken,
+	}); err != nil {
+		t.Fatalf("failed to set flow data: %v", err)
+	}
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	out.rec = httptest.NewRecorder()
+	handlers.Callback(out.rec, r2)
+	return out
+}
+
+func TestCallback_UnverifiedProviderEmail_RefusedBeforeCredentialWrite(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		provider    string
+		inviteToken string
+	}{
+		{name: "google", provider: "google"},
+		{name: "apple", provider: "apple"},
+		{name: "google accepting an invite", provider: "google", inviteToken: "invite-token-123"},
+		{name: "apple accepting an invite", provider: "apple", inviteToken: "invite-token-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := callbackForProfile(t, tc.provider, "user@example.com", false, tc.inviteToken)
+
+			if out.rec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d; body: %s", out.rec.Code, out.rec.Body.String())
+			}
+			resp := parseJSONResponse(t, out.rec)
+			if resp["code"] != "email_not_verified" {
+				t.Errorf("code = %q, want %q", resp["code"], "email_not_verified")
+			}
+			if resp["error"] == "" {
+				t.Error("expected an error message explaining the refusal")
+			}
+			if out.wroteCredential {
+				t.Error("callback reached a credential-writing call for an unverified email")
+			}
+			if out.createdSession {
+				t.Error("callback created a session for an unverified email")
+			}
+		})
+	}
+}
+
+func TestCallback_EmailVerification_OnlyHeldAgainstProvidersThatReportIt(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		provider      string
+		email         string
+		emailVerified bool
+	}{
+		{name: "google verified", provider: "google", email: "user@example.com", emailVerified: true},
+		{name: "apple verified", provider: "apple", email: "user@example.com", emailVerified: true},
+		// These providers send no email_verified claim, so EmailVerified is
+		// always false for them. Sign-in must work exactly as it did before.
+		{name: "netsuite sends no claim", provider: "netsuite", email: "user@example.com"},
+		{name: "github sends no claim", provider: "github", email: "user@example.com"},
+		{name: "microsoft sends no claim", provider: "microsoft", email: "user@example.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := callbackForProfile(t, tc.provider, tc.email, tc.emailVerified, "")
+
+			if out.rec.Code != http.StatusFound {
+				t.Fatalf("expected 302, got %d; body: %s", out.rec.Code, out.rec.Body.String())
+			}
+			if !out.wroteCredential {
+				t.Error("callback did not reach FindOrCreateAgent")
+			}
+			if !out.createdSession {
+				t.Error("callback created no session")
+			}
+		})
 	}
 }
 

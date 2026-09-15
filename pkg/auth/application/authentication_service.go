@@ -77,6 +77,23 @@ type UserInfo struct {
 	Provider      string
 }
 
+// emailVerifyingProviders names the providers whose UserInfo.EmailVerified is
+// the identity provider's own answer rather than an unreported default.
+var emailVerifyingProviders = map[string]bool{"google": true, "apple": true}
+
+// HasUnverifiedEmail reports whether u comes from a provider that vouches for
+// email addresses, and that provider did not vouch for this one. Do not write a
+// credential for such a profile: invites and account binding trust a
+// credential's email.
+//
+// It is false for a provider that sends no email_verified claim, whose
+// EmailVerified is always false and says nothing, and false when u carries no
+// email at all, which leaves nothing to bind. Neither of those sign-ins
+// changes.
+func (u UserInfo) HasUnverifiedEmail() bool {
+	return emailVerifyingProviders[u.Provider] && u.Email != "" && !u.EmailVerified
+}
+
 // SessionInfo represents validated session information returned to consumers.
 type SessionInfo struct {
 	SessionID string
