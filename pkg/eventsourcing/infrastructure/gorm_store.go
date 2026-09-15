@@ -12,7 +12,10 @@ import (
 	"gorm.io/gorm"
 )
 
-var _ domain.EventStore = (*GormEventStore)(nil)
+var (
+	_ domain.EventStore            = (*GormEventStore)(nil)
+	_ domain.CompactableEventStore = (*GormEventStore)(nil)
+)
 
 // GormEventStore is a GORM-based implementation of EventStore.
 type GormEventStore struct {
@@ -29,6 +32,9 @@ type GormEventStore struct {
 func NewGormEventStore(db *gorm.DB) (*GormEventStore, error) {
 	if err := db.AutoMigrate(&GormEventModel{}); err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate events table: %w", err)
+	}
+	if err := db.AutoMigrate(&GormCompactionModel{}); err != nil {
+		return nil, fmt.Errorf("failed to auto-migrate compactions table: %w", err)
 	}
 	if err := migrateEventPositions(db); err != nil {
 		return nil, fmt.Errorf("failed to migrate event positions: %w", err)
@@ -245,6 +251,81 @@ func (s *GormEventStore) GetCurrentVersion(ctx context.Context, aggregateID stri
 // so lag measured against it reaches zero when a consumer is caught up.
 func (s *GormEventStore) HeadPosition(ctx context.Context) (int64, error) {
 	return s.repo.GetHeadPosition(ctx)
+}
+
+// retireChunkSize caps how many event IDs go into one DELETE ... IN (...).
+// Every engine has a bound on placeholders per statement (SQLite's is the
+// tightest), so a large batch is deleted as several statements inside the one
+// transaction rather than one statement that the driver would reject.
+const retireChunkSize = 500
+
+// RetireEvents deletes the given events and records manifest in a single
+// transaction, so a batch is never half-retired and never deleted without a
+// record of the archive segment holding it. Deleting leaves the positions the
+// events held permanently vacant: nothing reassigns them, so the global feed
+// keeps gaps and stays monotonic.
+//
+// The delete is by event ID and is verified against the number of IDs asked
+// for: if any event is already gone the whole transaction rolls back, because
+// a partial retire would record a manifest whose checksum covers events the
+// store no longer matches.
+func (s *GormEventStore) RetireEvents(ctx context.Context, eventIDs []string, manifest domain.CompactionManifest) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var deleted int64
+		for start := 0; start < len(eventIDs); start += retireChunkSize {
+			end := min(start+retireChunkSize, len(eventIDs))
+			res := tx.Where("id IN ?", eventIDs[start:end]).Delete(&GormEventModel{})
+			if res.Error != nil {
+				return fmt.Errorf("failed to delete retired events: %w", res.Error)
+			}
+			deleted += res.RowsAffected
+		}
+		if deleted != int64(len(eventIDs)) {
+			return fmt.Errorf("%w: asked to retire %d events but %d matched",
+				domain.ErrEventNotFound, len(eventIDs), deleted)
+		}
+
+		record := GormCompactionModel{
+			ID:           manifest.ID,
+			FromPosition: manifest.FromPosition,
+			ToPosition:   manifest.ToPosition,
+			Watermark:    manifest.Watermark,
+			EventCount:   manifest.EventCount,
+			Checksum:     manifest.Checksum,
+			CreatedAt:    manifest.CreatedAt,
+		}
+		if err := tx.Create(&record).Error; err != nil {
+			return fmt.Errorf("failed to record compaction: %w", err)
+		}
+		return nil
+	})
+}
+
+// Compactions returns the recorded compaction manifests in ascending
+// ToPosition order.
+func (s *GormEventStore) Compactions(ctx context.Context) ([]domain.CompactionManifest, error) {
+	var records []GormCompactionModel
+	if err := s.db.WithContext(ctx).Order("to_position ASC").Find(&records).Error; err != nil {
+		return nil, fmt.Errorf("failed to read compactions: %w", err)
+	}
+
+	manifests := make([]domain.CompactionManifest, len(records))
+	for i, r := range records {
+		manifests[i] = domain.CompactionManifest{
+			ID:           r.ID,
+			FromPosition: r.FromPosition,
+			ToPosition:   r.ToPosition,
+			Watermark:    r.Watermark,
+			EventCount:   r.EventCount,
+			Checksum:     r.Checksum,
+			CreatedAt:    r.CreatedAt,
+		}
+	}
+	return manifests, nil
 }
 
 // Close closes the GORM event store (no-op since GORM connection is managed externally).

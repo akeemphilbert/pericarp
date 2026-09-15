@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Pericarp is a Go library implementing Event Sourcing and DDD primitives. It provides base types for aggregates, event envelopes, event stores, a unit of work, and an event dispatcher. It is the core library used by vine-os microservices.
 
+## Constitution
+
+[`CONSTITUTION.md`](CONSTITUTION.md) holds the non-negotiable rules for this repository.
+On conflict, an article of the constitution outranks this file, `CONTRIBUTING.md`, `docs/`,
+the journal, and any skill. Read it before an architectural change, and name the article
+when you must work against one.
+
 ## Commands
 
 ```bash
@@ -48,6 +55,8 @@ pkg/
 │   │   └── file_eventstore.go        # File-based JSON store (development)
 │   ├── application/                  # UnitOfWork
 │   │   └── unit_of_work.go           # SimpleUnitOfWork — tracks entities, atomic commit
+│   ├── compaction/                   # Collapse history to one full-state event per aggregate
+│   │   └── compaction.go             # Compact() — archive, fsync, append snapshot, then delete
 │   └── subscriptions/                # Opt-in crash-safe background subscriber runtime
 │       ├── subscriber.go             # Subscriber loop over EventStore.ReadAfter
 │       ├── checkpoint.go             # CheckpointStore/Batch interfaces
@@ -65,6 +74,8 @@ pkg/
 **EventStore** (`domain/eventstore.go`) — Interface for persistence. `Append()` uses optimistic concurrency (`expectedVersion`). Two implementations: `MemoryStore` (tests) and `FileStore` (dev).
 
 **SimpleUnitOfWork** (`application/unit_of_work.go`) — Tracks multiple entities, commits their uncommitted events atomically to an EventStore. Optionally dispatches events to an EventDispatcher after commit.
+
+**Compact** (`compaction/compaction.go`) — Collapses an event store's history at or below a watermark into one full-state event per surviving aggregate and moves the retired events to a JSONL archive. Per batch: write the archive, fsync, append the compaction events, then delete-and-record-the-manifest in one transaction. Stores opt in via `domain.CompactableEventStore` (`MemoryStore` and `GormEventStore` do; `FileStore` and `DynamoEventStore` do not, and are refused).
 
 **EventDispatcher** (`domain/event_dispatcher.go`) — Subscribe to event types with pattern matching (`user.created`, `user.*`, `*.created`, `*.*`). Handlers run in parallel via `errgroup`.
 
@@ -97,15 +108,14 @@ Core: `github.com/segmentio/ksuid` (event IDs) and `golang.org/x/sync` (errgroup
 - Tests colocated with source files
 - `MemoryStore` used as the default test EventStore
 
-## Project Journal
+## Architecture Decision Records
 
-An append-only journal at `.claude/journal.md` tracks major changes to Pericarp.
+Architectural decisions are recorded as MADR documents in `docs/decisions/`, indexed in `docs/decisions/index.md`. Constitution Article XII says when one is required.
 
-**When to read it:** At the start of any major task (new feature, architectural change, new package) to understand recent context and avoid contradicting prior decisions.
+**When to read them:** At the start of any major task (new feature, architectural change, new package) read the index and the records that touch the packages you will change, so you do not contradict a prior decision. When you must reverse one, write a new record that supersedes it — do not edit the old one.
 
-**When to append:** After completing a major change — new packages, architectural decisions, significant feature additions, design pivots, or scope changes. Do not log routine bug fixes, test additions, or minor refactors.
+**When to write one:** A new package, a change to the event or store contract, a new store capability, a swapped foundational dependency, a breaking change to the exported surface, or a reversed decision. Not for routine bug fixes, test additions, or minor refactors.
 
-**Entry format:**
-- Heading: `### YYYY-MM-DD: Short description`
-- A few bullets covering what changed, why, and key design decisions
-- Keep entries concise (3-6 bullets)
+**How:** Copy `docs/decisions/0000-adr-template.md` to the next number, fill every section — a record with one considered option is a note, not a decision — add the index row, and name the record in the pull request body. Status is `proposed` while the PR is open and `accepted` when it merges.
+
+The former journal at `.claude/journal.md` is frozen history; do not append to it.

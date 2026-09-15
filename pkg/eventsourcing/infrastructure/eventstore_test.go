@@ -166,10 +166,8 @@ func TestEventStore_Append(t *testing.T) {
 				if tt.errType != nil && !errors.Is(err, tt.errType) {
 					t.Fatalf("expected error type %v, got %v", tt.errType, err)
 				}
-			} else {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}

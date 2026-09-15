@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -10,7 +11,10 @@ import (
 	"github.com/akeemphilbert/pericarp/pkg/eventsourcing/domain"
 )
 
-var _ domain.EventStore = (*MemoryStore)(nil)
+var (
+	_ domain.EventStore            = (*MemoryStore)(nil)
+	_ domain.CompactableEventStore = (*MemoryStore)(nil)
+)
 
 // MemoryStore is an in-memory implementation of EventStore.
 // It's useful for testing and development, but not suitable for production
@@ -22,6 +26,11 @@ type MemoryStore struct {
 	versions   map[string]int                         // aggregateID -> current version
 	log        []domain.EventEnvelope[any]            // all events in global commit order
 	lastPos    int64                                  // last assigned global position
+
+	// compactions records every batch RetireEvents has removed, in the order
+	// it removed them. It is the in-memory equivalent of the SQL store's
+	// compactions table and makes a compaction run resumable.
+	compactions []domain.CompactionManifest
 }
 
 // NewMemoryStore creates a new in-memory event store.
@@ -231,8 +240,136 @@ func (m *MemoryStore) Close() error {
 	m.eventsByID = make(map[string]domain.EventEnvelope[any])
 	m.versions = make(map[string]int)
 	m.log = nil
+	m.compactions = nil
 
 	return nil
+}
+
+// SeedEvents appends events keeping each envelope's own Position instead of
+// allocating the next one, so a store can be given a feed with gaps — the
+// shape a compacted store has, since retired positions are never reused.
+// Append cannot produce that shape (it always allocates the next position),
+// which makes this the way to set up a store for tests and fixtures.
+//
+// Positions must be strictly increasing and above every position already
+// assigned, so seeding can never hand out a position the feed has already
+// delivered.
+func (m *MemoryStore) SeedEvents(ctx context.Context, events ...domain.EventEnvelope[any]) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	last := m.lastPos
+	for _, event := range events {
+		if event.ID == "" {
+			return fmt.Errorf("%w: event ID is required", domain.ErrInvalidEvent)
+		}
+		if event.AggregateID == "" {
+			return fmt.Errorf("%w: aggregate ID is required", domain.ErrInvalidEvent)
+		}
+		if event.Position <= last {
+			return fmt.Errorf("%w: position %d is not above the last assigned position %d",
+				domain.ErrInvalidEvent, event.Position, last)
+		}
+		last = event.Position
+	}
+
+	for _, event := range events {
+		m.events[event.AggregateID] = append(m.events[event.AggregateID], event)
+		m.eventsByID[event.ID] = event
+		m.log = append(m.log, event)
+		if event.SequenceNo > m.versions[event.AggregateID] {
+			m.versions[event.AggregateID] = event.SequenceNo
+		}
+	}
+	m.lastPos = last
+
+	return nil
+}
+
+// RetireEvents deletes the given events and records manifest, atomically with
+// respect to any other operation on this store (both happen under the store's
+// single lock). Nothing else moves: the positions the deleted events held stay
+// retired forever, so the global feed keeps gaps rather than reusing them.
+func (m *MemoryStore) RetireEvents(ctx context.Context, eventIDs []string, manifest domain.CompactionManifest) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	retire := make(map[string]struct{}, len(eventIDs))
+	for _, id := range eventIDs {
+		if _, ok := m.eventsByID[id]; !ok {
+			return fmt.Errorf("%w: cannot retire event %s", domain.ErrEventNotFound, id)
+		}
+		retire[id] = struct{}{}
+	}
+
+	for id := range retire {
+		delete(m.eventsByID, id)
+	}
+
+	// Rebuild rather than filter in place: GetEvents hands out the stored
+	// slice itself, so reusing its backing array would rewrite a slice a
+	// caller is still holding.
+	for aggregateID, events := range m.events {
+		kept := make([]domain.EventEnvelope[any], 0, len(events))
+		version := 0
+		for _, event := range events {
+			if _, gone := retire[event.ID]; gone {
+				continue
+			}
+			kept = append(kept, event)
+			if event.SequenceNo > version {
+				version = event.SequenceNo
+			}
+		}
+		if len(kept) == len(events) {
+			continue
+		}
+		if len(kept) == 0 {
+			// An aggregate whose whole history was retired — a deleted one —
+			// leaves nothing behind, version included, so the store reports
+			// it the same way a SQL store does once its rows are gone.
+			delete(m.events, aggregateID)
+			delete(m.versions, aggregateID)
+			continue
+		}
+		m.events[aggregateID] = kept
+		m.versions[aggregateID] = version
+	}
+
+	kept := make([]domain.EventEnvelope[any], 0, len(m.log))
+	for _, event := range m.log {
+		if _, gone := retire[event.ID]; gone {
+			continue
+		}
+		kept = append(kept, event)
+	}
+	m.log = kept
+
+	m.compactions = append(m.compactions, manifest)
+
+	return nil
+}
+
+// Compactions returns the recorded compaction manifests in ascending
+// ToPosition order.
+func (m *MemoryStore) Compactions(ctx context.Context) ([]domain.CompactionManifest, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]domain.CompactionManifest, len(m.compactions))
+	copy(result, m.compactions)
+	slices.SortFunc(result, func(a, b domain.CompactionManifest) int {
+		return cmp.Compare(a.ToPosition, b.ToPosition)
+	})
+	return result, nil
 }
 
 // GetAllAggregateIDs returns all aggregate IDs in the store (useful for testing).

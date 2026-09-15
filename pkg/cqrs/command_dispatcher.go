@@ -350,15 +350,16 @@ func getMatchingPatterns(typeName string) []string {
 		typeName, // Exact match
 	}
 
-	if len(parts) == 1 {
+	switch {
+	case len(parts) == 1:
 		patterns = append(patterns, "*")
-	} else if len(parts) == 2 {
+	case len(parts) == 2:
 		patterns = append(patterns,
 			parts[0]+".*",
 			"*."+parts[1],
 			"*.*",
 		)
-	} else {
+	default:
 		for i := 0; i < len(parts); i++ {
 			wildcardParts := make([]string, len(parts))
 			copy(wildcardParts, parts)

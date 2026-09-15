@@ -37,7 +37,7 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 	}
 
 	// Create base directory if it doesn't exist
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+	if err := os.MkdirAll(baseDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create base directory: %w", err)
 	}
 
@@ -149,6 +149,8 @@ func (f *FileStore) loadAllFromDisk() error {
 
 // loadFromFile loads events from a single file.
 func (f *FileStore) loadFromFile(filePath string) ([]domain.EventEnvelope[any], error) {
+	// #nosec G304 -- filePath comes from getFilePath, which reduces the
+	// aggregate ID to filepath.Base and joins it under baseDir.
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -174,7 +176,7 @@ func (f *FileStore) saveToFile(aggregateID string, events []domain.EventEnvelope
 	filePath := f.getFilePath(aggregateID)
 
 	// Create directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o750); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -185,7 +187,7 @@ func (f *FileStore) saveToFile(aggregateID string, events []domain.EventEnvelope
 
 	// Write to temporary file first, then rename (atomic write)
 	tmpPath := filePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write temporary file: %w", err)
 	}
 
