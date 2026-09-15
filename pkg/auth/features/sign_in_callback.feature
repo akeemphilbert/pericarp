@@ -98,5 +98,6 @@ Feature: The sign-in callback carries the resolved account into the session
       And "google" has not verified the email of "linus"
       When "linus" completes the sign-in callback with the invite
       Then the callback refuses the sign-in because the email is not verified
+      And "linus" still holds a pending invite to "acme"
       And no credential is stored for "linus"
       And the callback stores no session

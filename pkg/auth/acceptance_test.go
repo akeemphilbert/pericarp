@@ -165,6 +165,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the callback refuses the sign-in because the email is not verified$`, w.callbackRefusedUnverifiedEmail)
 	sc.Step(`^no credential is stored for "([^"]*)"$`, w.noCredentialStoredFor)
 	sc.Step(`^the callback stores no session$`, w.callbackStoresNoSession)
+	sc.Step(`^"([^"]*)" still holds a pending invite to "([^"]*)"$`, w.stillHoldsPendingInvite)
 
 	// When — actions
 	sc.Step(`^"([^"]*)" signs in$`, w.signsIn)
@@ -1448,6 +1449,21 @@ func (w *world) callbackStoresNoSession() error {
 		return fmt.Errorf("%d sessions stored, want none", count)
 	}
 	return nil
+}
+
+// stillHoldsPendingInvite reads the invite back from storage, so a refused
+// sign-in that accepted the invite anyway still fails.
+func (w *world) stillHoldsPendingInvite(agentID, accountID string) error {
+	pending, err := w.invites.FindPendingByEmail(context.Background(), agentID+"@example.com")
+	if err != nil {
+		return fmt.Errorf("list pending invites for %s: %w", agentID, err)
+	}
+	for _, invite := range pending {
+		if invite.AccountID() == accountID && invite.Status() == entities.InviteStatusPending {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s holds no pending invite to %s, want one", agentID, accountID)
 }
 
 func (w *world) refusalIsCoded(code string) error {
