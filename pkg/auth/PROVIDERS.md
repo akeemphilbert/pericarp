@@ -5,6 +5,13 @@ Each constructor returns a value that implements
 `application.OAuthProviderRegistry`. See `examples/authn/provider_catalog.go`
 for a copy-pasteable wiring example.
 
+**Providers named `google` or `apple`.** The reference callback refuses a
+sign-in whose `UserInfo.HasUnverifiedEmail()` is true, and that predicate is
+keyed on `UserInfo.Provider`. Any provider that reports itself as `"google"`
+or `"apple"`, including a stub, test fake or custom implementation, must set
+`UserInfo.EmailVerified`, or every sign-in through it that carries an email is
+refused. See "Verified email at the sign-in callback" in `README.md`.
+
 ---
 
 ## Apple
@@ -21,6 +28,14 @@ providers.NewApple(providers.AppleConfig{
 Default scopes: `["name", "email"]`. Apple does not support PKCE — the
 `codeVerifier` argument to `Exchange` is ignored. Apple also does not return a
 new ID token on refresh, so `RefreshToken` returns minimal user info.
+
+`UserInfo.EmailVerified` comes from the ID token's `email_verified` claim,
+which Apple sends as a boolean or as the string `"true"` / `"false"`. Both are
+accepted; an absent claim reads as false. On `Exchange` the ID token comes
+from Apple's token endpoint. `ValidateIDToken` does not verify the token's
+signature, so a value read there is only as trustworthy as the token's
+source. See "Verified email at the sign-in callback" in `README.md` for how
+the reference callback acts on it.
 
 ## GitHub
 
@@ -45,6 +60,14 @@ providers.NewGoogle(providers.GoogleConfig{
 ```
 
 Default scopes: `["openid", "email", "profile"]`.
+
+`UserInfo.EmailVerified` comes from the `email_verified` claim: from the
+userinfo response on `Exchange` and `RefreshToken`, and from the ID token on
+`ValidateIDToken`. An absent claim reads as false, and one Debug line through
+`GoogleConfig.Logger` names the subject when the userinfo response omits it.
+`ValidateIDToken` does not verify the token's signature, so a value read there
+is only as trustworthy as the token's source. See "Verified email at the
+sign-in callback" in `README.md` for how the reference callback acts on it.
 
 ## Microsoft
 

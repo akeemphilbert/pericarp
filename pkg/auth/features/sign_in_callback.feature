@@ -65,3 +65,47 @@ Feature: The sign-in callback carries the resolved account into the session
       Then the callback completes successfully
       And the session stored by the callback is not scoped to any account
       And the callback issues no identity token
+
+  Rule: The callback signs no one in on an email the provider has not verified
+
+    @decision
+    Scenario: A first-time agent whose email the provider has not verified is refused
+      # Google and Apple each say whether the person signing in controls the
+      # address. Invites and account binding trust a credential's email, so a
+      # credential written for an address nobody proved lends that trust to
+      # whoever typed it. The callback refuses outright rather than signing the
+      # agent in without a credential: that would leave an agent and an account
+      # behind with no way back into them, and a callback that "succeeds" while
+      # withholding sign-in is harder to explain than a clear refusal.
+      Given an agent "grace" not yet known to "google"
+      And "google" has not verified the email of "grace"
+      When "grace" completes the sign-in callback
+      Then the callback refuses the sign-in because the email is not verified
+      And no credential is stored for "grace"
+      And the callback stores no session
+
+    @decision
+    Scenario: A returning agent whose email the provider has not verified is refused
+      # Refused even though a credential for this provider subject already
+      # exists. That refusal is the only thing that stops re-entry through a
+      # credential written before this check existed: someone signs in with
+      # another person's unverified address, the real owner later signs in
+      # through a trusted issuer and is joined to that same account, and the
+      # first person returns through the subject match. The accepted cost is
+      # that a genuine account whose provider email is unverified is refused.
+      Given an active agent "ada" known to "google" with email "ada@example.com"
+      And "ada" owns an active personal account "ada-personal"
+      And "google" has not verified the email of "ada"
+      When "ada" completes the sign-in callback
+      Then the callback refuses the sign-in because the email is not verified
+      And the callback stores no session
+
+    Scenario: An invited agent whose email the provider has not verified does not accept the invite
+      Given an organization account "acme" owned by "owner"
+      And "linus" holds a pending invite to "acme" as "member"
+      And "google" has not verified the email of "linus"
+      When "linus" completes the sign-in callback with the invite
+      Then the callback refuses the sign-in because the email is not verified
+      And "linus" still holds a pending invite to "acme"
+      And no credential is stored for "linus"
+      And the callback stores no session
