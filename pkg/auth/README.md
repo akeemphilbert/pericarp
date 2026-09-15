@@ -73,14 +73,15 @@ svc := application.NewDefaultAuthenticationService(
 
 Act on it through `UserInfo.HasUnverifiedEmail()`, not by reading the field: it is true when the profile comes from a provider that reports verification, carries an email, and that email is not verified. The list of providers that report verification then lives in one place.
 
-The reference callback (`authhttp.AuthHandlers.Callback`) **refuses** such a sign-in with `403 {"error": "email address not verified by the identity provider", "code": "email_not_verified"}`. The check runs before `FindOrCreateAgent` and before `InviteAcceptor.AcceptInvite`, so nothing is written: no agent, account, credential or session, and an invite stays pending. Returning agents are refused too, because `FindOrCreateAgent` saves their credential on every sign-in. A profile with no email is not refused, since there is nothing to bind.
+The reference callback (`authhttp.AuthHandlers.Callback`) **refuses** such a sign-in with `403 {"error": "email address not verified by the identity provider", "code": "email_not_verified"}`. The check runs before `FindOrCreateAgent` and before `InviteAcceptor.AcceptInvite`, so nothing is written: no agent, account, credential or session, and an invite stays pending. `InviteService.AcceptInvite` also refuses such a profile itself, with `application.ErrEmailNotVerified`, and the callback answers that error from either credential writer with the same 403. Returning agents are refused too, because `FindOrCreateAgent` saves their credential on every sign-in. A profile with no email is not refused, since there is nothing to bind.
 
 Why refuse, rather than sign the user in without writing a credential:
 
 - Invites and account binding trust a credential's email. A credential written for an address the provider has not verified lends that trust to whoever typed the address.
 - There is no clean "skip the credential" path. `FindOrCreateAgent` creates the agent, the personal account and the credential together, and `CreateSession` needs the credential's ID. Signing someone in without one would leave an agent and an account behind with no way back into them.
 - A refusal with a machine-readable code lets the client say what to do ("verify your email with Google, then sign in again"). A callback that redirects as though it succeeded while withholding sign-in does not.
-- It matches consumers that run their own callback over `AuthenticationService`: they should call `HasUnverifiedEmail()` and refuse before `FindOrCreateAgent` or `AcceptInvite`, and the reference callback does the same.
+
+**Writing a credential outside the reference callback.** `InviteService.AcceptInvite` guards itself. `FindOrCreateAgent` does not: seeding and asserted sign-in call it with profiles that carry no provider claim, so a refusal inside it would break them. A caller that writes a google or apple credential through `FindOrCreateAgent` must check `UserInfo.HasUnverifiedEmail()` first and refuse, as the reference callback does.
 
 ## Federated providers (Mastodon, Bluesky)
 

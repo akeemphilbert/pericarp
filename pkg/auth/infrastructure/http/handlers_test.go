@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -571,6 +572,14 @@ func callbackForProfile(t *testing.T, provider, email string, emailVerified bool
 		},
 	}
 	handlers, sm := newTestHandlersWithInvite(svc, nil, acceptor)
+	out.rec = driveCallback(t, handlers, sm, provider, inviteToken)
+	return out
+}
+
+// driveCallback stores flow data for provider, carrying inviteToken when it is
+// non-empty, and runs the callback against it.
+func driveCallback(t *testing.T, handlers *authhttp.AuthHandlers, sm *session.GorillaSessionManager, provider, inviteToken string) *httptest.ResponseRecorder {
+	t.Helper()
 
 	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
 	r.Host = "example.com"
@@ -590,9 +599,9 @@ func callbackForProfile(t *testing.T, provider, email string, emailVerified bool
 		r2.AddCookie(cookie)
 	}
 
-	out.rec = httptest.NewRecorder()
-	handlers.Callback(out.rec, r2)
-	return out
+	rec := httptest.NewRecorder()
+	handlers.Callback(rec, r2)
+	return rec
 }
 
 func TestCallback_UnverifiedProviderEmail_RefusedBeforeCredentialWrite(t *testing.T) {
@@ -665,6 +674,60 @@ func TestCallback_EmailVerification_OnlyHeldAgainstProvidersThatReportIt(t *test
 			}
 			if !out.createdSession {
 				t.Error("callback created no session")
+			}
+		})
+	}
+}
+
+// A credential writer can refuse an unverified email itself: InviteService
+// does, and a consumer's AuthenticationService may. The callback answers that
+// refusal exactly as it answers its own check.
+func TestCallback_CredentialWriterRefusesUnverifiedEmail_AnswersEmailNotVerified(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		inviteToken string
+	}{
+		{name: "FindOrCreateAgent refuses"},
+		{name: "AcceptInvite refuses", inviteToken: "invite-token-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			refusal := fmt.Errorf("credential writer: %w", application.ErrEmailNotVerified)
+			createdSession := false
+			svc := &mockAuthService{
+				findOrCreateFunc: func(_ context.Context, _ application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+					return nil, nil, nil, refusal
+				},
+				createSessionFunc: func(_ context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+					createdSession = true
+					return new(entities.AuthSession).With("sess-1", agentID, accountID, credentialID, ipAddress, userAgent, time.Now().Add(duration))
+				},
+			}
+			acceptor := &mockInviteAcceptor{
+				acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+					return nil, nil, nil, refusal
+				},
+			}
+			handlers, sm := newTestHandlersWithInvite(svc, nil, acceptor)
+
+			rec := driveCallback(t, handlers, sm, "google", tc.inviteToken)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+			resp := parseJSONResponse(t, rec)
+			if resp["code"] != "email_not_verified" {
+				t.Errorf("code = %q, want %q", resp["code"], "email_not_verified")
+			}
+			if resp["error"] != "email address not verified by the identity provider" {
+				t.Errorf("error = %q, want the callback's own refusal message", resp["error"])
+			}
+			if createdSession {
+				t.Error("callback created a session after the credential writer refused")
 			}
 		})
 	}

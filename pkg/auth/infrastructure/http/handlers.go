@@ -150,12 +150,7 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 	// Checked before both paths below, because each writes a credential, and
 	// a credential's email is what invites and account binding trust.
 	if authResult.UserInfo.HasUnverifiedEmail() {
-		h.cfg.Logger.Warn(ctx, "OAuth callback: identity provider has not verified the email address",
-			"provider", authResult.UserInfo.Provider)
-		h.writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "email address not verified by the identity provider",
-			"code":  "email_not_verified",
-		})
+		h.refuseUnverifiedEmail(ctx, w, authResult.UserInfo)
 		return
 	}
 
@@ -173,6 +168,10 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 		agent, credential, account, err = h.cfg.InviteAcceptor.AcceptInvite(
 			ctx, flowData.InviteToken, authResult.UserInfo)
 		if err != nil {
+			if errors.Is(err, application.ErrEmailNotVerified) {
+				h.refuseUnverifiedEmail(ctx, w, authResult.UserInfo)
+				return
+			}
 			h.cfg.Logger.Error(ctx, "invite acceptance failed", "error", err)
 			status := http.StatusInternalServerError
 			msg := "failed to accept invite"
@@ -190,6 +189,10 @@ func (h *AuthHandlers) Callback(w http.ResponseWriter, r *http.Request) {
 	} else {
 		agent, credential, account, err = h.cfg.AuthService.FindOrCreateAgent(ctx, authResult.UserInfo)
 		if err != nil {
+			if errors.Is(err, application.ErrEmailNotVerified) {
+				h.refuseUnverifiedEmail(ctx, w, authResult.UserInfo)
+				return
+			}
 			h.cfg.Logger.Error(ctx, "find or create agent failed", "error", err)
 			h.writeJSON(w, http.StatusInternalServerError,
 				map[string]string{"error": "failed to find or create agent"})
@@ -377,6 +380,18 @@ func realIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// refuseUnverifiedEmail answers a sign-in whose identity provider has not
+// verified the email, whether the callback's own check or a credential writer
+// caught it.
+func (h *AuthHandlers) refuseUnverifiedEmail(ctx context.Context, w http.ResponseWriter, userInfo application.UserInfo) {
+	h.cfg.Logger.Warn(ctx, "OAuth callback: identity provider has not verified the email address",
+		"provider", userInfo.Provider)
+	h.writeJSON(w, http.StatusForbidden, map[string]string{
+		"error": "email address not verified by the identity provider",
+		"code":  "email_not_verified",
+	})
 }
 
 func (h *AuthHandlers) writeJSON(w http.ResponseWriter, status int, v interface{}) {

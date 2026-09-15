@@ -136,7 +136,15 @@ func (s *InviteService) CreateInvite(ctx context.Context, accountID, email, role
 
 // AcceptInvite accepts an invite using the provided token and user info.
 // Returns the activated agent, credential, and account.
+//
+// It returns ErrEmailNotVerified, and writes nothing, when
+// userInfo.HasUnverifiedEmail() is true: an invite trusts the email it is
+// accepted with.
 func (s *InviteService) AcceptInvite(ctx context.Context, token string, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+	if userInfo.HasUnverifiedEmail() {
+		return nil, nil, nil, ErrEmailNotVerified
+	}
+
 	// Validate invite token
 	claims, err := s.tokenService.ValidateInviteToken(ctx, token)
 	if err != nil {

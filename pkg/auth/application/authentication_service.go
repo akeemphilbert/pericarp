@@ -37,6 +37,9 @@ var (
 	ErrSessionAccountRevoked        = errors.New("authentication: session is scoped to an account the agent no longer belongs to")
 	ErrAccountDeactivated           = errors.New("authentication: account is deactivated")
 	ErrSessionAccountDeactivated    = errors.New("authentication: session is scoped to a deactivated account")
+	// ErrEmailNotVerified refuses a profile whose UserInfo.HasUnverifiedEmail
+	// is true, before any credential is written for it.
+	ErrEmailNotVerified = errors.New("authentication: email address not verified by the identity provider")
 	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
 	// no JWTService is wired. Distinct from IssueIdentityToken's
 	// ("", nil) shape because refresh's sole purpose is to mint a token —
@@ -157,6 +160,11 @@ type AuthenticationService interface {
 
 	// FindOrCreateAgent looks up an agent by provider credentials, creates if not found.
 	// For new users, a personal Account is also created with the agent as owner.
+	//
+	// It does not check UserInfo.HasUnverifiedEmail, because seeding and
+	// asserted sign-in call it with profiles that carry no provider claim. A
+	// caller that writes a google or apple credential through it must check
+	// HasUnverifiedEmail first and refuse, as authhttp.AuthHandlers.Callback does.
 	FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
 
 	// RegisterPassword creates a new Agent + personal Account + Credential
@@ -393,6 +401,11 @@ func (s *DefaultAuthenticationService) ValidateState(_ context.Context, received
 // FindOrCreateAgent looks up an agent by provider credentials, creates if not found.
 // For new users, a personal Account is also created with the agent as owner.
 // For existing users, the personal Account is returned if one exists (may be nil).
+//
+// It does not check UserInfo.HasUnverifiedEmail, because seeding and asserted
+// sign-in call it with profiles that carry no provider claim. A caller that
+// writes a google or apple credential through it must check
+// HasUnverifiedEmail first and refuse, as authhttp.AuthHandlers.Callback does.
 func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
 	// Look up existing credential by provider
 	credential, err := s.credentials.FindByProvider(ctx, userInfo.Provider, userInfo.ProviderUserID)
