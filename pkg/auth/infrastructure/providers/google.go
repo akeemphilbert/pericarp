@@ -31,10 +31,12 @@ type GoogleConfig struct {
 
 // Google implements the application.OAuthProvider interface for Google OAuth 2.0 / OIDC.
 type Google struct {
-	clientID     string
-	clientSecret string
-	scopes       []string
-	httpClient   *http.Client
+	clientID         string
+	clientSecret     string
+	scopes           []string
+	httpClient       *http.Client
+	tokenEndpoint    string
+	userInfoEndpoint string
 }
 
 // NewGoogle creates a new Google OAuth provider from the given configuration.
@@ -46,10 +48,12 @@ func NewGoogle(config GoogleConfig) *Google {
 	}
 
 	return &Google{
-		clientID:     config.ClientID,
-		clientSecret: config.ClientSecret,
-		scopes:       scopes,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		clientID:         config.ClientID,
+		clientSecret:     config.ClientSecret,
+		scopes:           scopes,
+		httpClient:       &http.Client{Timeout: 30 * time.Second},
+		tokenEndpoint:    googleTokenEndpoint,
+		userInfoEndpoint: googleUserInfoEndpoint,
 	}
 }
 
@@ -87,10 +91,11 @@ type tokenResponse struct {
 
 // googleUserInfo represents the JSON response from Google's userinfo endpoint.
 type googleUserInfo struct {
-	Sub     string `json:"sub"`
-	Email   string `json:"email"`
-	Name    string `json:"name"`
-	Picture string `json:"picture"`
+	Sub           string             `json:"sub"`
+	Email         string             `json:"email"`
+	EmailVerified emailVerifiedClaim `json:"email_verified"`
+	Name          string             `json:"name"`
+	Picture       string             `json:"picture"`
 }
 
 // Exchange exchanges an authorization code for tokens and fetches user info.
@@ -123,6 +128,7 @@ func (g *Google) Exchange(ctx context.Context, code string, codeVerifier string,
 		UserInfo: application.UserInfo{
 			ProviderUserID: userInfo.Sub,
 			Email:          userInfo.Email,
+			EmailVerified:  bool(userInfo.EmailVerified),
 			DisplayName:    userInfo.Name,
 			AvatarURL:      userInfo.Picture,
 			Provider:       "google",
@@ -163,6 +169,7 @@ func (g *Google) RefreshToken(ctx context.Context, refreshToken string) (*applic
 		UserInfo: application.UserInfo{
 			ProviderUserID: userInfo.Sub,
 			Email:          userInfo.Email,
+			EmailVerified:  bool(userInfo.EmailVerified),
 			DisplayName:    userInfo.Name,
 			AvatarURL:      userInfo.Picture,
 			Provider:       "google",
@@ -198,14 +205,15 @@ func (g *Google) RevokeToken(ctx context.Context, token string) error {
 
 // idTokenClaims represents the JWT claims extracted from a Google ID token.
 type idTokenClaims struct {
-	Sub     string `json:"sub"`
-	Email   string `json:"email"`
-	Name    string `json:"name"`
-	Picture string `json:"picture"`
-	Nonce   string `json:"nonce"`
-	Iss     string `json:"iss"`
-	Aud     string `json:"aud"`
-	Exp     int64  `json:"exp"`
+	Sub           string             `json:"sub"`
+	Email         string             `json:"email"`
+	EmailVerified emailVerifiedClaim `json:"email_verified"`
+	Name          string             `json:"name"`
+	Picture       string             `json:"picture"`
+	Nonce         string             `json:"nonce"`
+	Iss           string             `json:"iss"`
+	Aud           string             `json:"aud"`
+	Exp           int64              `json:"exp"`
 }
 
 // ValidateIDToken decodes and validates a Google ID token, returning the user info from claims.
@@ -253,6 +261,7 @@ func (g *Google) ValidateIDToken(_ context.Context, idToken string, nonce string
 	return &application.UserInfo{
 		ProviderUserID: claims.Sub,
 		Email:          claims.Email,
+		EmailVerified:  bool(claims.EmailVerified),
 		DisplayName:    claims.Name,
 		AvatarURL:      claims.Picture,
 		Provider:       "google",
@@ -261,7 +270,7 @@ func (g *Google) ValidateIDToken(_ context.Context, idToken string, nonce string
 
 // requestToken performs a POST to Google's token endpoint and parses the response.
 func (g *Google) requestToken(ctx context.Context, data url.Values) (*tokenResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, googleTokenEndpoint, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.tokenEndpoint, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -292,7 +301,7 @@ func (g *Google) requestToken(ctx context.Context, data url.Values) (*tokenRespo
 
 // fetchUserInfo retrieves user information from Google's userinfo endpoint using the access token.
 func (g *Google) fetchUserInfo(ctx context.Context, accessToken string) (*googleUserInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, googleUserInfoEndpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.userInfoEndpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create userinfo request: %w", err)
 	}

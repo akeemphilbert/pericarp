@@ -67,9 +67,14 @@ type AuthResult struct {
 type UserInfo struct {
 	ProviderUserID string
 	Email          string
-	DisplayName    string
-	AvatarURL      string
-	Provider       string
+	// EmailVerified is true only when the identity provider itself vouched that
+	// the user controls Email. Google and Apple send that claim. Every other
+	// provider sends none, so for them false means "not reported", not
+	// "unverified". An absent or unreadable claim is false, never true.
+	EmailVerified bool
+	DisplayName   string
+	AvatarURL     string
+	Provider      string
 }
 
 // SessionInfo represents validated session information returned to consumers.
