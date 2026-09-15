@@ -22,6 +22,11 @@ Default scopes: `["name", "email"]`. Apple does not support PKCE — the
 `codeVerifier` argument to `Exchange` is ignored. Apple also does not return a
 new ID token on refresh, so `RefreshToken` returns minimal user info.
 
+`UserInfo.EmailVerified` comes from the ID token's `email_verified` claim,
+which Apple sends as a boolean or as the string `"true"` / `"false"`. Both are
+accepted; an absent claim reads as false. See "Verified email at the sign-in
+callback" in `README.md` for how the reference callback acts on it.
+
 ## GitHub
 
 ```go
@@ -45,6 +50,11 @@ providers.NewGoogle(providers.GoogleConfig{
 ```
 
 Default scopes: `["openid", "email", "profile"]`.
+
+`UserInfo.EmailVerified` comes from the `email_verified` claim: from the
+userinfo response on `Exchange` and `RefreshToken`, and from the ID token on
+`ValidateIDToken`. An absent claim reads as false. See "Verified email at the
+sign-in callback" in `README.md` for how the reference callback acts on it.
 
 ## Microsoft
 
