@@ -84,7 +84,15 @@ Feature: The sign-in callback carries the resolved account into the session
       And no credential is stored for "grace"
       And the callback stores no session
 
+    @decision
     Scenario: A returning agent whose email the provider has not verified is refused
+      # Refused even though a credential for this provider subject already
+      # exists. That refusal is the only thing that stops re-entry through a
+      # credential written before this check existed: someone signs in with
+      # another person's unverified address, the real owner later signs in
+      # through a trusted issuer and is joined to that same account, and the
+      # first person returns through the subject match. The accepted cost is
+      # that a genuine account whose provider email is unverified is refused.
       Given an active agent "ada" known to "google" with email "ada@example.com"
       And "ada" owns an active personal account "ada-personal"
       And "google" has not verified the email of "ada"

@@ -74,6 +74,9 @@ type UserInfo struct {
 	// the user controls Email. Google and Apple send that claim. Every other
 	// provider sends none, so for them false means "not reported", not
 	// "unverified". An absent or unreadable claim is false, never true.
+	//
+	// From ValidateIDToken it is only as trustworthy as the token's source:
+	// Google's and Apple's ValidateIDToken do not verify the token signature.
 	EmailVerified bool
 	DisplayName   string
 	AvatarURL     string
@@ -93,6 +96,11 @@ var emailVerifyingProviders = map[string]bool{"google": true, "apple": true}
 // EmailVerified is always false and says nothing, and false when u carries no
 // email at all, which leaves nothing to bind. Neither of those sign-ins
 // changes.
+//
+// The provider list is keyed on u.Provider and fails closed: a provider that
+// reports itself as "google" or "apple", including a stub or custom provider,
+// must set EmailVerified, or every profile from it that carries an email is
+// refused.
 func (u UserInfo) HasUnverifiedEmail() bool {
 	return emailVerifyingProviders[u.Provider] && u.Email != "" && !u.EmailVerified
 }

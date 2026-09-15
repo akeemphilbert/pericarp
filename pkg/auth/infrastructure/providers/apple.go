@@ -238,6 +238,8 @@ func (a *Apple) RevokeToken(ctx context.Context, token string) error {
 // (issuer, audience, expiry, nonce) but does NOT verify the JWT signature.
 // Production deployments should verify the JWT signature using Apple's JWKS endpoint
 // at https://appleid.apple.com/auth/keys to ensure the token has not been tampered with.
+// Until then, UserInfo.EmailVerified read here is only as trustworthy as the
+// token's source.
 func (a *Apple) ValidateIDToken(_ context.Context, idToken string, nonce string) (*application.UserInfo, error) {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {

@@ -244,6 +244,8 @@ type idTokenClaims struct {
 // (issuer, audience, expiry, nonce) but does NOT verify the JWT signature.
 // Production deployments should verify the JWT signature using Google's JWKS endpoint
 // at https://www.googleapis.com/oauth2/v3/certs to ensure the token has not been tampered with.
+// Until then, UserInfo.EmailVerified read here is only as trustworthy as the
+// token's source.
 func (g *Google) ValidateIDToken(_ context.Context, idToken string, nonce string) (*application.UserInfo, error) {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {
