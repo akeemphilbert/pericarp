@@ -387,7 +387,7 @@ func realIP(r *http.Request) string {
 // caught it.
 func (h *AuthHandlers) refuseUnverifiedEmail(ctx context.Context, w http.ResponseWriter, userInfo application.UserInfo) {
 	h.cfg.Logger.Warn(ctx, "OAuth callback: identity provider has not verified the email address",
-		"provider", userInfo.Provider)
+		"provider", userInfo.Provider, "provider_user_id", userInfo.ProviderUserID)
 	h.writeJSON(w, http.StatusForbidden, map[string]string{
 		"error": "email address not verified by the identity provider",
 		"code":  "email_not_verified",

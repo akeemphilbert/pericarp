@@ -1,9 +1,13 @@
 package providers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +82,70 @@ func TestGoogleUserInfo_EmailVerified(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A userinfo response with no email_verified claim at all reads as unverified,
+// which refuses the sign-in. One Debug line separates that case from a claim
+// that said false, and it names the subject, never the email.
+func TestGoogleUserInfo_AbsentEmailVerifiedClaim_LogsDebug(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		claim   string
+		wantLog bool
+	}{
+		{name: "claim absent", claim: ``, wantLog: true},
+		{name: "claim true", claim: `,"email_verified":true`, wantLog: false},
+		{name: "claim false", claim: `,"email_verified":false`, wantLog: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			srv := newGoogleServer(t, `{"sub":"g-1","email":"user@example.com","name":"Test User"`+tc.claim+`}`)
+			g := NewGoogle(GoogleConfig{ClientID: "client-1", ClientSecret: "secret", Logger: logger})
+			g.tokenEndpoint = srv.URL + "/token"
+			g.userInfoEndpoint = srv.URL + "/userinfo"
+
+			if _, err := g.Exchange(context.Background(), "the-code", "the-verifier", "https://example.com/cb"); err != nil {
+				t.Fatalf("Exchange: %v", err)
+			}
+
+			var records []map[string]any
+			for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+				if len(line) == 0 {
+					continue
+				}
+				record := map[string]any{}
+				if err := json.Unmarshal(line, &record); err != nil {
+					t.Fatalf("decode log line %q: %v", line, err)
+				}
+				records = append(records, record)
+			}
+
+			if !tc.wantLog {
+				if len(records) != 0 {
+					t.Errorf("logged %d lines, want none: %s", len(records), buf.String())
+				}
+				return
+			}
+			if len(records) != 1 {
+				t.Fatalf("logged %d lines, want 1: %s", len(records), buf.String())
+			}
+			if got := records[0]["level"]; got != "DEBUG" {
+				t.Errorf("level = %v, want DEBUG", got)
+			}
+			if got := records[0]["provider_user_id"]; got != "g-1" {
+				t.Errorf("provider_user_id = %v, want g-1", got)
+			}
+			if strings.Contains(buf.String(), "user@example.com") {
+				t.Errorf("debug line carries the email: %s", buf.String())
+			}
+		})
 	}
 }
 

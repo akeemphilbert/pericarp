@@ -733,6 +733,96 @@ func TestCallback_CredentialWriterRefusesUnverifiedEmail_AnswersEmailNotVerified
 	}
 }
 
+type logEntry struct {
+	level string
+	msg   string
+	kv    map[string]interface{}
+}
+
+// recordingLogger keeps every entry, so a test can read the fields a line carried.
+type recordingLogger struct {
+	entries []logEntry
+}
+
+func (l *recordingLogger) record(level, msg string, keysAndValues []interface{}) {
+	kv := map[string]interface{}{}
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		if key, ok := keysAndValues[i].(string); ok {
+			kv[key] = keysAndValues[i+1]
+		}
+	}
+	l.entries = append(l.entries, logEntry{level: level, msg: msg, kv: kv})
+}
+
+func (l *recordingLogger) Info(_ context.Context, msg string, kv ...interface{}) {
+	l.record("info", msg, kv)
+}
+
+func (l *recordingLogger) Warn(_ context.Context, msg string, kv ...interface{}) {
+	l.record("warn", msg, kv)
+}
+
+func (l *recordingLogger) Error(_ context.Context, msg string, kv ...interface{}) {
+	l.record("error", msg, kv)
+}
+
+// The refusal line names the provider and the subject, so support can find one
+// refused person. It never carries the email or a token.
+func TestCallback_UnverifiedEmailRefusal_LogsSubjectNotEmail(t *testing.T) {
+	t.Parallel()
+
+	logger := &recordingLogger{}
+	svc := &mockAuthService{
+		exchangeFunc: func(_ context.Context, _, _, _, _ string) (*application.AuthResult, error) {
+			return &application.AuthResult{
+				AccessToken: "access-token",
+				IDToken:     "id-token",
+				UserInfo: application.UserInfo{
+					ProviderUserID: "google-123",
+					Email:          "user@example.com",
+					DisplayName:    "Test User",
+					Provider:       "google",
+				},
+			}, nil
+		},
+	}
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+	handlers := authhttp.NewAuthHandlers(authhttp.HandlerConfig{
+		AuthService:    svc,
+		SessionManager: sm,
+		Credentials:    &mockCredRepo{},
+		RedirectURI:    authhttp.RedirectURIConfig{CallbackPath: "/api/auth/callback"},
+		Logger:         logger,
+	})
+
+	rec := driveCallback(t, handlers, sm, "google", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var refusal *logEntry
+	for i := range logger.entries {
+		if logger.entries[i].level == "warn" {
+			refusal = &logger.entries[i]
+		}
+	}
+	if refusal == nil {
+		t.Fatalf("no warn line for the refusal; entries: %+v", logger.entries)
+	}
+	if got := refusal.kv["provider"]; got != "google" {
+		t.Errorf("provider = %v, want google", got)
+	}
+	if got := refusal.kv["provider_user_id"]; got != "google-123" {
+		t.Errorf("provider_user_id = %v, want google-123", got)
+	}
+	for key, value := range refusal.kv {
+		if s, ok := value.(string); ok && (s == "user@example.com" || s == "access-token" || s == "id-token") {
+			t.Errorf("refusal log field %q carries the email or a token", key)
+		}
+	}
+}
+
 // --- Me handler tests ---
 
 func TestMe_Authenticated_ReturnsProfile(t *testing.T) {

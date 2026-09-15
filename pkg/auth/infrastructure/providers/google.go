@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,6 +28,9 @@ type GoogleConfig struct {
 	ClientID     string
 	ClientSecret string
 	Scopes       []string // defaults to ["openid", "email", "profile"]
+	// Logger receives debug detail about Google's responses. Defaults to
+	// slog.Default().
+	Logger *slog.Logger
 }
 
 // Google implements the application.OAuthProvider interface for Google OAuth 2.0 / OIDC.
@@ -37,6 +41,7 @@ type Google struct {
 	httpClient       *http.Client
 	tokenEndpoint    string
 	userInfoEndpoint string
+	logger           *slog.Logger
 }
 
 // NewGoogle creates a new Google OAuth provider from the given configuration.
@@ -54,7 +59,17 @@ func NewGoogle(config GoogleConfig) *Google {
 		httpClient:       &http.Client{Timeout: 30 * time.Second},
 		tokenEndpoint:    googleTokenEndpoint,
 		userInfoEndpoint: googleUserInfoEndpoint,
+		logger:           config.Logger,
 	}
+}
+
+// log returns the configured logger, or slog.Default() at call time, so a
+// later slog.SetDefault still applies.
+func (g *Google) log() *slog.Logger {
+	if g.logger != nil {
+		return g.logger
+	}
+	return slog.Default()
 }
 
 // Name returns the provider identifier.
@@ -91,11 +106,18 @@ type tokenResponse struct {
 
 // googleUserInfo represents the JSON response from Google's userinfo endpoint.
 type googleUserInfo struct {
-	Sub           string             `json:"sub"`
-	Email         string             `json:"email"`
-	EmailVerified emailVerifiedClaim `json:"email_verified"`
-	Name          string             `json:"name"`
-	Picture       string             `json:"picture"`
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	// EmailVerified is nil when the response carries no email_verified claim.
+	EmailVerified *emailVerifiedClaim `json:"email_verified"`
+	Name          string              `json:"name"`
+	Picture       string              `json:"picture"`
+}
+
+// emailVerified reports whether Google vouched for Email. An absent claim is
+// false.
+func (u *googleUserInfo) emailVerified() bool {
+	return u.EmailVerified != nil && bool(*u.EmailVerified)
 }
 
 // Exchange exchanges an authorization code for tokens and fetches user info.
@@ -128,7 +150,7 @@ func (g *Google) Exchange(ctx context.Context, code string, codeVerifier string,
 		UserInfo: application.UserInfo{
 			ProviderUserID: userInfo.Sub,
 			Email:          userInfo.Email,
-			EmailVerified:  bool(userInfo.EmailVerified),
+			EmailVerified:  userInfo.emailVerified(),
 			DisplayName:    userInfo.Name,
 			AvatarURL:      userInfo.Picture,
 			Provider:       "google",
@@ -169,7 +191,7 @@ func (g *Google) RefreshToken(ctx context.Context, refreshToken string) (*applic
 		UserInfo: application.UserInfo{
 			ProviderUserID: userInfo.Sub,
 			Email:          userInfo.Email,
-			EmailVerified:  bool(userInfo.EmailVerified),
+			EmailVerified:  userInfo.emailVerified(),
 			DisplayName:    userInfo.Name,
 			AvatarURL:      userInfo.Picture,
 			Provider:       "google",
@@ -325,6 +347,10 @@ func (g *Google) fetchUserInfo(ctx context.Context, accessToken string) (*google
 	var userInfo googleUserInfo
 	if err = json.Unmarshal(body, &userInfo); err != nil {
 		return nil, fmt.Errorf("failed to parse userinfo response: %w", err)
+	}
+	if userInfo.EmailVerified == nil {
+		g.log().DebugContext(ctx, "google: userinfo response carries no email_verified claim",
+			"provider_user_id", userInfo.Sub)
 	}
 
 	return &userInfo, nil
