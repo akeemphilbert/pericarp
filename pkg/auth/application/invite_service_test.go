@@ -260,6 +260,7 @@ func TestInviteService_AcceptInvite_HappyPath(t *testing.T) {
 	userInfo := application.UserInfo{
 		ProviderUserID: "google-user-alice",
 		Email:          "alice@example.com",
+		EmailVerified:  true,
 		DisplayName:    "Alice Smith",
 		Provider:       "google",
 	}
@@ -320,6 +321,7 @@ func TestInviteService_AcceptInvite_Expired(t *testing.T) {
 	_, _, _, err := svc.AcceptInvite(ctx, "expired-token", application.UserInfo{
 		ProviderUserID: "google-user-alice",
 		Email:          "alice@example.com",
+		EmailVerified:  true,
 		DisplayName:    "Alice",
 		Provider:       "google",
 	})
@@ -344,6 +346,7 @@ func TestInviteService_AcceptInvite_AlreadyAccepted(t *testing.T) {
 	userInfo := application.UserInfo{
 		ProviderUserID: "google-user-alice",
 		Email:          "alice@example.com",
+		EmailVerified:  true,
 		DisplayName:    "Alice",
 		Provider:       "google",
 	}
@@ -406,6 +409,7 @@ func TestInviteService_RevokeInvite_AlreadyAccepted(t *testing.T) {
 	_, _, _, err = svc.AcceptInvite(ctx, token, application.UserInfo{
 		ProviderUserID: "google-user-alice",
 		Email:          "alice@example.com",
+		EmailVerified:  true,
 		DisplayName:    "Alice",
 		Provider:       "google",
 	})
@@ -449,6 +453,7 @@ func TestInviteService_AcceptInvite_EmailMismatch(t *testing.T) {
 	_, _, _, err = svc.AcceptInvite(ctx, token, application.UserInfo{
 		ProviderUserID: "google-user-bob",
 		Email:          "bob@example.com",
+		EmailVerified:  true,
 		DisplayName:    "Bob",
 		Provider:       "google",
 	})
@@ -485,6 +490,7 @@ func TestInviteService_AcceptInvite_EmptyDisplayName_KeepsEmail(t *testing.T) {
 	agent, _, _, err := svc.AcceptInvite(ctx, token, application.UserInfo{
 		ProviderUserID: "google-user-alice",
 		Email:          "alice@example.com",
+		EmailVerified:  true,
 		DisplayName:    "",
 		Provider:       "google",
 	})
@@ -523,10 +529,64 @@ func TestInviteService_AcceptInvite_RefusesDeactivatedAccount(t *testing.T) {
 	_, _, _, err = svc.AcceptInvite(ctx, token, application.UserInfo{
 		ProviderUserID: "google-user-alice",
 		Email:          "alice@example.com",
+		EmailVerified:  true,
 		DisplayName:    "Alice Smith",
 		Provider:       "google",
 	})
 	if !errors.Is(err, application.ErrAccountDeactivated) {
 		t.Fatalf("AcceptInvite() error = %v, want ErrAccountDeactivated", err)
+	}
+}
+
+// An invite trusts the email it is accepted with, so AcceptInvite itself must
+// refuse an address Google or Apple has not verified, whoever calls it. A
+// provider that reports no verification accepts as before.
+func TestInviteService_AcceptInvite_RefusesUnverifiedProviderEmail(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		provider string
+		wantErr  error
+	}{
+		{provider: "google", wantErr: application.ErrEmailNotVerified},
+		{provider: "apple", wantErr: application.ErrEmailNotVerified},
+		{provider: "github", wantErr: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+
+			svc, deps := newInviteTestService()
+			setupAccountWithAdmin(deps)
+
+			invite, token, err := svc.CreateInvite(ctx, "account-1", "alice@example.com", entities.RoleMember, "admin-agent")
+			if err != nil {
+				t.Fatalf("CreateInvite() error: %v", err)
+			}
+
+			_, _, _, err = svc.AcceptInvite(ctx, token, application.UserInfo{
+				ProviderUserID: tc.provider + "-user-alice",
+				Email:          "alice@example.com",
+				DisplayName:    "Alice Smith",
+				Provider:       tc.provider,
+			})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("AcceptInvite() error = %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantErr == nil {
+				return
+			}
+
+			if got := deps.invites.invites[invite.GetID()].Status(); got != entities.InviteStatusPending {
+				t.Errorf("invite Status() = %q, want %q", got, entities.InviteStatusPending)
+			}
+			if n := len(deps.credentials.credentials); n != 0 {
+				t.Errorf("%d credentials saved, want none", n)
+			}
+			if role := deps.accounts.memberRoles["account-1:"+invite.InviteeAgentID()]; role != "" {
+				t.Errorf("invitee holds role %q on account-1, want no membership", role)
+			}
+		})
 	}
 }

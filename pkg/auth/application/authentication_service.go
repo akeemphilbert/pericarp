@@ -37,6 +37,9 @@ var (
 	ErrSessionAccountRevoked        = errors.New("authentication: session is scoped to an account the agent no longer belongs to")
 	ErrAccountDeactivated           = errors.New("authentication: account is deactivated")
 	ErrSessionAccountDeactivated    = errors.New("authentication: session is scoped to a deactivated account")
+	// ErrEmailNotVerified refuses a profile whose UserInfo.HasUnverifiedEmail
+	// is true, before any credential is written for it.
+	ErrEmailNotVerified = errors.New("authentication: email address not verified by the identity provider")
 	// ErrJWTServiceNotConfigured is returned by RefreshIdentityToken when
 	// no JWTService is wired. Distinct from IssueIdentityToken's
 	// ("", nil) shape because refresh's sole purpose is to mint a token —
@@ -67,9 +70,39 @@ type AuthResult struct {
 type UserInfo struct {
 	ProviderUserID string
 	Email          string
-	DisplayName    string
-	AvatarURL      string
-	Provider       string
+	// EmailVerified is true only when the identity provider itself vouched that
+	// the user controls Email. Google and Apple send that claim. Every other
+	// provider sends none, so for them false means "not reported", not
+	// "unverified". An absent or unreadable claim is false, never true.
+	//
+	// From ValidateIDToken it is only as trustworthy as the token's source:
+	// Google's and Apple's ValidateIDToken do not verify the token signature.
+	EmailVerified bool
+	DisplayName   string
+	AvatarURL     string
+	Provider      string
+}
+
+// emailVerifyingProviders names the providers whose UserInfo.EmailVerified is
+// the identity provider's own answer rather than an unreported default.
+var emailVerifyingProviders = map[string]bool{"google": true, "apple": true}
+
+// HasUnverifiedEmail reports whether u comes from a provider that vouches for
+// email addresses, and that provider did not vouch for this one. Do not write a
+// credential for such a profile: invites and account binding trust a
+// credential's email.
+//
+// It is false for a provider that sends no email_verified claim, whose
+// EmailVerified is always false and says nothing, and false when u carries no
+// email at all, which leaves nothing to bind. Neither of those sign-ins
+// changes.
+//
+// The provider list is keyed on u.Provider and fails closed: a provider that
+// reports itself as "google" or "apple", including a stub or custom provider,
+// must set EmailVerified, or every profile from it that carries an email is
+// refused.
+func (u UserInfo) HasUnverifiedEmail() bool {
+	return emailVerifyingProviders[u.Provider] && u.Email != "" && !u.EmailVerified
 }
 
 // SessionInfo represents validated session information returned to consumers.
@@ -135,6 +168,11 @@ type AuthenticationService interface {
 
 	// FindOrCreateAgent looks up an agent by provider credentials, creates if not found.
 	// For new users, a personal Account is also created with the agent as owner.
+	//
+	// It does not check UserInfo.HasUnverifiedEmail, because seeding and
+	// asserted sign-in call it with profiles that carry no provider claim. A
+	// caller that writes a google or apple credential through it must check
+	// HasUnverifiedEmail first and refuse, as authhttp.AuthHandlers.Callback does.
 	FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error)
 
 	// RegisterPassword creates a new Agent + personal Account + Credential
@@ -371,6 +409,11 @@ func (s *DefaultAuthenticationService) ValidateState(_ context.Context, received
 // FindOrCreateAgent looks up an agent by provider credentials, creates if not found.
 // For new users, a personal Account is also created with the agent as owner.
 // For existing users, the personal Account is returned if one exists (may be nil).
+//
+// It does not check UserInfo.HasUnverifiedEmail, because seeding and asserted
+// sign-in call it with profiles that carry no provider claim. A caller that
+// writes a google or apple credential through it must check
+// HasUnverifiedEmail first and refuse, as authhttp.AuthHandlers.Callback does.
 func (s *DefaultAuthenticationService) FindOrCreateAgent(ctx context.Context, userInfo UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
 	// Look up existing credential by provider
 	credential, err := s.credentials.FindByProvider(ctx, userInfo.Provider, userInfo.ProviderUserID)

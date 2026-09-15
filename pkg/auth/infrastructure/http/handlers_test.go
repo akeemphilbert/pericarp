@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -58,6 +59,7 @@ func (m *mockAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, 
 		UserInfo: application.UserInfo{
 			ProviderUserID: "google-123",
 			Email:          "user@example.com",
+			EmailVerified:  true,
 			DisplayName:    "Test User",
 			Provider:       provider,
 		},
@@ -515,6 +517,309 @@ func TestCallback_WithPostLoginRedirect(t *testing.T) {
 	}
 	if loc := w.Header().Get("Location"); loc != "/settings" {
 		t.Errorf("Location = %q, want %q", loc, "/settings")
+	}
+}
+
+// --- Unverified provider email ---
+
+type callbackOutcome struct {
+	rec             *httptest.ResponseRecorder
+	wroteCredential bool
+	createdSession  bool
+}
+
+// callbackForProfile drives the callback for a flow whose provider exchange
+// returns a profile from provider with the given email and verification. A
+// non-empty inviteToken sends the flow down the invite path. The outcome
+// records whether the callback reached a credential-writing call —
+// FindOrCreateAgent or AcceptInvite — and whether it created a session.
+func callbackForProfile(t *testing.T, provider, email string, emailVerified bool, inviteToken string) callbackOutcome {
+	t.Helper()
+
+	var out callbackOutcome
+	svc := &mockAuthService{
+		exchangeFunc: func(_ context.Context, _, _, _, _ string) (*application.AuthResult, error) {
+			return &application.AuthResult{
+				AccessToken: "access-token",
+				UserInfo: application.UserInfo{
+					ProviderUserID: provider + "-123",
+					Email:          email,
+					EmailVerified:  emailVerified,
+					DisplayName:    "Test User",
+					Provider:       provider,
+				},
+			}, nil
+		},
+		findOrCreateFunc: func(_ context.Context, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+			out.wroteCredential = true
+			agent, _ := new(entities.Agent).With("agent-1", userInfo.DisplayName, entities.AgentTypePerson)
+			cred, _ := new(entities.Credential).With("cred-1", "agent-1", userInfo.Provider, userInfo.ProviderUserID, userInfo.Email, userInfo.DisplayName)
+			account, _ := new(entities.Account).With("account-1", "Test User's Account", entities.AccountTypePersonal)
+			return agent, cred, account, nil
+		},
+		createSessionFunc: func(_ context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+			out.createdSession = true
+			return new(entities.AuthSession).With("sess-1", agentID, accountID, credentialID, ipAddress, userAgent, time.Now().Add(duration))
+		},
+	}
+	acceptor := &mockInviteAcceptor{
+		acceptFunc: func(_ context.Context, _ string, userInfo application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+			out.wroteCredential = true
+			agent, _ := new(entities.Agent).With("invited-agent", userInfo.DisplayName, entities.AgentTypePerson)
+			cred, _ := new(entities.Credential).With("invited-cred", "invited-agent", userInfo.Provider, userInfo.ProviderUserID, userInfo.Email, userInfo.DisplayName)
+			account, _ := new(entities.Account).With("team-account", "Team Account", entities.AccountTypeTeam)
+			return agent, cred, account, nil
+		},
+	}
+	handlers, sm := newTestHandlersWithInvite(svc, nil, acceptor)
+	out.rec = driveCallback(t, handlers, sm, provider, inviteToken)
+	return out
+}
+
+// driveCallback stores flow data for provider, carrying inviteToken when it is
+// non-empty, and runs the callback against it.
+func driveCallback(t *testing.T, handlers *authhttp.AuthHandlers, sm *session.GorillaSessionManager, provider, inviteToken string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	r := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r.Host = "example.com"
+	flowW := httptest.NewRecorder()
+	if err := sm.SetFlowData(flowW, r, session.FlowData{
+		State:       "s",
+		Provider:    provider,
+		CreatedAt:   time.Now(),
+		InviteToken: inviteToken,
+	}); err != nil {
+		t.Fatalf("failed to set flow data: %v", err)
+	}
+
+	r2 := httptest.NewRequest("GET", "/api/auth/callback?state=s&code=c", nil)
+	r2.Host = "example.com"
+	for _, cookie := range flowW.Result().Cookies() {
+		r2.AddCookie(cookie)
+	}
+
+	rec := httptest.NewRecorder()
+	handlers.Callback(rec, r2)
+	return rec
+}
+
+func TestCallback_UnverifiedProviderEmail_RefusedBeforeCredentialWrite(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		provider    string
+		inviteToken string
+	}{
+		{name: "google", provider: "google"},
+		{name: "apple", provider: "apple"},
+		{name: "google accepting an invite", provider: "google", inviteToken: "invite-token-123"},
+		{name: "apple accepting an invite", provider: "apple", inviteToken: "invite-token-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := callbackForProfile(t, tc.provider, "user@example.com", false, tc.inviteToken)
+
+			if out.rec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d; body: %s", out.rec.Code, out.rec.Body.String())
+			}
+			resp := parseJSONResponse(t, out.rec)
+			if resp["code"] != "email_not_verified" {
+				t.Errorf("code = %q, want %q", resp["code"], "email_not_verified")
+			}
+			if resp["error"] == "" {
+				t.Error("expected an error message explaining the refusal")
+			}
+			if out.wroteCredential {
+				t.Error("callback reached a credential-writing call for an unverified email")
+			}
+			if out.createdSession {
+				t.Error("callback created a session for an unverified email")
+			}
+		})
+	}
+}
+
+func TestCallback_EmailVerification_OnlyHeldAgainstProvidersThatReportIt(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		provider      string
+		email         string
+		emailVerified bool
+	}{
+		{name: "google verified", provider: "google", email: "user@example.com", emailVerified: true},
+		{name: "apple verified", provider: "apple", email: "user@example.com", emailVerified: true},
+		// These providers send no email_verified claim, so EmailVerified is
+		// always false for them. Sign-in must work exactly as it did before.
+		{name: "netsuite sends no claim", provider: "netsuite", email: "user@example.com"},
+		{name: "github sends no claim", provider: "github", email: "user@example.com"},
+		{name: "microsoft sends no claim", provider: "microsoft", email: "user@example.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := callbackForProfile(t, tc.provider, tc.email, tc.emailVerified, "")
+
+			if out.rec.Code != http.StatusFound {
+				t.Fatalf("expected 302, got %d; body: %s", out.rec.Code, out.rec.Body.String())
+			}
+			if !out.wroteCredential {
+				t.Error("callback did not reach FindOrCreateAgent")
+			}
+			if !out.createdSession {
+				t.Error("callback created no session")
+			}
+		})
+	}
+}
+
+// A credential writer can refuse an unverified email itself: InviteService
+// does, and a consumer's AuthenticationService may. The callback answers that
+// refusal exactly as it answers its own check.
+func TestCallback_CredentialWriterRefusesUnverifiedEmail_AnswersEmailNotVerified(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		inviteToken string
+	}{
+		{name: "FindOrCreateAgent refuses"},
+		{name: "AcceptInvite refuses", inviteToken: "invite-token-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			refusal := fmt.Errorf("credential writer: %w", application.ErrEmailNotVerified)
+			createdSession := false
+			svc := &mockAuthService{
+				findOrCreateFunc: func(_ context.Context, _ application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+					return nil, nil, nil, refusal
+				},
+				createSessionFunc: func(_ context.Context, agentID, accountID, credentialID, ipAddress, userAgent string, duration time.Duration) (*entities.AuthSession, error) {
+					createdSession = true
+					return new(entities.AuthSession).With("sess-1", agentID, accountID, credentialID, ipAddress, userAgent, time.Now().Add(duration))
+				},
+			}
+			acceptor := &mockInviteAcceptor{
+				acceptFunc: func(_ context.Context, _ string, _ application.UserInfo) (*entities.Agent, *entities.Credential, *entities.Account, error) {
+					return nil, nil, nil, refusal
+				},
+			}
+			handlers, sm := newTestHandlersWithInvite(svc, nil, acceptor)
+
+			rec := driveCallback(t, handlers, sm, "google", tc.inviteToken)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d; body: %s", rec.Code, rec.Body.String())
+			}
+			resp := parseJSONResponse(t, rec)
+			if resp["code"] != "email_not_verified" {
+				t.Errorf("code = %q, want %q", resp["code"], "email_not_verified")
+			}
+			if resp["error"] != "email address not verified by the identity provider" {
+				t.Errorf("error = %q, want the callback's own refusal message", resp["error"])
+			}
+			if createdSession {
+				t.Error("callback created a session after the credential writer refused")
+			}
+		})
+	}
+}
+
+type logEntry struct {
+	level string
+	msg   string
+	kv    map[string]interface{}
+}
+
+// recordingLogger keeps every entry, so a test can read the fields a line carried.
+type recordingLogger struct {
+	entries []logEntry
+}
+
+func (l *recordingLogger) record(level, msg string, keysAndValues []interface{}) {
+	kv := map[string]interface{}{}
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		if key, ok := keysAndValues[i].(string); ok {
+			kv[key] = keysAndValues[i+1]
+		}
+	}
+	l.entries = append(l.entries, logEntry{level: level, msg: msg, kv: kv})
+}
+
+func (l *recordingLogger) Info(_ context.Context, msg string, kv ...interface{}) {
+	l.record("info", msg, kv)
+}
+
+func (l *recordingLogger) Warn(_ context.Context, msg string, kv ...interface{}) {
+	l.record("warn", msg, kv)
+}
+
+func (l *recordingLogger) Error(_ context.Context, msg string, kv ...interface{}) {
+	l.record("error", msg, kv)
+}
+
+// The refusal line names the provider and the subject, so support can find one
+// refused person. It never carries the email or a token.
+func TestCallback_UnverifiedEmailRefusal_LogsSubjectNotEmail(t *testing.T) {
+	t.Parallel()
+
+	logger := &recordingLogger{}
+	svc := &mockAuthService{
+		exchangeFunc: func(_ context.Context, _, _, _, _ string) (*application.AuthResult, error) {
+			return &application.AuthResult{
+				AccessToken: "access-token",
+				IDToken:     "id-token",
+				UserInfo: application.UserInfo{
+					ProviderUserID: "google-123",
+					Email:          "user@example.com",
+					DisplayName:    "Test User",
+					Provider:       "google",
+				},
+			}, nil
+		},
+	}
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	sm := session.NewGorillaSessionManager("test-session", store, session.DefaultSessionOptions())
+	handlers := authhttp.NewAuthHandlers(authhttp.HandlerConfig{
+		AuthService:    svc,
+		SessionManager: sm,
+		Credentials:    &mockCredRepo{},
+		RedirectURI:    authhttp.RedirectURIConfig{CallbackPath: "/api/auth/callback"},
+		Logger:         logger,
+	})
+
+	rec := driveCallback(t, handlers, sm, "google", "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var refusal *logEntry
+	for i := range logger.entries {
+		if logger.entries[i].level == "warn" {
+			refusal = &logger.entries[i]
+		}
+	}
+	if refusal == nil {
+		t.Fatalf("no warn line for the refusal; entries: %+v", logger.entries)
+	}
+	if got := refusal.kv["provider"]; got != "google" {
+		t.Errorf("provider = %v, want google", got)
+	}
+	if got := refusal.kv["provider_user_id"]; got != "google-123" {
+		t.Errorf("provider_user_id = %v, want google-123", got)
+	}
+	for key, value := range refusal.kv {
+		if s, ok := value.(string); ok && (s == "user@example.com" || s == "access-token" || s == "id-token") {
+			t.Errorf("refusal log field %q carries the email or a token", key)
+		}
 	}
 }
 

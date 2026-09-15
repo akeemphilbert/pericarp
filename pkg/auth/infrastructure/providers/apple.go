@@ -37,12 +37,13 @@ type AppleConfig struct {
 
 // Apple implements the application.OAuthProvider interface for Apple Sign In OAuth 2.0 / OIDC.
 type Apple struct {
-	clientID   string
-	teamID     string
-	keyID      string
-	privateKey string
-	scopes     []string
-	httpClient *http.Client
+	clientID      string
+	teamID        string
+	keyID         string
+	privateKey    string
+	scopes        []string
+	httpClient    *http.Client
+	tokenEndpoint string
 }
 
 // NewApple creates a new Apple Sign In OAuth provider from the given configuration.
@@ -54,12 +55,13 @@ func NewApple(config AppleConfig) *Apple {
 	}
 
 	return &Apple{
-		clientID:   config.ClientID,
-		teamID:     config.TeamID,
-		keyID:      config.KeyID,
-		privateKey: config.PrivateKey,
-		scopes:     scopes,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		clientID:      config.ClientID,
+		teamID:        config.TeamID,
+		keyID:         config.KeyID,
+		privateKey:    config.PrivateKey,
+		scopes:        scopes,
+		httpClient:    &http.Client{Timeout: 30 * time.Second},
+		tokenEndpoint: appleTokenEndpoint,
 	}
 }
 
@@ -97,14 +99,14 @@ type appleTokenResponse struct {
 
 // appleIDTokenClaims represents the JWT claims extracted from an Apple ID token.
 type appleIDTokenClaims struct {
-	Sub            string `json:"sub"`
-	Email          string `json:"email"`
-	EmailVerified  any    `json:"email_verified"` // Apple may return bool or string
-	Nonce          string `json:"nonce"`
-	NonceSupported bool   `json:"nonce_supported"`
-	Iss            string `json:"iss"`
-	Aud            string `json:"aud"`
-	Exp            int64  `json:"exp"`
+	Sub            string             `json:"sub"`
+	Email          string             `json:"email"`
+	EmailVerified  emailVerifiedClaim `json:"email_verified"` // Apple may return bool or string
+	Nonce          string             `json:"nonce"`
+	NonceSupported bool               `json:"nonce_supported"`
+	Iss            string             `json:"iss"`
+	Aud            string             `json:"aud"`
+	Exp            int64              `json:"exp"`
 }
 
 // Exchange exchanges an authorization code for tokens and extracts user info from the ID token.
@@ -236,6 +238,8 @@ func (a *Apple) RevokeToken(ctx context.Context, token string) error {
 // (issuer, audience, expiry, nonce) but does NOT verify the JWT signature.
 // Production deployments should verify the JWT signature using Apple's JWKS endpoint
 // at https://appleid.apple.com/auth/keys to ensure the token has not been tampered with.
+// Until then, UserInfo.EmailVerified read here is only as trustworthy as the
+// token's source.
 func (a *Apple) ValidateIDToken(_ context.Context, idToken string, nonce string) (*application.UserInfo, error) {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {
@@ -275,6 +279,7 @@ func (a *Apple) ValidateIDToken(_ context.Context, idToken string, nonce string)
 	return &application.UserInfo{
 		ProviderUserID: claims.Sub,
 		Email:          claims.Email,
+		EmailVerified:  bool(claims.EmailVerified),
 		DisplayName:    "",
 		AvatarURL:      "",
 		Provider:       "apple",
@@ -368,7 +373,7 @@ func (a *Apple) generateClientSecret() (string, error) {
 
 // requestToken performs a POST to Apple's token endpoint and parses the response.
 func (a *Apple) requestToken(ctx context.Context, data url.Values) (*appleTokenResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, appleTokenEndpoint, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.tokenEndpoint, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -411,8 +416,9 @@ func (a *Apple) extractUserInfoFromIDToken(idToken string) (*application.UserInf
 	}
 
 	var claims struct {
-		Sub   string `json:"sub"`
-		Email string `json:"email"`
+		Sub           string             `json:"sub"`
+		Email         string             `json:"email"`
+		EmailVerified emailVerifiedClaim `json:"email_verified"`
 	}
 	if err = json.Unmarshal(payload, &claims); err != nil {
 		return nil, fmt.Errorf("failed to parse ID token claims: %w", err)
@@ -421,6 +427,7 @@ func (a *Apple) extractUserInfoFromIDToken(idToken string) (*application.UserInf
 	return &application.UserInfo{
 		ProviderUserID: claims.Sub,
 		Email:          claims.Email,
+		EmailVerified:  bool(claims.EmailVerified),
 		DisplayName:    "",
 		AvatarURL:      "",
 		Provider:       "apple",
