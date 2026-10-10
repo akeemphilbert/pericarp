@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	// flowSessionSuffix is appended to the session name for flow data storage.
+	// flowSessionSuffix is appended to the session name for flow data storage
+	// when SessionOptions.FlowSessionName is empty.
 	flowSessionSuffix = "-flow"
 
 	// flowMaxAge is the maximum age for flow data sessions (10 minutes).
@@ -49,6 +50,15 @@ type SessionOptions struct {
 	HttpOnly bool          // default: true
 	Secure   bool          // default: true
 	SameSite http.SameSite // default: Lax
+
+	// FlowSessionName names the short-lived session that holds OAuth flow data
+	// (state, PKCE verifier, nonce) across the provider redirect. Empty keeps the
+	// default, the main session name plus "-flow". Set it when a proxy forwards
+	// only one cookie name to the server — Firebase Hosting forwards only
+	// "__session". It must differ from the main session name, or the flow data
+	// and the signed-in session overwrite each other. The flow cookie keeps its
+	// own options (10-minute MaxAge, HttpOnly, SameSite=Lax) whatever its name.
+	FlowSessionName string
 }
 
 // DefaultSessionOptions returns secure default session options.
@@ -140,8 +150,7 @@ func (m *GorillaSessionManager) DestroyHTTPSession(w http.ResponseWriter, r *htt
 
 // SetFlowData stores temporary OAuth flow data in a separate short-lived session.
 func (m *GorillaSessionManager) SetFlowData(w http.ResponseWriter, r *http.Request, data FlowData) error {
-	flowName := m.sessionName + flowSessionSuffix
-	sess, err := m.store.Get(r, flowName)
+	sess, err := m.store.Get(r, m.flowSessionName())
 	if err != nil {
 		return fmt.Errorf("failed to get flow session: %w", err)
 	}
@@ -171,8 +180,7 @@ func (m *GorillaSessionManager) SetFlowData(w http.ResponseWriter, r *http.Reque
 
 // GetFlowData retrieves and clears OAuth flow data from the session.
 func (m *GorillaSessionManager) GetFlowData(w http.ResponseWriter, r *http.Request) (*FlowData, error) {
-	flowName := m.sessionName + flowSessionSuffix
-	sess, err := m.store.Get(r, flowName)
+	sess, err := m.store.Get(r, m.flowSessionName())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get flow session: %w", err)
 	}
@@ -219,6 +227,14 @@ func (m *GorillaSessionManager) GetFlowData(w http.ResponseWriter, r *http.Reque
 	}
 
 	return data, nil
+}
+
+// flowSessionName returns the name of the session that holds OAuth flow data.
+func (m *GorillaSessionManager) flowSessionName() string {
+	if m.options.FlowSessionName != "" {
+		return m.options.FlowSessionName
+	}
+	return m.sessionName + flowSessionSuffix
 }
 
 // cookieOptions returns gorilla session options for the main session cookie.
