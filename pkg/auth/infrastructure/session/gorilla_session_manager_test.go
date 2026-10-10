@@ -349,6 +349,7 @@ func TestGorillaSessionManager_FlowSessionName(t *testing.T) {
 	}{
 		{name: "empty keeps the session name plus -flow", flowSessionName: "", wantCookie: "weos-session-flow"},
 		{name: "custom name is used as given", flowSessionName: "__session", wantCookie: "__session"},
+		{name: "the main session name falls back to the default", flowSessionName: "weos-session", wantCookie: "weos-session-flow"},
 	}
 
 	for _, tt := range tests {
@@ -448,9 +449,33 @@ func TestGorillaSessionManager_FlowSessionName_ReadsOnlyTheNamedCookie(t *testin
 func TestGorillaSessionManager_FlowSessionName_DoesNotClobberMainSession(t *testing.T) {
 	t.Parallel()
 
+	tests := []struct {
+		name            string
+		flowSessionName string
+		wantFlowCookie  string
+	}{
+		{name: "custom name", flowSessionName: "__session", wantFlowCookie: "__session"},
+		// A flow name equal to the main session name would make GetFlowData's
+		// clear delete the signed-in session, so the manager falls back to the
+		// default flow name instead.
+		{name: "the main session name", flowSessionName: "weos-session", wantFlowCookie: "weos-session-flow"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertFlowDoesNotClobberMainSession(t, tt.flowSessionName, tt.wantFlowCookie)
+		})
+	}
+}
+
+// assertFlowDoesNotClobberMainSession runs a sign-in's flow round trip beside
+// an existing main session and checks that the main session survives it.
+func assertFlowDoesNotClobberMainSession(t *testing.T, flowSessionName, wantFlowCookie string) {
+	t.Helper()
+
 	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!"))
 	opts := sess.DefaultSessionOptions()
-	opts.FlowSessionName = "__session"
+	opts.FlowSessionName = flowSessionName
 	mgr := sess.NewGorillaSessionManager("weos-session", store, opts)
 	now := time.Now()
 
@@ -470,7 +495,7 @@ func TestGorillaSessionManager_FlowSessionName_DoesNotClobberMainSession(t *test
 	if main == nil {
 		t.Fatal("expected the main session cookie to be named weos-session")
 	}
-	if cookieNamed(w1, "__session") != nil {
+	if cookieNamed(w1, wantFlowCookie) != nil {
 		t.Fatal("CreateHTTPSession() must not write the flow cookie")
 	}
 
@@ -484,9 +509,9 @@ func TestGorillaSessionManager_FlowSessionName_DoesNotClobberMainSession(t *test
 	if cookieNamed(w2, "weos-session") != nil {
 		t.Fatal("SetFlowData() must not rewrite the main session cookie")
 	}
-	flow := cookieNamed(w2, "__session")
+	flow := cookieNamed(w2, wantFlowCookie)
 	if flow == nil {
-		t.Fatal("expected SetFlowData() to write __session")
+		t.Fatalf("expected SetFlowData() to write %s", wantFlowCookie)
 	}
 
 	// 3. The callback carries both cookies.
@@ -516,7 +541,7 @@ func TestGorillaSessionManager_FlowSessionName_DoesNotClobberMainSession(t *test
 	// 4. The main session still reads back after the flow cookie is cleared.
 	r4 := httptest.NewRequest(http.MethodGet, "/", nil)
 	r4.AddCookie(main)
-	if cleared := cookieNamed(w3, "__session"); cleared != nil {
+	if cleared := cookieNamed(w3, wantFlowCookie); cleared != nil {
 		r4.AddCookie(cleared)
 	}
 	if got, err := mgr.GetHTTPSession(r4); err != nil || got.SessionID != "sess-123" {

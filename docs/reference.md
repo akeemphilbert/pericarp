@@ -1227,7 +1227,7 @@ type SessionOptions struct {
 }
 ```
 
-`FlowSessionName` names the short-lived session that holds OAuth flow data across the provider redirect. Empty keeps the default name, the main session name plus `-flow`. Set it when a proxy forwards only one cookie name to the server — Firebase Hosting forwards only `__session`. It must differ from the main session name. The flow cookie keeps its own options (10-minute `MaxAge`, `HttpOnly`, `SameSite=Lax`) whatever its name.
+`FlowSessionName` names the short-lived session that holds OAuth flow data across the provider redirect. Empty keeps the default name, the main session name plus `-flow`. Set it when a proxy forwards only one cookie name to the server — Firebase Hosting forwards only `__session`. A value equal to the main session name is ignored and the default name is used, because sharing one cookie would let the flow data and the signed-in session overwrite each other. The flow cookie keeps its own options (10-minute `MaxAge`, `HttpOnly`, `SameSite=Lax`) whatever its name.
 
 ### Interface
 

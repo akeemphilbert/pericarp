@@ -55,9 +55,10 @@ type SessionOptions struct {
 	// (state, PKCE verifier, nonce) across the provider redirect. Empty keeps the
 	// default, the main session name plus "-flow". Set it when a proxy forwards
 	// only one cookie name to the server — Firebase Hosting forwards only
-	// "__session". It must differ from the main session name, or the flow data
-	// and the signed-in session overwrite each other. The flow cookie keeps its
-	// own options (10-minute MaxAge, HttpOnly, SameSite=Lax) whatever its name.
+	// "__session". A value equal to the main session name is ignored and the
+	// default is used, because sharing one cookie would let the flow data and
+	// the signed-in session overwrite each other. The flow cookie keeps its own
+	// options (10-minute MaxAge, HttpOnly, SameSite=Lax) whatever its name.
 	FlowSessionName string
 }
 
@@ -230,9 +231,14 @@ func (m *GorillaSessionManager) GetFlowData(w http.ResponseWriter, r *http.Reque
 }
 
 // flowSessionName returns the name of the session that holds OAuth flow data.
+//
+// A FlowSessionName equal to the main session name is ignored, and the default
+// name is used instead. Sharing one name would let SetFlowData overwrite the
+// signed-in session's cookie options, and GetFlowData's clear would delete it,
+// signing the user out.
 func (m *GorillaSessionManager) flowSessionName() string {
-	if m.options.FlowSessionName != "" {
-		return m.options.FlowSessionName
+	if name := m.options.FlowSessionName; name != "" && name != m.sessionName {
+		return name
 	}
 	return m.sessionName + flowSessionSuffix
 }
