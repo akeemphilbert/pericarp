@@ -316,3 +316,235 @@ func TestGorillaSessionManager_CreateHTTPSession_EmptyAccountID(t *testing.T) {
 		t.Errorf("AccountID = %q, want empty string", data.AccountID)
 	}
 }
+
+// cookieNamed returns the cookie with the given name from a recorded response, or nil.
+func cookieNamed(w *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, c := range w.Result().Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+func testFlowData(now time.Time) sess.FlowData {
+	return sess.FlowData{
+		State:        "state-abc",
+		CodeVerifier: "verifier-xyz",
+		Nonce:        "nonce-123",
+		Provider:     "mastodon",
+		RedirectURI:  "https://example.com/callback",
+		CreatedAt:    now,
+		Metadata:     map[string]string{"instance": "mastodon.social"},
+	}
+}
+
+func TestGorillaSessionManager_FlowSessionName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		flowSessionName string
+		wantCookie      string
+	}{
+		{name: "empty keeps the session name plus -flow", flowSessionName: "", wantCookie: "weos-session-flow"},
+		{name: "custom name is used as given", flowSessionName: "__session", wantCookie: "__session"},
+		{name: "the main session name falls back to the default", flowSessionName: "weos-session", wantCookie: "weos-session-flow"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!"))
+			opts := sess.DefaultSessionOptions()
+			opts.FlowSessionName = tt.flowSessionName
+			mgr := sess.NewGorillaSessionManager("weos-session", store, opts)
+			now := time.Now()
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			if err := mgr.SetFlowData(w, r, testFlowData(now)); err != nil {
+				t.Fatalf("SetFlowData() error: %v", err)
+			}
+
+			cookies := w.Result().Cookies()
+			if len(cookies) != 1 {
+				t.Fatalf("SetFlowData() wrote %d cookies, want 1", len(cookies))
+			}
+			flow := cookies[0]
+			if flow.Name != tt.wantCookie {
+				t.Fatalf("flow cookie name = %q, want %q", flow.Name, tt.wantCookie)
+			}
+
+			// The flow cookie keeps its own short-lived options whatever it is called.
+			if flow.MaxAge != 600 {
+				t.Errorf("flow cookie MaxAge = %d, want 600", flow.MaxAge)
+			}
+			if !flow.HttpOnly {
+				t.Error("expected flow cookie to be HttpOnly")
+			}
+			if !flow.Secure {
+				t.Error("expected flow cookie to keep Secure from the options")
+			}
+			if flow.SameSite != http.SameSiteLaxMode {
+				t.Errorf("flow cookie SameSite = %d, want %d", flow.SameSite, http.SameSiteLaxMode)
+			}
+
+			// The callback request carries ONLY the flow cookie, by name.
+			w2 := httptest.NewRecorder()
+			r2 := httptest.NewRequest(http.MethodGet, "/", nil)
+			r2.AddCookie(&http.Cookie{Name: flow.Name, Value: flow.Value})
+
+			data, err := mgr.GetFlowData(w2, r2)
+			if err != nil {
+				t.Fatalf("GetFlowData() error: %v", err)
+			}
+			if data.State != "state-abc" || data.CodeVerifier != "verifier-xyz" || data.Provider != "mastodon" {
+				t.Errorf("GetFlowData() = %+v, want the stored flow data", data)
+			}
+			if data.Metadata["instance"] != "mastodon.social" {
+				t.Errorf("Metadata[instance] = %q, want %q", data.Metadata["instance"], "mastodon.social")
+			}
+
+			// Retrieval clears the same cookie it read.
+			cleared := cookieNamed(w2, tt.wantCookie)
+			if cleared == nil {
+				t.Fatalf("GetFlowData() did not clear cookie %q", tt.wantCookie)
+			}
+			if cleared.MaxAge >= 0 {
+				t.Errorf("cleared flow cookie MaxAge = %d, want < 0", cleared.MaxAge)
+			}
+		})
+	}
+}
+
+func TestGorillaSessionManager_FlowSessionName_ReadsOnlyTheNamedCookie(t *testing.T) {
+	t.Parallel()
+
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!"))
+	opts := sess.DefaultSessionOptions()
+	opts.FlowSessionName = "__session"
+	mgr := sess.NewGorillaSessionManager("weos-session", store, opts)
+
+	// A flow cookie written under the default name must not satisfy a manager
+	// configured for a custom name: a proxy that keeps only __session would
+	// have stripped it.
+	legacy := sess.NewGorillaSessionManager("weos-session", store, sess.DefaultSessionOptions())
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := legacy.SetFlowData(w, r, testFlowData(time.Now())); err != nil {
+		t.Fatalf("SetFlowData() error: %v", err)
+	}
+
+	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	for _, c := range w.Result().Cookies() {
+		r2.AddCookie(c)
+	}
+	if _, err := mgr.GetFlowData(httptest.NewRecorder(), r2); err == nil {
+		t.Fatal("expected GetFlowData() to ignore a flow cookie under a different name")
+	}
+}
+
+func TestGorillaSessionManager_FlowSessionName_DoesNotClobberMainSession(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		flowSessionName string
+		wantFlowCookie  string
+	}{
+		{name: "custom name", flowSessionName: "__session", wantFlowCookie: "__session"},
+		// A flow name equal to the main session name would make GetFlowData's
+		// clear delete the signed-in session, so the manager falls back to the
+		// default flow name instead.
+		{name: "the main session name", flowSessionName: "weos-session", wantFlowCookie: "weos-session-flow"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assertFlowDoesNotClobberMainSession(t, tt.flowSessionName, tt.wantFlowCookie)
+		})
+	}
+}
+
+// assertFlowDoesNotClobberMainSession runs a sign-in's flow round trip beside
+// an existing main session and checks that the main session survives it.
+func assertFlowDoesNotClobberMainSession(t *testing.T, flowSessionName, wantFlowCookie string) {
+	t.Helper()
+
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!"))
+	opts := sess.DefaultSessionOptions()
+	opts.FlowSessionName = flowSessionName
+	mgr := sess.NewGorillaSessionManager("weos-session", store, opts)
+	now := time.Now()
+
+	// 1. An existing main session.
+	w1 := httptest.NewRecorder()
+	r1 := httptest.NewRequest(http.MethodGet, "/", nil)
+	if err := mgr.CreateHTTPSession(w1, r1, sess.SessionData{
+		SessionID: "sess-123",
+		AgentID:   "agent-456",
+		AccountID: "account-789",
+		CreatedAt: now,
+		ExpiresAt: now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("CreateHTTPSession() error: %v", err)
+	}
+	main := cookieNamed(w1, "weos-session")
+	if main == nil {
+		t.Fatal("expected the main session cookie to be named weos-session")
+	}
+	if cookieNamed(w1, wantFlowCookie) != nil {
+		t.Fatal("CreateHTTPSession() must not write the flow cookie")
+	}
+
+	// 2. A sign-in starts while the main session exists.
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r2.AddCookie(main)
+	if err := mgr.SetFlowData(w2, r2, testFlowData(now)); err != nil {
+		t.Fatalf("SetFlowData() error: %v", err)
+	}
+	if cookieNamed(w2, "weos-session") != nil {
+		t.Fatal("SetFlowData() must not rewrite the main session cookie")
+	}
+	flow := cookieNamed(w2, wantFlowCookie)
+	if flow == nil {
+		t.Fatalf("expected SetFlowData() to write %s", wantFlowCookie)
+	}
+
+	// 3. The callback carries both cookies.
+	w3 := httptest.NewRecorder()
+	r3 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r3.AddCookie(main)
+	r3.AddCookie(flow)
+
+	got, err := mgr.GetHTTPSession(r3)
+	if err != nil {
+		t.Fatalf("GetHTTPSession() error: %v", err)
+	}
+	if got.SessionID != "sess-123" || got.AccountID != "account-789" {
+		t.Errorf("GetHTTPSession() = %+v, want the main session data", got)
+	}
+	data, err := mgr.GetFlowData(w3, r3)
+	if err != nil {
+		t.Fatalf("GetFlowData() error: %v", err)
+	}
+	if data.State != "state-abc" {
+		t.Errorf("State = %q, want %q", data.State, "state-abc")
+	}
+	if cookieNamed(w3, "weos-session") != nil {
+		t.Error("GetFlowData() must not clear the main session cookie")
+	}
+
+	// 4. The main session still reads back after the flow cookie is cleared.
+	r4 := httptest.NewRequest(http.MethodGet, "/", nil)
+	r4.AddCookie(main)
+	if cleared := cookieNamed(w3, wantFlowCookie); cleared != nil {
+		r4.AddCookie(cleared)
+	}
+	if got, err := mgr.GetHTTPSession(r4); err != nil || got.SessionID != "sess-123" {
+		t.Fatalf("GetHTTPSession() after flow clear = %+v, %v; want sess-123", got, err)
+	}
+}
